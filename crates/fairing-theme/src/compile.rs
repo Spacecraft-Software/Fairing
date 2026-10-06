@@ -26,8 +26,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::artefact::{
-    BarSpec, BootLayout, CompiledTheme, Encoding, ImageMeta, LogoImage, LogoSpec, MAX_IMAGE_SIDE,
-    Meta, PercentSpec, PromptSpec, RectSpec, SequenceSpec, ShutdownLayout, StatusSpec,
+    BarSpec, BootLayout, CompiledTheme, Encoding, ImageMeta, LogoImage, LogoSpec,
+    MAX_ARTEFACT_BYTES, MAX_IMAGE_SIDE, MAX_IMAGES, Meta, PercentSpec, PromptSpec, RectSpec,
+    SequenceSpec, ShutdownLayout, StatusSpec,
 };
 use crate::fault::{ThemeError, ThemeErrorKind};
 use crate::role::Role;
@@ -310,17 +311,24 @@ impl Builder<'_> {
     }
 
     fn logo(&mut self, logo: &LogoSource) -> Result<LogoSpec, ThemeError> {
+        // Every colour is checked against the palette, whatever it applies to
+        // (FRN-SRS-043).
+        let tint = logo.tint.as_ref().map(|c| self.color(c)).transpose()?;
         let image = match &logo.image {
-            ImageSource::Named(name) if name == "builtin" => LogoImage::Builtin,
+            ImageSource::Named(name) if name == "builtin" => {
+                if tint.is_some() {
+                    return Err(source_error(
+                        "logo tint applies to a PNG logo; the built-in mark is drawn in its own roles",
+                    ));
+                }
+                LogoImage::Builtin
+            }
             ImageSource::Named(name) => {
                 return Err(source_error(format!(
                     "logo image `{name}` is neither 'builtin nor {{ file = \"...\" }}"
                 )));
             }
-            ImageSource::File { file } => {
-                let tint = logo.tint.as_ref().map(|c| self.color(c)).transpose()?;
-                LogoImage::Image(self.image(file, tint)?)
-            }
+            ImageSource::File { file } => LogoImage::Image(self.image(file, tint)?),
         };
         Ok(LogoSpec {
             rect: RectSpec::new(logo.x, logo.y, logo.width, logo.height),
@@ -361,7 +369,16 @@ impl Builder<'_> {
     }
 
     /// Decodes, quantises and stores one image; returns its index.
+    ///
+    /// The artefact's limits are checked as images arrive, not at the end: a
+    /// theme past them is refused after at most one more decode, so a list of
+    /// large frames cannot pile up gigabytes before the 4 MiB check.
     fn image(&mut self, path: &str, tint: Option<Role>) -> Result<u32, ThemeError> {
+        if self.images.len() >= MAX_IMAGES {
+            return Err(source_error(format!(
+                "more than {MAX_IMAGES} images (logo and sequence frames together)"
+            )));
+        }
         let bytes = self.assets.read(path)?;
         let decoded = (self.decode)(&bytes).map_err(|e| source_error(format!("`{path}`: {e}")))?;
         if decoded.width == 0
@@ -375,6 +392,17 @@ impl Builder<'_> {
             )));
         }
         let encoding = tint.map_or(Encoding::RoleIndexed, Encoding::Mask);
+        let needed = usize::try_from(u64::from(decoded.width) * u64::from(decoded.height))
+            .unwrap_or(usize::MAX)
+            .saturating_mul(encoding.bytes_per_pixel());
+        if self.blob.len().saturating_add(needed) > MAX_ARTEFACT_BYTES {
+            return Err(ThemeError::new(
+                ThemeErrorKind::InvalidArtefact,
+                format!(
+                    "`{path}` takes the images past {MAX_ARTEFACT_BYTES} bytes; a theme is at most 4 MiB (FRN-SRS-047)"
+                ),
+            ));
+        }
         let offset =
             u32::try_from(self.blob.len()).map_err(|_e| source_error("the images exceed 4 GiB"))?;
         quantise(&decoded, encoding, self.palette, path, &mut self.blob)?;
@@ -576,7 +604,6 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::artefact::MAX_ARTEFACT_BYTES;
 
     /// The reference theme as `nickel export` prints it once the contract is applied.
     fn reference() -> Value {
@@ -803,6 +830,43 @@ mod tests {
             error.to_string().contains(&MAX_ARTEFACT_BYTES.to_string()),
             "{error}"
         );
+    }
+
+    #[test]
+    fn limits_stop_a_long_sequence_before_its_frames_pile_up() {
+        // Twenty 1500 x 1500 masks would be 45 MB of pixels; the third frame
+        // is never decoded, because the second already passes 4 MiB.
+        let frame = solid(1500, 1500, [0, 0, 0, 255]);
+        let decodes = std::cell::Cell::new(0_u32);
+        let decode = |_bytes: &[u8]| {
+            decodes.set(decodes.get() + 1);
+            Ok(frame.clone())
+        };
+        let assets = Fake(HashMap::from([("big.png", frame.clone())]));
+        let mut theme = reference();
+        theme["layouts"]["boot"]["sequence"] = json!({
+            "x": 0, "y": 0, "width": 100, "height": 100,
+            "fps": 10, "frames": vec!["big.png"; 20], "tint": "accent"
+        });
+        let error = compile_value(&theme, &assets, &decode)
+            .err()
+            .unwrap_or_else(|| panic!("too big"));
+        assert_eq!(error.kind(), ThemeErrorKind::InvalidArtefact);
+        assert_eq!(decodes.get(), 2, "decoded past the limit");
+    }
+
+    #[test]
+    fn a_builtin_logo_takes_no_tint_and_every_tint_is_checked() {
+        // Verifies: FRN-SRS-043
+        let mut foreign = reference();
+        foreign["layouts"]["boot"]["logo"]["tint"] = json!({ "token": "Electric Blue" });
+        assert_eq!(kind(plain(&foreign)), Some(ThemeErrorKind::ForeignToken));
+        let mut own = reference();
+        own["layouts"]["boot"]["logo"]["tint"] = json!("accent");
+        let error = plain(&own)
+            .err()
+            .unwrap_or_else(|| panic!("tinted builtin"));
+        assert!(error.to_string().contains("built-in mark"), "{error}");
     }
 
     #[test]

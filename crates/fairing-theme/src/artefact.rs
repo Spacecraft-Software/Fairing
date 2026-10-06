@@ -647,8 +647,14 @@ impl CompiledTheme {
             .ok()
             .and_then(|len| rest.split_at_checked(len))
             .ok_or_else(|| artefact_error("metadata runs past the end of the file"))?;
-        let meta: Meta = postcard::from_bytes(meta_bytes)
+        let (meta, unread): (Meta, &[u8]) = postcard::take_from_bytes(meta_bytes)
             .map_err(|e| artefact_error(format!("metadata does not decode: {e}")))?;
+        if !unread.is_empty() {
+            return Err(artefact_error(format!(
+                "{} bytes after the metadata it declares",
+                unread.len()
+            )));
+        }
         Self::new(meta, blob.to_vec())
     }
 
@@ -864,7 +870,7 @@ mod tests {
 
     #[test]
     fn layout_rules_are_enforced() {
-        // Verifies: FRN-SRS-046
+        // Verifies: FRN-SRS-043
         let refuse = |edit: fn(&mut Meta)| {
             let mut meta = Meta::builtin();
             edit(&mut meta);
