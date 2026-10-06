@@ -155,6 +155,78 @@ pub const SPECS: &[CommandSpec] = &[
             },
         ],
     },
+    CommandSpec {
+        name: "theme check",
+        idempotent: true,
+        destructive: false,
+        supports_dry_run: false,
+        examples: &[
+            (
+                "fairing theme check themes/steelbore.ncl",
+                "Check the reference theme against the contract and the compile rules",
+            ),
+            (
+                "fairing theme check my-theme.ncl --json",
+                "The verdict as a JSON envelope; a violation exits 2 with Nickel's diagnostic",
+            ),
+        ],
+        params: &[],
+    },
+    CommandSpec {
+        name: "theme compile",
+        idempotent: true,
+        destructive: false,
+        supports_dry_run: true,
+        examples: &[
+            (
+                "fairing theme compile themes/steelbore.ncl",
+                "Write themes/steelbore.fairing",
+            ),
+            (
+                "fairing theme compile my-theme.ncl --output steelbore.fairing --json",
+                "Compile to a chosen path and report size and load time as JSON",
+            ),
+        ],
+        params: &[],
+    },
+    CommandSpec {
+        name: "theme inspect",
+        idempotent: true,
+        destructive: false,
+        supports_dry_run: false,
+        examples: &[
+            (
+                "fairing theme inspect steelbore.fairing",
+                "Summarise a compiled theme",
+            ),
+            (
+                "fairing theme inspect steelbore.fairing --json",
+                "The full layout and image table as JSON",
+            ),
+        ],
+        params: &[],
+    },
+    CommandSpec {
+        name: "splash",
+        idempotent: false,
+        destructive: false,
+        supports_dry_run: true,
+        examples: &[
+            (
+                "fairing splash --stage system --theme steelbore.fairing",
+                "Draw boot progress until greetd takes over (what fairing.service runs)",
+            ),
+            (
+                "fairing splash --stage initrd --theme steelbore.fairing",
+                "Draw the initrd's share of the bar until switch-root",
+            ),
+            (
+                "fairing splash --stage system --dry-run --json",
+                "Report the backend chain, theme and palette without drawing",
+            ),
+        ],
+        params: &[],
+    },
 ];
 
 /// The canonical exit-code map (CLI Standard §4) as a JSON object.
@@ -170,6 +242,29 @@ pub fn exit_codes() -> Value {
     })
 }
 
+/// Every diagnostic code Fairing emits; a test holds the list to the sources.
+pub const DIAGNOSTIC_CODES: &[&str] = &[
+    "OUTPUT_MODE",
+    "TUI_FALLBACK",
+    "AGENT_MEMORY_BACKEND",
+    "AGENT_DEVICE_PLAN_ONLY",
+    "BACKEND_FALLBACK",
+    "PALETTE_RESOLVED",
+    "SNAPSHOT_WRITTEN",
+    "FIRST_FRAME",
+    "NO_BACKEND",
+    "RENDER_FAILED",
+    "OUTPUT_LOST",
+    "DBUS_DEGRADED",
+    "DBUS_LOST",
+    "UNIT_FAILED",
+    "MAINTENANCE",
+    "STATE_NOT_WRITTEN",
+    "NOTIFY_FAILED",
+    "RELEASE_FAILED",
+    "THEME_UNREADABLE",
+];
+
 /// Names of the global flags, from the clap tree.
 #[must_use]
 pub fn global_flags() -> Vec<String> {
@@ -180,16 +275,41 @@ pub fn global_flags() -> Vec<String> {
         .collect()
 }
 
+/// The clap command at a space-separated path below `root`, e.g. `theme compile`.
+#[must_use]
+pub fn find_command<'a>(root: &'a clap::Command, path: &str) -> Option<&'a clap::Command> {
+    path.split(' ')
+        .try_fold(root, |command, name| command.find_subcommand(name))
+}
+
+/// The path of every runnable verb below `command`: the commands with no
+/// subcommands of their own, depth first (`describe`, `theme check`, ...).
+#[cfg(test)]
+#[must_use]
+pub fn leaf_paths(command: &clap::Command) -> Vec<String> {
+    let mut paths = Vec::new();
+    for sub in command.get_subcommands() {
+        let name = sub.get_name().to_owned();
+        if sub.has_subcommands() {
+            paths.extend(
+                leaf_paths(sub)
+                    .into_iter()
+                    .map(|rest| format!("{name} {rest}")),
+            );
+        } else {
+            paths.push(name);
+        }
+    }
+    paths
+}
+
 /// The whole-tool schema document.
 #[must_use]
 pub fn tool_schema() -> Value {
     let cli = Cli::command();
     let commands: Vec<Value> = SPECS
         .iter()
-        .filter_map(|spec| {
-            cli.find_subcommand(spec.name)
-                .map(|sub| command_schema(sub, spec))
-        })
+        .filter_map(|spec| find_command(&cli, spec.name).map(|sub| command_schema(sub, spec)))
         .collect();
     json!({
         "$schema": DIALECT,
@@ -200,7 +320,7 @@ pub fn tool_schema() -> Value {
         "commands": commands,
         "exit_codes": exit_codes(),
         "error_codes": ["NOT_FOUND", "PERMISSION_DENIED", "CONFLICT", "INVALID_ARGUMENT", "MISSING_ARGUMENT", "FEATURE_UNAVAILABLE", "INTERNAL_ERROR"],
-        "diagnostic_codes": ["OUTPUT_MODE", "TUI_FALLBACK", "AGENT_MEMORY_BACKEND", "BACKEND_FALLBACK", "PALETTE_RESOLVED", "SNAPSHOT_WRITTEN", "FIRST_FRAME"],
+        "diagnostic_codes": DIAGNOSTIC_CODES,
     })
 }
 
@@ -313,66 +433,10 @@ fn apply_param(object: &mut Map<String, Value>, param: &ParamSpec) {
 
 fn output_schema(name: &str) -> Value {
     let data = match name {
-        "describe" => json!({
-            "type": "object",
-            "required": ["tool", "version", "commands", "global_flags", "output_formats", "schema_command", "context_files"],
-            "properties": {
-                "tool": { "type": "string" },
-                "version": { "type": "string" },
-                "description": { "type": "string" },
-                "license": { "type": "string" },
-                "homepage": { "type": "string", "format": "uri" },
-                "repository": { "type": "string", "format": "uri" },
-                "assurance_category": { "type": "string" },
-                "commands": { "type": "array", "items": { "type": "object" } },
-                "global_flags": { "type": "array", "items": { "type": "string" } },
-                "output_formats": { "type": "array", "items": { "type": "string" } },
-                "unavailable_formats": { "type": "array", "items": { "type": "string" } },
-                "mcp_available": { "type": "boolean" },
-                "schema_command": { "type": "string" },
-                "context_files": { "type": "array", "items": { "type": "string" } },
-                "profile": { "type": "object" }
-            }
-        }),
-        "preview" => json!({
-            "type": "object",
-            "required": ["backend", "chain", "width", "height", "format", "palette", "seconds", "frames", "fps", "planned"],
-            "properties": {
-                "backend": {
-                    "type": "string",
-                    "enum": ["auto", "drm", "fbdev", "memory"],
-                    "description": "The backend that drew; `auto` only in a plan, where the chain decides at run time"
-                },
-                "chain": {
-                    "type": "array",
-                    "items": { "type": "string", "enum": ["drm", "fbdev", "memory"] },
-                    "description": "The backends tried, in order"
-                },
-                "device": { "type": ["string", "null"] },
-                "width": { "type": ["integer", "null"], "description": "Null in a plan for a device backend: the mode is read from the device" },
-                "height": { "type": ["integer", "null"] },
-                "format": { "type": ["string", "null"] },
-                "palette": {
-                    "type": "object",
-                    "properties": {
-                        "slug": { "type": "string" },
-                        "base": { "type": "string" },
-                        "source": { "type": "string" },
-                        "overlay": { "type": "string" },
-                        "skipped": { "type": "array", "items": { "type": "object" } }
-                    }
-                },
-                "seconds": { "type": "number" },
-                "fps": { "type": "integer" },
-                "frames": { "type": "integer" },
-                "dropped": { "type": "integer" },
-                "first_frame_ms": { "type": ["number", "null"] },
-                "measured_fps": { "type": ["number", "null"] },
-                "snapshot": { "type": ["string", "null"] },
-                "fallbacks": { "type": "array", "items": { "type": "object" } },
-                "planned": { "type": "boolean" }
-            }
-        }),
+        "describe" => describe_data(),
+        "preview" => preview_data(),
+        "splash" => splash_data(),
+        theme if theme.starts_with("theme ") => theme_data(&theme["theme ".len()..]),
         _ => json!({ "type": "object", "description": "A JSON Schema Draft 2020-12 document" }),
     };
     json!({
@@ -398,43 +462,178 @@ fn output_schema(name: &str) -> Value {
     })
 }
 
+/// `data` of `fairing describe`.
+fn describe_data() -> Value {
+    json!({
+        "type": "object",
+        "required": ["tool", "version", "commands", "global_flags", "output_formats", "schema_command", "context_files"],
+        "properties": {
+            "tool": { "type": "string" },
+            "version": { "type": "string" },
+            "description": { "type": "string" },
+            "license": { "type": "string" },
+            "homepage": { "type": "string", "format": "uri" },
+            "repository": { "type": "string", "format": "uri" },
+            "assurance_category": { "type": "string" },
+            "commands": { "type": "array", "items": { "type": "object" } },
+            "global_flags": { "type": "array", "items": { "type": "string" } },
+            "output_formats": { "type": "array", "items": { "type": "string" } },
+            "unavailable_formats": { "type": "array", "items": { "type": "string" } },
+            "mcp_available": { "type": "boolean" },
+            "schema_command": { "type": "string" },
+            "context_files": { "type": "array", "items": { "type": "string" } },
+            "profile": { "type": "object" }
+        }
+    })
+}
+
+/// `data` of `fairing preview`.
+fn preview_data() -> Value {
+    json!({
+        "type": "object",
+        "required": ["backend", "chain", "width", "height", "format", "palette", "seconds", "frames", "fps", "planned"],
+        "properties": {
+            "backend": {
+                "type": "string",
+                "enum": ["auto", "drm", "fbdev", "memory"],
+                "description": "The backend that drew; `auto` only in a plan, where the chain decides at run time"
+            },
+            "chain": {
+                "type": "array",
+                "items": { "type": "string", "enum": ["drm", "fbdev", "memory"] },
+                "description": "The backends tried, in order"
+            },
+            "device": { "type": ["string", "null"] },
+            "width": { "type": ["integer", "null"], "description": "Null in a plan for a device backend: the mode is read from the device" },
+            "height": { "type": ["integer", "null"] },
+            "format": { "type": ["string", "null"] },
+            "palette": {
+                "type": "object",
+                "properties": {
+                    "slug": { "type": "string" },
+                    "base": { "type": "string" },
+                    "source": { "type": "string" },
+                    "overlay": { "type": "string" },
+                    "skipped": { "type": "array", "items": { "type": "object" } }
+                }
+            },
+            "seconds": { "type": "number" },
+            "fps": { "type": "integer" },
+            "frames": { "type": "integer" },
+            "dropped": { "type": "integer" },
+            "first_frame_ms": { "type": ["number", "null"] },
+            "measured_fps": { "type": ["number", "null"] },
+            "snapshot": { "type": ["string", "null"] },
+            "fallbacks": { "type": "array", "items": { "type": "object" } },
+            "planned": { "type": "boolean" }
+        }
+    })
+}
+
+/// `data` of `fairing splash`.
+fn splash_data() -> Value {
+    json!({
+        "type": "object",
+        "required": ["stage", "reason", "chain", "theme", "palette", "frames", "bar", "planned"],
+        "properties": {
+            "stage": { "type": "string", "enum": ["initrd", "system"] },
+            "reason": {
+                "type": ["string", "null"],
+                "enum": ["handoff", "switch-root", "shutdown", "failed-unit", "maintenance",
+                         "no-backend", "render-failed", "exit-after", "theme-unreadable", null],
+                "description": "Why the splash ended; null in a plan"
+            },
+            "chain": { "type": "array", "items": { "type": "string" } },
+            "backend": { "type": ["string", "null"] },
+            "theme": { "type": "string" },
+            "palette": { "type": "object" },
+            "frames": { "type": "integer" },
+            "dropped": { "type": "integer" },
+            "first_frame_ms": { "type": ["number", "null"] },
+            "bar": { "type": "number", "minimum": 0, "maximum": 1 },
+            "carried_bar": { "type": ["number", "null"], "description": "The bar value the initrd handed over" },
+            "dbus": { "type": "boolean" },
+            "last_status": { "type": ["string", "null"] },
+            "planned": { "type": "boolean" }
+        }
+    })
+}
+
+/// `data` of the `fairing theme` verbs.
+fn theme_data(verb: &str) -> Value {
+    match verb {
+        "check" => json!({
+            "type": "object",
+            "required": ["source", "valid", "name", "palette", "format_version", "bytes", "images"],
+            "properties": {
+                "source": { "type": "string" },
+                "valid": { "type": "boolean" },
+                "name": { "type": "string" },
+                "palette": { "type": "string" },
+                "format_version": { "type": "integer" },
+                "bytes": { "type": "integer", "maximum": 4_194_304 },
+                "images": { "type": "array", "items": { "type": "object" } }
+            }
+        }),
+        "compile" => json!({
+            "type": "object",
+            "required": ["source", "output", "written", "load_ms", "name", "palette", "bytes"],
+            "properties": {
+                "source": { "type": "string" },
+                "output": { "type": "string" },
+                "written": { "type": "boolean" },
+                "load_ms": { "type": "number", "description": "Median time to load the artefact here (FRN-SRS-042)" },
+                "name": { "type": "string" },
+                "palette": { "type": "string" },
+                "format_version": { "type": "integer" },
+                "bytes": { "type": "integer", "maximum": 4_194_304 },
+                "images": { "type": "array", "items": { "type": "object" } }
+            }
+        }),
+        "inspect" => json!({
+            "type": "object",
+            "required": ["path", "name", "palette", "format_version", "bytes", "meta"],
+            "properties": {
+                "path": { "type": "string" },
+                "name": { "type": "string" },
+                "palette": { "type": "string" },
+                "format_version": { "type": "integer" },
+                "bytes": { "type": "integer" },
+                "images": { "type": "array", "items": { "type": "object" } },
+                "meta": { "type": "object", "description": "The compiled layouts and image table" }
+            }
+        }),
+        _ => json!({ "type": "object" }),
+    }
+}
+
 /// Runs `fairing schema [<command>]`.
 ///
 /// # Errors
 ///
-/// `NOT_FOUND` when the named command does not exist; `INVALID_ARGUMENT` for
-/// a nested path (the tree is one level deep).
+/// `NOT_FOUND` when the named path is not a runnable verb (a group such as
+/// `theme` names verbs; its leaves have schemas).
 pub fn run(
     path: &[String],
     context: &Context,
     invocation: &str,
     _flags: &GlobalFlags,
 ) -> Result<(), AppError> {
-    let document = match path {
-        [] => tool_schema(),
-        [name] => {
-            let cli = Cli::command();
-            let spec = SPECS.iter().find(|s| s.name == name);
-            match (cli.find_subcommand(name), spec) {
-                (Some(sub), Some(spec)) => command_schema(sub, spec),
-                _ => {
-                    return Err(AppError::not_found(
-                        format!("command `{name}` does not exist"),
-                        "fairing describe --json",
-                        invocation,
-                    ));
-                }
+    let document = if path.is_empty() {
+        tool_schema()
+    } else {
+        let name = path.join(" ");
+        let cli = Cli::command();
+        let spec = SPECS.iter().find(|s| s.name == name);
+        match (find_command(&cli, &name), spec) {
+            (Some(sub), Some(spec)) => command_schema(sub, spec),
+            _ => {
+                return Err(AppError::not_found(
+                    format!("command `{name}` does not exist"),
+                    "fairing describe --json",
+                    invocation,
+                ));
             }
-        }
-        _ => {
-            return Err(AppError::invalid_argument(
-                format!(
-                    "command path `{}` is too deep; the tree is one level",
-                    path.join(" ")
-                ),
-                "fairing schema",
-                invocation,
-            ));
         }
     };
     let rendered = if context.mode.is_machine() {
@@ -455,7 +654,7 @@ mod tests {
         let cli = Cli::command();
         for spec in SPECS {
             assert!(
-                cli.find_subcommand(spec.name).is_some(),
+                find_command(&cli, spec.name).is_some_and(|c| !c.has_subcommands()),
                 "{} missing from clap tree",
                 spec.name
             );
@@ -469,22 +668,65 @@ mod tests {
 
     #[test]
     fn every_subcommand_has_a_spec() {
-        for sub in Cli::command().get_subcommands() {
+        let leaves = leaf_paths(&Cli::command());
+        assert!(leaves.iter().any(|l| l == "theme compile"), "{leaves:?}");
+        for leaf in &leaves {
             assert!(
-                SPECS.iter().any(|s| s.name == sub.get_name()),
-                "{} lacks a CommandSpec",
-                sub.get_name()
+                SPECS.iter().any(|s| s.name == leaf),
+                "{leaf} lacks a CommandSpec"
             );
         }
+    }
+
+    #[test]
+    fn diagnostic_codes_match_the_sources() {
+        // Every `Diagnostic::new(_, "CODE", ...)` in the crate is listed, and
+        // nothing listed is gone. The sources are read at test time.
+        let mut emitted = std::collections::BTreeSet::new();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut dirs = vec![root];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("{e}")) {
+                let path = entry.unwrap_or_else(|e| panic!("{e}")).path();
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                // Test modules make up codes of their own; only shipped code counts.
+                let shipped = text
+                    .split("#[cfg(test)]\nmod tests")
+                    .next()
+                    .unwrap_or_default();
+                let mut rest = shipped;
+                while let Some(at) = rest.find("Severity::") {
+                    rest = &rest[at..];
+                    if let Some(open) = rest.find('"')
+                        && open < 60
+                        && let Some(close) = rest[open + 1..].find('"')
+                    {
+                        let code = &rest[open + 1..open + 1 + close];
+                        if !code.is_empty()
+                            && code.bytes().all(|b| b.is_ascii_uppercase() || b == b'_')
+                        {
+                            emitted.insert(code.to_owned());
+                        }
+                    }
+                    rest = &rest[10..];
+                }
+            }
+        }
+        let listed: std::collections::BTreeSet<String> =
+            DIAGNOSTIC_CODES.iter().map(|c| (*c).to_owned()).collect();
+        assert_eq!(emitted, listed);
     }
 
     #[test]
     fn every_param_spec_names_a_visible_argument() {
         let cli = Cli::command();
         for spec in SPECS {
-            let sub = cli
-                .find_subcommand(spec.name)
-                .unwrap_or_else(|| panic!("{} missing", spec.name));
+            let sub =
+                find_command(&cli, spec.name).unwrap_or_else(|| panic!("{} missing", spec.name));
             for param in spec.params {
                 assert!(
                     sub.get_arguments()
@@ -569,10 +811,24 @@ mod tests {
             properties["backend"]["enum"],
             json!(["auto", "drm", "fbdev", "memory"])
         );
-        assert!(
-            properties.get("theme").is_none(),
-            "hidden flags stay hidden"
+        assert_eq!(
+            properties["theme"]["type"], "string",
+            "--theme is public from M2"
         );
+        let splash = find_command(&cli, "splash").unwrap_or_else(|| panic!("splash"));
+        let splash_spec = SPECS
+            .iter()
+            .find(|s| s.name == "splash")
+            .unwrap_or_else(|| panic!("splash spec"));
+        let splash_doc = command_schema(splash, splash_spec);
+        let splash_props = &splash_doc["parameters"]["properties"];
+        for seam in ["backend", "runtime_dir", "bus", "exit_after", "cmdline"] {
+            assert!(
+                splash_props.get(seam).is_none(),
+                "test seam `{seam}` leaked"
+            );
+        }
+        assert_eq!(splash_doc["parameters"]["required"], json!(["stage"]));
         assert_eq!(document["exit_codes"]["5"], "CONFLICT");
         let required = document["output_schema"]["properties"]["data"]["required"]
             .as_array()

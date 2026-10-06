@@ -21,6 +21,10 @@ mod error;
 mod output;
 mod preview;
 mod schema;
+mod selection;
+mod splash;
+mod theme;
+mod theme_file;
 mod time;
 
 use std::process::ExitCode;
@@ -83,6 +87,8 @@ fn run(cli: &Cli, context: &Context, invocation: &str, origin: Instant) -> Resul
         Some(Command::Preview(args)) => {
             preview::run(args, context, invocation, &cli.global, origin)
         }
+        Some(Command::Splash(args)) => splash::run(args, context, invocation, &cli.global, origin),
+        Some(Command::Theme { command }) => theme::run(command, context, invocation, &cli.global),
         None => Err(AppError::missing_argument(
             "no subcommand given",
             "fairing describe --json",

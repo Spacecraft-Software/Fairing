@@ -60,7 +60,7 @@ fn manifest(context: &Context) -> Manifest {
     let commands = schema::SPECS
         .iter()
         .filter_map(|spec| {
-            cli.find_subcommand(spec.name).map(|sub| CommandSummary {
+            schema::find_command(&cli, spec.name).map(|sub| CommandSummary {
                 name: format!("fairing {}", spec.name),
                 description: sub.get_about().map(ToString::to_string).unwrap_or_default(),
                 supports_json: true,
