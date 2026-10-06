@@ -19,7 +19,7 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-026 fairing preview verb: flags, agent rule, dry run, PPM snapshot, structured report; PERMISSION_DENIED error code; schema and describe rows; CLI tests with Verifies markers
 - [x] T-027 Font assets with REUSE sidecars and LICENSES/OFL-1.1.txt; .gitattributes binary declarations; deny.toml Zlib
 - [x] T-028 DEPENDENCIES.md rows for every M1 crate, accepted advisory RUSTSEC-2026-0192, bundled-asset table; README, AGENTS, SKILL, CHANGELOG, NOTICE, manual chapter
-- [ ] T-029 Hardware run on the reference machine (ThinkPad T490s): `FAIRING_HW_TESTS=1 cargo test --workspace -- --ignored` on a free VT; record first-frame and 30 Hz figures (maintainer)
+- [ ] T-029 Hardware run on the reference machine (ThinkPad T490s): `cargo test --workspace -- --ignored` on a free VT; record first-frame and 30 Hz figures (maintainer)
 - [ ] T-030 M1 pull request reviewed and merged
 
 ## M0 — Repository and posture

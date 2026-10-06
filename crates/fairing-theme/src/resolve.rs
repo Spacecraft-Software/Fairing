@@ -4,9 +4,9 @@
 
 //! Theme variant selection (Steelbore Standard §11.6; FRN-SRS-045).
 //!
-//! Stage 1 picks a base palette from the first usable source: the kernel
-//! parameter, `SPACECRAFT_THEME`, the theme's declared default, the family
-//! default. Stage 2 picks a variant of that palette: a pinned sibling stays,
+//! Stage 1 picks a base palette from the first usable source: a slug named
+//! on the command line, the kernel parameter, `SPACECRAFT_THEME`, the theme's
+//! declared default, the family default. Stage 2 picks a variant of that palette: a pinned sibling stays,
 //! `NO_COLOR` selects mono, accessible mode selects the high-contrast sibling.
 //! An unusable slug is skipped, never fatal (§11.6.5), and every skip is
 //! reported so `--verbose` can say why the machine shows what it shows.
@@ -27,6 +27,8 @@ pub const KERNEL_PARAMETER: &str = "fairing.theme";
 /// `NO_COLOR` (and tests need no environment at all).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Request<'a> {
+    /// A slug the operator named on the command line (`--palette`, `--theme=<slug>`): source 1.
+    pub explicit: Option<&'a str>,
     /// The value of `fairing.theme=` on the kernel command line.
     pub kernel_parameter: Option<&'a str>,
     /// The value of `SPACECRAFT_THEME`.
@@ -42,6 +44,8 @@ pub struct Request<'a> {
 /// Which stage-1 source supplied the selected palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
+    /// A slug given on the command line.
+    Explicit,
     /// `fairing.theme=<slug>`.
     KernelParameter,
     /// `SPACECRAFT_THEME=<slug>`.
@@ -57,6 +61,7 @@ impl Source {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Explicit => "command-line",
             Self::KernelParameter => "kernel-parameter",
             Self::Environment => "environment",
             Self::DeclaredDefault => "declared-default",
@@ -107,7 +112,7 @@ impl fmt::Display for Overlay {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Selection {
     /// A registered colour theme.
-    Colour(&'static Theme),
+    Color(&'static Theme),
     /// The palette-independent mono theme.
     Mono(&'static MonoRoles),
 }
@@ -117,7 +122,7 @@ impl Selection {
     #[must_use]
     pub const fn slug(&self) -> &'static str {
         match self {
-            Self::Colour(theme) => theme.slug,
+            Self::Color(theme) => theme.slug,
             Self::Mono(_) => MONO_SLUG,
         }
     }
@@ -126,7 +131,7 @@ impl Selection {
     #[must_use]
     pub const fn theme(&self) -> Option<&'static Theme> {
         match self {
-            Self::Colour(theme) => Some(theme),
+            Self::Color(theme) => Some(theme),
             Self::Mono(_) => None,
         }
     }
@@ -168,6 +173,7 @@ pub struct Resolution {
 #[must_use]
 pub fn resolve(request: &Request<'_>) -> Resolution {
     let candidates = [
+        (Source::Explicit, request.explicit),
         (Source::KernelParameter, request.kernel_parameter),
         (Source::Environment, request.environment),
         (Source::DeclaredDefault, request.declared_default),
@@ -190,26 +196,26 @@ pub fn resolve(request: &Request<'_>) -> Resolution {
             }),
         }
     }
-    let (source, stage_one) = picked.unwrap_or((Source::FamilyDefault, Selection::Colour(DEFAULT)));
+    let (source, stage_one) = picked.unwrap_or((Source::FamilyDefault, Selection::Color(DEFAULT)));
     let base = match stage_one {
-        Selection::Colour(theme) => theme.base_theme(),
+        Selection::Color(theme) => theme.base_theme(),
         Selection::Mono(_) => DEFAULT,
     };
 
     let (selection, overlay) = match stage_one {
         Selection::Mono(mono) => (Selection::Mono(mono), Overlay::Pinned),
-        Selection::Colour(theme) if theme.variant == Variant::HighContrast => {
-            (Selection::Colour(theme), Overlay::Pinned)
+        Selection::Color(theme) if theme.variant == Variant::HighContrast => {
+            (Selection::Color(theme), Overlay::Pinned)
         }
-        Selection::Colour(theme) => {
+        Selection::Color(theme) => {
             if request.no_color {
                 (Selection::Mono(&MONO), Overlay::Mono)
             } else if request.accessible
                 && let Some(lifted) = theme.high_contrast()
             {
-                (Selection::Colour(lifted), Overlay::HighContrast)
+                (Selection::Color(lifted), Overlay::HighContrast)
             } else {
-                (Selection::Colour(theme), Overlay::None)
+                (Selection::Color(theme), Overlay::None)
             }
         }
     };
@@ -226,7 +232,7 @@ fn lookup(slug: &str) -> Option<Selection> {
     if slug == MONO_SLUG {
         Some(Selection::Mono(&MONO))
     } else {
-        Theme::find(slug).map(Selection::Colour)
+        Theme::find(slug).map(Selection::Color)
     }
 }
 
@@ -435,10 +441,23 @@ mod tests {
     }
 
     #[test]
+    fn explicit_slug_outranks_the_kernel_parameter() {
+        // Verifies: FRN-SRS-045
+        let resolution = resolve(&Request {
+            explicit: Some("steelbore-green"),
+            kernel_parameter: Some("steelbore-blue"),
+            ..request()
+        });
+        assert_eq!(resolution.selection.slug(), "steelbore-green");
+        assert_eq!(resolution.source, Source::Explicit);
+        assert_eq!(Source::Explicit.to_string(), "command-line");
+    }
+
+    #[test]
     fn names_are_stable() {
         assert_eq!(Source::KernelParameter.to_string(), "kernel-parameter");
         assert_eq!(Overlay::HighContrast.to_string(), "high-contrast");
         assert_eq!(Selection::Mono(&MONO).to_string(), MONO_SLUG);
-        assert_eq!(Selection::Colour(DEFAULT).theme(), Some(DEFAULT));
+        assert_eq!(Selection::Color(DEFAULT).theme(), Some(DEFAULT));
     }
 }

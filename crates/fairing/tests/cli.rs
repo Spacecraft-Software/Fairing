@@ -480,6 +480,37 @@ fn preview_memory_snapshot_reports_and_writes_a_ppm_with_the_percentage() {
         paints(Role::Foreground) > 20,
         "percentage and status text are drawn"
     );
+    let background = theme.color(Role::Background);
+    let inked = |bytes: &[u8]| {
+        bytes[header.len()..]
+            .chunks_exact(3)
+            .filter(|p| *p != [background.r, background.g, background.b])
+            .count()
+    };
+    let quiet = dir.path().join("quiet.ppm");
+    fairing()
+        .args([
+            "preview",
+            "--backend",
+            "memory",
+            "--seconds",
+            "0",
+            "--size",
+            "640x360",
+            "--status",
+            "",
+            "--snapshot",
+        ])
+        .arg(&quiet)
+        .arg("--json")
+        .assert()
+        .success();
+    let quiet_bytes = std::fs::read(&quiet).unwrap_or_else(|e| panic!("{e}"));
+    assert!(quiet_bytes.starts_with(header));
+    assert!(
+        inked(&quiet_bytes) < inked(&bytes),
+        "an empty status draws no status line"
+    );
 }
 
 #[test]
@@ -620,6 +651,7 @@ fn preview_palette_selection_follows_the_resolution_order() {
     assert_eq!(pinned["slug"], "steelbore-high-contrast");
     assert_eq!(pinned["overlay"], "pinned");
     assert_eq!(pinned["base"], "steelbore");
+    assert_eq!(pinned["source"], "command-line");
 
     let from_env = report(
         fairing()
@@ -669,13 +701,46 @@ fn preview_dry_run_plans_without_opening_a_device() {
     let value = json(&out);
     assert_eq!(value["metadata"]["dry_run"], true);
     assert_eq!(value["data"]["planned"], true);
-    assert_eq!(value["data"]["backend"], "drm");
+    assert_eq!(value["data"]["backend"], "auto");
+    assert_eq!(value["data"]["chain"], serde_json::json!(["drm", "fbdev"]));
+    assert!(
+        value["data"]["width"].is_null(),
+        "a device's mode is not guessed"
+    );
     assert_eq!(value["data"]["frames"], 0);
     fairing()
         .args(["preview", "--dry-run", "--format", "human"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("would draw on drm"));
+        .stdout(predicate::str::contains(
+            "preview\twould try drm, then fbdev\n",
+        ));
+    let out = fairing()
+        .args(["preview", "--dry-run", "--backend", "memory", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value = json(&out);
+    assert_eq!(value["data"]["backend"], "memory");
+    assert_eq!(value["data"]["chain"], serde_json::json!(["memory"]));
+    assert_eq!(value["data"]["width"], 1920);
+    assert_eq!(value["data"]["format"], "rgba8888");
+    fairing()
+        .args([
+            "preview",
+            "--dry-run",
+            "--backend",
+            "memory",
+            "--format",
+            "human",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "preview\twould draw on memory 1920x1080 rgba8888\n",
+        ));
 }
 
 #[test]
@@ -698,16 +763,161 @@ fn preview_without_any_device_exits_not_found_with_the_memory_hint() {
     );
 }
 
+#[test]
+fn preview_human_report_and_fields_narrowing() {
+    // Verifies: FRN-SRS-081
+    fairing()
+        .args([
+            "preview",
+            "--backend",
+            "memory",
+            "--seconds",
+            "0",
+            "--size",
+            "64x36",
+            "--format",
+            "human",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with(
+            "preview\tdrew on memory 64x36 rgba8888\n",
+        ))
+        .stdout(predicate::str::contains(
+            "palette\tsteelbore (base steelbore, from family-default, overlay none)\n",
+        ))
+        .stdout(predicate::str::contains(
+            "frames\t1 in 0.0 s at 30 fps requested, first frame ",
+        ))
+        .stdout(predicate::str::contains("snapshot").not());
+    let out = fairing()
+        .args(MEMORY_FRAME)
+        .args(["--fields", "backend,frames"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let data = json(&out)["data"].as_object().cloned().unwrap_or_default();
+    let mut keys: Vec<&String> = data.keys().collect();
+    keys.sort();
+    assert_eq!(keys, vec!["backend", "frames"]);
+}
+
+#[test]
+fn version_honours_fields() {
+    // Verifies: FRN-SRS-081
+    let out = fairing()
+        .args(["--version", "--json", "--fields", "version"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let data = json(&out)["data"].as_object().cloned().unwrap_or_default();
+    assert_eq!(data.keys().collect::<Vec<_>>(), vec!["version"]);
+}
+
+#[test]
+fn preview_snapshot_into_a_missing_directory_exits_not_found() {
+    // Verifies: FRN-SRS-082
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let missing = dir.path().join("no-such-dir").join("frame.ppm");
+    let output = fairing()
+        .args([
+            "preview",
+            "--backend",
+            "memory",
+            "--seconds",
+            "0",
+            "--size",
+            "64x36",
+            "--snapshot",
+        ])
+        .arg(&missing)
+        .arg("--json")
+        .assert()
+        .code(3)
+        .stdout(predicate::str::is_empty())
+        .get_output()
+        .clone();
+    let error = json(&output.stderr);
+    assert_eq!(error["error"]["code"], "NOT_FOUND");
+    assert_eq!(
+        error["error"]["hint"],
+        "fairing preview --backend memory --snapshot ./frame.ppm"
+    );
+    assert!(!missing.exists());
+}
+
+#[test]
+fn a_closed_stdout_ends_the_run_quietly() {
+    // Verifies: FRN-SRS-081
+    let (reader, writer) = std::io::pipe().unwrap_or_else(|e| panic!("{e}"));
+    drop(reader);
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_fairing"))
+        .args(["schema", "--json"])
+        .stdout(writer)
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(output.status.success(), "{}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
+#[test]
+fn schema_types_preview_parameters_and_hides_the_theme_flag() {
+    // Verifies: FRN-SRS-081
+    let out = fairing()
+        .args(["schema", "preview"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let document = json(&out);
+    let properties = &document["parameters"]["properties"];
+    assert_eq!(properties["seconds"]["type"], "number");
+    assert_eq!(properties["seconds"]["minimum"], 0);
+    assert_eq!(properties["seconds"]["maximum"], 3600);
+    assert_eq!(properties["fps"]["type"], "integer");
+    assert_eq!(properties["fps"]["default"], 30);
+    assert_eq!(properties["size"]["pattern"], "^[0-9]+x[0-9]+$");
+    assert!(properties.get("theme").is_none());
+    assert_eq!(
+        document["output_schema"]["properties"]["data"]["properties"]["backend"]["enum"],
+        serde_json::json!(["auto", "drm", "fbdev", "memory"])
+    );
+    fairing()
+        .args(["preview", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--theme").not())
+        .stdout(predicate::str::contains("--palette"));
+    let out = fairing()
+        .arg("schema")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let tool = json(&out);
+    assert_eq!(tool["exit_codes"]["5"], "CONFLICT");
+    assert!(
+        tool["error_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.iter().any(|c| c == "CONFLICT"))
+    );
+}
+
 /// Draws on the real output; needs a DRM device or `/dev/fb0` and a free VT.
 ///
-/// `FAIRING_HW_TESTS=1 cargo test -p fairing -- --ignored` on a text console.
+/// `cargo test -p fairing -- --ignored` on a text console (TODO T-029). The
+/// FRN-SRS-083 evidence is the maintainer's hardware run, not this assertion.
 #[test]
-#[ignore = "needs a DRM device or /dev/fb0 and a free VT; run with FAIRING_HW_TESTS=1"]
+#[ignore = "needs a DRM device or /dev/fb0 and a free VT"]
 fn preview_on_the_vt_draws_and_restores_the_console() {
-    // Verifies: FRN-SRS-083
-    if std::env::var_os("FAIRING_HW_TESTS").is_none() {
-        return;
-    }
     let out = fairing()
         .args(["preview", "--seconds", "1", "--json"])
         .assert()

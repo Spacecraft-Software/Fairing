@@ -57,7 +57,7 @@ pub struct Cadence<C: Clock = SystemClock> {
 }
 
 impl Cadence<SystemClock> {
-    /// A cadence of `hz` frames per second on the system clock (`hz == 0` is treated as 1).
+    /// A cadence of `hz` frames per second on the system clock; `hz` is clamped to `1..=1000`.
     #[must_use]
     pub fn new(hz: u32) -> Self {
         Self::with_clock(hz, SystemClock)
@@ -65,10 +65,13 @@ impl Cadence<SystemClock> {
 }
 
 impl<C: Clock> Cadence<C> {
-    /// A cadence of `hz` frames per second on `clock`.
+    /// A cadence of `hz` frames per second on `clock`; `hz` is clamped to `1..=1000`.
+    ///
+    /// Above 1000 Hz the period would round towards zero and the loop would spin;
+    /// no display refreshes that fast.
     #[must_use]
     pub fn with_clock(hz: u32, clock: C) -> Self {
-        let period = Duration::from_secs(1) / hz.max(1);
+        let period = Duration::from_secs(1) / hz.clamp(1, 1000);
         Self {
             clock,
             period,
@@ -193,7 +196,9 @@ mod tests {
     }
 
     #[test]
-    fn zero_hertz_is_clamped() {
+    fn rates_are_clamped_to_a_sane_range() {
         assert_eq!(Cadence::new(0).period(), Duration::from_secs(1));
+        assert_eq!(Cadence::new(u32::MAX).period(), Duration::from_millis(1));
+        assert!(!Cadence::new(u32::MAX).period().is_zero());
     }
 }

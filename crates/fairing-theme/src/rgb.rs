@@ -88,15 +88,16 @@ mod tests {
 
     #[test]
     fn hex_round_trips() {
-        let colour = Rgb::parse_hex("#0e2A47").unwrap_or(Rgb::new(0, 0, 0));
-        assert_eq!(colour, Rgb::new(0x0E, 0x2A, 0x47));
-        assert_eq!(colour.to_string(), "#0E2A47");
-        assert_eq!("#0E2A47".parse::<Rgb>(), Ok(colour));
+        // A value that belongs to no palette: the parser is tested, not a token retyped.
+        let colour = Rgb::parse_hex("#12ab3F").unwrap_or(Rgb::new(0, 0, 0));
+        assert_eq!(colour, Rgb::new(0x12, 0xAB, 0x3F));
+        assert_eq!(colour.to_string(), "#12AB3F");
+        assert_eq!("#12AB3F".parse::<Rgb>(), Ok(colour));
     }
 
     #[test]
     fn malformed_hex_is_rejected() {
-        for bad in ["0E2A47", "#0E2A4", "#0E2A477", "#GGGGGG", "", "#"] {
+        for bad in ["12AB3F", "#12AB3", "#12AB3F0", "#GGGGGG", "", "#", "#aé000"] {
             let error = Rgb::parse_hex(bad);
             assert!(
                 error

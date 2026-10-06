@@ -75,7 +75,7 @@ fn run(cli: &Cli, context: &Context, invocation: &str, origin: Instant) -> Resul
     }
 
     if cli.global.version {
-        return cli::print_version(context, invocation);
+        return cli::print_version(context, invocation, &cli.global.fields);
     }
     match &cli.command {
         Some(Command::Describe) => describe::run(context, invocation, &cli.global),

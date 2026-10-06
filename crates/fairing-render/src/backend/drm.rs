@@ -58,6 +58,17 @@ impl AsFd for Card {
 impl BasicDevice for Card {}
 impl ControlDevice for Card {}
 
+impl Card {
+    /// Opens a primary node read-write (the ioctls and the mapping need both).
+    fn open(path: &Path) -> io::Result<Self> {
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map(Card)
+    }
+}
+
 /// One scan-out buffer: the dumb buffer and the framebuffer object over it.
 #[derive(Debug, Clone, Copy)]
 struct Scanout {
@@ -99,10 +110,11 @@ impl DrmBackend {
     ///
     /// # Errors
     ///
-    /// The last node's error when every `/dev/dri/cardN` fails, or
-    /// [`RenderErrorKind::NotFound`] when none exists.
+    /// The most specific error across the nodes tried (a held master or a refused
+    /// open outranks a connector-less card), or [`RenderErrorKind::NotFound`] when
+    /// no node exists.
     pub fn open() -> Result<Self, RenderError> {
-        let mut last: Option<RenderError> = None;
+        let mut worst: Option<RenderError> = None;
         for n in CARD_RANGE {
             let path = PathBuf::from(format!("/dev/dri/card{n}"));
             if !path.exists() {
@@ -110,10 +122,17 @@ impl DrmBackend {
             }
             match Self::open_path(&path) {
                 Ok(backend) => return Ok(backend),
-                Err(error) => last = Some(error),
+                Err(error) => {
+                    if worst
+                        .as_ref()
+                        .is_none_or(|w| specificity(error.kind()) > specificity(w.kind()))
+                    {
+                        worst = Some(error);
+                    }
+                }
             }
         }
-        Err(last.unwrap_or_else(|| {
+        Err(worst.unwrap_or_else(|| {
             RenderError::new(RenderErrorKind::NotFound, "no `/dev/dri/card*` node exists")
         }))
     }
@@ -122,17 +141,14 @@ impl DrmBackend {
     ///
     /// # Errors
     ///
-    /// Classified from the failing ioctl: [`RenderErrorKind::PermissionDenied`] when
-    /// another client is master, [`RenderErrorKind::NotFound`] without a connected
-    /// connector, [`RenderErrorKind::Unsupported`] without dumb buffers.
+    /// Classified from the failing ioctl: [`RenderErrorKind::Busy`] when another
+    /// client holds the DRM master, [`RenderErrorKind::PermissionDenied`] when the
+    /// process may not become master, [`RenderErrorKind::NotFound`] without a
+    /// connected connector, [`RenderErrorKind::Unsupported`] without dumb buffers.
     pub fn open_path(path: &Path) -> Result<Self, RenderError> {
         let shown = path.display().to_string();
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .map_err(|e| RenderError::from_io(format!("open `{shown}`"), e))?;
-        let card = Card(file);
+        let card =
+            Card::open(path).map_err(|e| RenderError::from_io(format!("open `{shown}`"), e))?;
         let dumb = card
             .get_driver_capability(DriverCapability::DumbBuffer)
             .map_err(|e| RenderError::from_io(format!("query `{shown}` capabilities"), e))?;
@@ -142,28 +158,38 @@ impl DrmBackend {
                 format!("`{shown}` has no dumb-buffer support"),
             ));
         }
-        // The first opener is master already. EBUSY means another client (a compositor,
-        // a display manager) holds master: nothing we draw would reach the screen, so
-        // say so now rather than failing the mode-set later. EACCES means we were never
-        // master and lack CAP_SYS_ADMIN; the mode-set below reports that case.
-        if let Err(e) = card.acquire_master_lock()
-            && RenderErrorKind::classify(&e) == RenderErrorKind::Busy
-        {
-            return Err(RenderError::from_io(
-                format!("another client is DRM master on `{shown}`"),
-                e,
-            ));
+        // The first opener of a primary node is master already; SET_MASTER then
+        // succeeds trivially. Any failure means our frames would never reach the
+        // screen, so it is fatal for this node and lets the chain move on: EBUSY,
+        // another client (a compositor, a display manager) holds master; EACCES, the
+        // process was never master and lacks CAP_SYS_ADMIN. The mode-set and the
+        // page flip would otherwise fail later with a far less useful EACCES.
+        if let Err(e) = card.acquire_master_lock() {
+            let detail = match RenderErrorKind::classify(&e) {
+                RenderErrorKind::Busy => format!("another client is DRM master on `{shown}`"),
+                RenderErrorKind::PermissionDenied => {
+                    format!("cannot become DRM master on `{shown}` (not master, no CAP_SYS_ADMIN)")
+                }
+                _ => format!("set DRM master on `{shown}`"),
+            };
+            return Err(RenderError::from_io(detail, e));
         }
 
         let resources = card
             .resource_handles()
             .map_err(|e| RenderError::from_io(format!("enumerate `{shown}`"), e))?;
-        let output = find_output(&card, &resources)?.ok_or_else(|| {
-            RenderError::new(
-                RenderErrorKind::NotFound,
-                format!("`{shown}` has no connected connector with a mode"),
-            )
-        })?;
+        // A cheap pass first; if it finds nothing, a forced probe re-reads EDID (slow,
+        // may flicker), which is what an unprobed connector needs right after the
+        // device appeared.
+        let output = match find_output(&card, &resources, false)? {
+            Some(output) => output,
+            None => find_output(&card, &resources, true)?.ok_or_else(|| {
+                RenderError::new(
+                    RenderErrorKind::NotFound,
+                    format!("`{shown}` has no connected connector with a mode"),
+                )
+            })?,
+        };
         let (width, height) = output.mode.size();
         let size = Size::new(u32::from(width), u32::from(height))?;
         let saved = card
@@ -215,6 +241,13 @@ impl DrmBackend {
     }
 
     /// Copies `frame` into `scanout`'s dumb buffer, honouring the driver's pitch.
+    ///
+    /// The buffer is mapped per frame: `DumbMapping` borrows the `DumbBuffer`
+    /// mutably, so a mapping kept for the backend's lifetime would need a
+    /// self-referential owner. The two extra syscalls and the first-touch faults
+    /// cost well under a millisecond at 1080p on the sandbox; the Steelbore §3.2
+    /// measurement on the reference machine (TODO T-029) decides whether a kept
+    /// mapping is worth the restructuring.
     fn upload(&self, scanout: &mut Scanout, frame: &Frame) -> Result<(), RenderError> {
         let pitch = scanout.bo.pitch() as usize;
         let row_bytes = self.size.width() as usize * BYTES_PER_PIXEL;
@@ -371,46 +404,72 @@ impl Backend for DrmBackend {
     }
 
     fn close(mut self) -> Result<(), RenderError> {
-        let mut first_error = None;
-        if let Some(saved_fb) = self.saved.fb
-            && let Err(e) = self.card.set_crtc(
-                self.output.crtc,
-                Some(saved_fb),
-                self.saved.position,
-                &[self.output.connector],
-                self.saved.mode,
-            )
-        {
-            first_error
-                .get_or_insert(RenderError::from_io("restore the CRTC", e).on(BackendKind::Drm));
-        }
+        let restored = self.restore_crtc();
+        self.release();
+        restored.map_err(|e| RenderError::from_io("restore the CRTC", e).on(BackendKind::Drm))
+    }
+}
+
+impl DrmBackend {
+    /// Puts the CRTC back on the framebuffer it scanned out before us, once.
+    fn restore_crtc(&mut self) -> io::Result<()> {
+        let Some(saved_fb) = self.saved.fb.take() else {
+            return Ok(());
+        };
+        self.card.set_crtc(
+            self.output.crtc,
+            Some(saved_fb),
+            self.saved.position,
+            &[self.output.connector],
+            self.saved.mode,
+        )
+    }
+
+    /// Frees the scan-out buffers and drops master, once.
+    fn release(&mut self) {
         if let Some(scanouts) = self.scanouts.take() {
             for scanout in scanouts {
                 destroy_scanout(&self.card, scanout);
             }
+            let _ = self.card.release_master_lock();
         }
-        let _ = self.card.release_master_lock();
-        first_error.map_or(Ok(()), Err)
     }
 }
 
 impl Drop for DrmBackend {
+    /// `close` is the orderly path; on an error path this still restores the
+    /// console and frees the kernel objects, best effort.
     fn drop(&mut self) {
-        // `close` is the orderly path; this only frees kernel objects if it was skipped.
-        if let Some(scanouts) = self.scanouts.take() {
-            for scanout in scanouts {
-                destroy_scanout(&self.card, scanout);
-            }
-        }
+        let _ = self.restore_crtc();
+        self.release();
+    }
+}
+
+/// How much a failure tells the operator: a held master or a refused open outranks
+/// "no connector here", which every headless render node reports.
+const fn specificity(kind: RenderErrorKind) -> u8 {
+    match kind {
+        RenderErrorKind::Busy | RenderErrorKind::PermissionDenied => 3,
+        RenderErrorKind::Unsupported | RenderErrorKind::Lost | RenderErrorKind::Io => 2,
+        RenderErrorKind::NotFound => 1,
+        _ => 0,
     }
 }
 
 /// The first connected connector with a mode, its preferred mode, and a CRTC for it.
-fn find_output(card: &Card, resources: &ResourceHandles) -> Result<Option<Output>, RenderError> {
+///
+/// With `force_probe` false the kernel answers from the connector's last probe
+/// (the fast path at boot); with it true the connector is re-probed, which can
+/// take hundreds of milliseconds and flicker, so it is only used when the cheap
+/// pass found nothing.
+fn find_output(
+    card: &Card,
+    resources: &ResourceHandles,
+    force_probe: bool,
+) -> Result<Option<Output>, RenderError> {
     for &handle in resources.connectors() {
-        // `force_probe = false`: never trigger a slow EDID re-read during boot.
         let info = card
-            .get_connector(handle, false)
+            .get_connector(handle, force_probe)
             .map_err(|e| RenderError::from_io("read a connector", e))?;
         if info.state() != connector::State::Connected {
             continue;
@@ -439,7 +498,9 @@ fn preferred_mode(info: &connector::Info) -> Option<Mode> {
         .or_else(|| info.modes().first().copied())
 }
 
-/// The CRTC the connector's current encoder drives, else the first one any of its encoders may use.
+/// The CRTC the connector's current encoder drives, else the first one any of its
+/// encoders may use; `None` when no encoder of this connector can reach a CRTC, so
+/// the connector is skipped instead of failing the mode-set with `EINVAL`.
 fn pick_crtc(
     card: &Card,
     resources: &ResourceHandles,
@@ -461,7 +522,7 @@ fn pick_crtc(
             return Ok(Some(crtc));
         }
     }
-    Ok(resources.crtcs().first().copied())
+    Ok(None)
 }
 
 /// A dumb buffer of `size` with a framebuffer object over it.
@@ -497,19 +558,29 @@ mod tests {
         assert!(error.to_string().contains("card-does-not-exist"), "{error}");
     }
 
-    /// Drives a real DRM device; runs only when a VT is available for the test.
-    ///
-    /// `FAIRING_HW_TESTS=1 cargo test -p fairing-render -- --ignored` on a text console.
+    /// Drives a real DRM device at the connector's preferred mode; a hardware smoke
+    /// run, not CI evidence. `cargo test -p fairing-render -- --ignored` on a free
+    /// text console; it is red without a device, as it should be.
     #[test]
-    #[ignore = "needs a DRM device and a free VT; run with FAIRING_HW_TESTS=1"]
-    fn presents_two_frames_on_real_hardware() {
-        // Verifies: FRN-SRS-001
-        if std::env::var_os("FAIRING_HW_TESTS").is_none() {
-            return;
-        }
+    #[ignore = "needs a DRM device and a free text console"]
+    fn presents_two_frames_on_real_hardware_at_the_preferred_mode() {
         let mut backend = DrmBackend::open().unwrap_or_else(|e| panic!("{e}"));
-        let size = backend.size();
-        let frame = Frame::new(size, PixelFormat::Xrgb8888).unwrap_or_else(|e| panic!("{e}"));
+        // Read the preferred mode independently of the backend's own choice.
+        let card = Card::open(backend.path()).unwrap_or_else(|e| panic!("{e}"));
+        let resources = card.resource_handles().unwrap_or_else(|e| panic!("{e}"));
+        let (w, h) = resources
+            .connectors()
+            .iter()
+            .filter_map(|&h| card.get_connector(h, false).ok())
+            .find(|info| info.state() == connector::State::Connected)
+            .and_then(|info| preferred_mode(&info))
+            .map_or_else(|| panic!("no connected connector"), |mode| mode.size());
+        assert_eq!(
+            (backend.size().width(), backend.size().height()),
+            (u32::from(w), u32::from(h))
+        );
+        let frame =
+            Frame::new(backend.size(), PixelFormat::Xrgb8888).unwrap_or_else(|e| panic!("{e}"));
         backend.present(&frame).unwrap_or_else(|e| panic!("{e}"));
         backend.present(&frame).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(backend.presented(), 2);

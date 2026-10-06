@@ -57,7 +57,7 @@ const HIGH_CONTRAST_SUFFIX: &str = "-high-contrast";
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed={ASSET}");
     println!("cargo:rerun-if-changed=build.rs");
-    let text = fs::read_to_string(ASSET)?;
+    let text = fs::read_to_string(ASSET).map_err(|e| format!("read {ASSET}: {e}"))?;
     let table: Table = text.parse()?;
     let generated = generate(&table)?;
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is not set")?);
@@ -297,7 +297,7 @@ fn string_list(table: &Table, key: &str) -> Result<Vec<String>, Box<dyn Error>> 
 fn parse_hex(hex: &str) -> Result<(u8, u8, u8), Box<dyn Error>> {
     let digits = hex
         .strip_prefix('#')
-        .filter(|d| d.len() == 6)
+        .filter(|d| d.len() == 6 && d.bytes().all(|b| b.is_ascii_hexdigit()))
         .ok_or_else(|| format!("`{hex}` is not `#RRGGBB`"))?;
     let channel = |i: usize| u8::from_str_radix(&digits[i..i + 2], 16);
     Ok((channel(0)?, channel(2)?, channel(4)?))

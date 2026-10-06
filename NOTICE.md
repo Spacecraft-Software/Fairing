@@ -22,6 +22,9 @@ licensed CC-BY-SA-4.0. Where this notice and the licence differ, the licence pre
 
 ## Third-party notices
 
+Per-item attribution with authors and source URLs is kept in [CREDITS.md](CREDITS.md)
+(Steelbore Standard §15.3); this section is the summary.
+
 - **Inconsolata** (Regular, version 3.100), bundled in `crates/fairing-render/assets/fonts/`.
   Copyright 2006 The Inconsolata Project Authors (<https://github.com/cyrealtype/Inconsolata>).
   Licensed under the SIL Open Font License, Version 1.1; the upstream notice ships verbatim

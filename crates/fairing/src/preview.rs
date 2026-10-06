@@ -9,11 +9,19 @@
 //! or a memory frame for agents and snapshots. Under an agent or CI harness no
 //! VT is ever opened (FRN-SRS-084): the automatic chain becomes the memory
 //! backend with a warning, and an explicit device backend is a usage error.
+//!
+//! Whatever happens while drawing, the output is closed — and the console
+//! restored — before the result is reported.
 
-use std::path::Path;
+use std::fs::File;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use fairing_render::{Choice, Compositor, Presenter, PresenterConfig, Scene, Size, Surface, open};
+use fairing_render::{
+    Attempt, Choice, Compositor, PixelFormat, Presenter, PresenterConfig, Scene, Size, Surface,
+    open,
+};
 use fairing_theme::{Request, Resolution, Source};
 use serde::Serialize;
 
@@ -22,9 +30,12 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::error::AppError;
 use crate::output::envelope::Response;
 use crate::output::mode::Context;
+use crate::output::write_line;
 
 /// The runnable hint for every "could not draw" failure.
 const MEMORY_HINT: &str = "fairing preview --backend memory --snapshot frame.ppm";
+/// The runnable hint for a snapshot path that cannot be created.
+const SNAPSHOT_HINT: &str = "fairing preview --backend memory --snapshot ./frame.ppm";
 
 #[derive(Debug, Serialize)]
 struct PaletteReport {
@@ -51,11 +62,15 @@ struct FallbackReport {
 /// What `preview` reports: the output it drew on and how the run went.
 #[derive(Debug, Serialize)]
 struct Report {
+    /// The backend that drew; `auto` only in a plan, where the chain decides at run time.
     backend: &'static str,
+    /// The backends tried, in order.
+    chain: Vec<&'static str>,
     device: Option<String>,
-    width: u32,
-    height: u32,
-    format: &'static str,
+    /// Output size and format; unknown in a plan for a device backend.
+    width: Option<u32>,
+    height: Option<u32>,
+    format: Option<&'static str>,
     palette: PaletteReport,
     seconds: f64,
     fps: u32,
@@ -77,14 +92,84 @@ struct Plan<'a> {
     memory_size: Size,
 }
 
+/// The snapshot file, created before any device is opened so a bad path fails
+/// fast without taking the console. A file that never received a complete
+/// frame is removed when the target is dropped.
+struct SnapshotFile {
+    path: PathBuf,
+    file: File,
+    written: bool,
+}
+
+impl SnapshotFile {
+    fn create(path: &Path, invocation: &str) -> Result<Self, AppError> {
+        let file = File::create(path).map_err(|e| snapshot_error(path, &e, invocation))?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            file,
+            written: false,
+        })
+    }
+
+    /// Writes the presenter's last frame as a binary PPM and confirms it.
+    fn write(
+        mut self,
+        presenter: &Presenter,
+        context: &Context,
+        invocation: &str,
+    ) -> Result<String, AppError> {
+        presenter.frame().write_ppm(&mut self.file).map_err(|e| {
+            AppError::internal(
+                format!("writing `{}`: {e}", self.path.display()),
+                invocation,
+            )
+        })?;
+        self.written = true;
+        Diagnostic::new(
+            Severity::Ok,
+            "SNAPSHOT_WRITTEN",
+            format!(
+                "wrote `{}` ({} {})",
+                self.path.display(),
+                presenter.frame().size(),
+                presenter.frame().format()
+            ),
+            invocation,
+        )
+        .emit(context);
+        Ok(self.path.display().to_string())
+    }
+}
+
+impl Drop for SnapshotFile {
+    fn drop(&mut self) {
+        if !self.written {
+            // Nothing complete reached the file; do not leave a stub behind.
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// Maps a snapshot creation failure onto the exit-code table by its cause.
+fn snapshot_error(path: &Path, error: &io::Error, invocation: &str) -> AppError {
+    let message = format!("cannot create `{}`: {error}", path.display());
+    match error.kind() {
+        io::ErrorKind::NotFound => AppError::not_found(message, SNAPSHOT_HINT, invocation),
+        io::ErrorKind::PermissionDenied => {
+            AppError::permission_denied(message, SNAPSHOT_HINT, invocation)
+        }
+        _ => AppError::invalid_argument(message, SNAPSHOT_HINT, invocation),
+    }
+}
+
 /// Runs `fairing preview`.
 ///
 /// # Errors
 ///
 /// `FEATURE_UNAVAILABLE` for `--theme` until M2; `INVALID_ARGUMENT` for an
 /// unregistered `--palette` or a device backend under an agent harness;
-/// `NOT_FOUND` / `PERMISSION_DENIED` when no backend could draw; the
-/// backend's classified error if drawing fails midway.
+/// `NOT_FOUND`, `PERMISSION_DENIED` or `CONFLICT` when no backend could draw;
+/// the backend's classified error if drawing fails midway.
 pub fn run(
     args: &PreviewArgs,
     context: &Context,
@@ -132,22 +217,24 @@ pub fn run(
     emit(&report, context, invocation, flags)
 }
 
+/// The backends a choice tries, by name.
+fn chain_names(choice: Choice) -> Vec<&'static str> {
+    choice.chain().iter().map(|kind| kind.as_str()).collect()
+}
+
 /// The report for `--dry-run`: what would be drawn, where, with what.
+///
+/// Only the memory backend has a size before it is opened; a device's mode is
+/// read from the device, so the plan leaves it null rather than guess.
 fn planned_report(plan: &Plan<'_>) -> Report {
+    let memory = plan.choice == Choice::Memory;
     Report {
-        backend: match plan.choice {
-            Choice::Memory => "memory",
-            Choice::Fbdev => "fbdev",
-            Choice::Auto | Choice::Drm => "drm",
-        },
+        backend: plan.choice.as_str(),
+        chain: chain_names(plan.choice),
         device: None,
-        width: plan.memory_size.width(),
-        height: plan.memory_size.height(),
-        format: if plan.choice == Choice::Memory {
-            "rgba8888"
-        } else {
-            "xrgb8888"
-        },
+        width: memory.then(|| plan.memory_size.width()),
+        height: memory.then(|| plan.memory_size.height()),
+        format: memory.then_some(PixelFormat::Rgba8888.as_str()),
         palette: palette_report(&plan.resolution),
         seconds: plan.args.seconds,
         fps: plan.args.fps,
@@ -162,33 +249,23 @@ fn planned_report(plan: &Plan<'_>) -> Report {
 }
 
 /// Opens the chain, draws the simulated run, writes the snapshot and closes.
+///
+/// The snapshot file is created first so a bad path never costs a console
+/// switch; the surface is closed on every path so the console comes back
+/// before any error is reported.
 fn draw(
     plan: &Plan<'_>,
     context: &Context,
     invocation: &str,
     origin: Instant,
 ) -> Result<Report, AppError> {
+    let snapshot = match plan.args.snapshot.as_deref() {
+        Some(path) => Some(SnapshotFile::create(path, invocation)?),
+        None => None,
+    };
     let opened = open(plan.choice, plan.memory_size)
         .map_err(|failure| AppError::from_no_backend(&failure, MEMORY_HINT, invocation))?;
-    let fallbacks: Vec<FallbackReport> = opened
-        .attempts
-        .iter()
-        .map(|attempt| {
-            Diagnostic::new(
-                Severity::Warn,
-                "BACKEND_FALLBACK",
-                format!("{}; trying the next backend", attempt.error),
-                invocation,
-            )
-            .with_hint(MEMORY_HINT)
-            .emit(context);
-            FallbackReport {
-                backend: attempt.backend.as_str(),
-                error: attempt.error.to_string(),
-                elapsed_ms: attempt.elapsed.as_secs_f64() * 1000.0,
-            }
-        })
-        .collect();
+    let fallbacks = report_fallbacks(&opened.attempts, context, invocation);
     let device = device_of(&opened.surface);
 
     let compositor = Compositor::new(plan.resolution.selection)
@@ -205,23 +282,41 @@ fn draw(
     let format = presenter.frame().format();
     let backend = presenter.backend();
 
-    let run_time = animate(&mut presenter, plan.args, context, invocation)?;
-    let snapshot = match &plan.args.snapshot {
-        Some(path) => Some(write_snapshot(&presenter, path, context, invocation)?),
-        None => None,
-    };
-    let stats = presenter
+    let outcome = animate(&mut presenter, plan.args, invocation).and_then(|run_time| {
+        let written = match snapshot {
+            Some(file) => Some(file.write(&presenter, context, invocation)?),
+            None => None,
+        };
+        Ok((run_time, written))
+    });
+    let closed = presenter
         .close()
-        .map_err(|e| AppError::from_render(&e, MEMORY_HINT, invocation))?;
+        .map_err(|e| AppError::from_render(&e, MEMORY_HINT, invocation));
+    let (run_time, snapshot) = outcome?;
+    let stats = closed?;
+
+    if let Some(first) = stats.first_frame() {
+        Diagnostic::new(
+            Severity::Info,
+            "FIRST_FRAME",
+            format!(
+                "first frame presented {:.1} ms after process start",
+                first.as_secs_f64() * 1000.0
+            ),
+            invocation,
+        )
+        .emit(context);
+    }
     let intervals = u32::try_from(stats.frames().saturating_sub(1)).unwrap_or(u32::MAX);
     let measured_fps = (run_time > Duration::ZERO && intervals > 0)
         .then(|| f64::from(intervals) / run_time.as_secs_f64());
     Ok(Report {
         backend: backend.as_str(),
+        chain: chain_names(plan.choice),
         device,
-        width: size.width(),
-        height: size.height(),
-        format: format.as_str(),
+        width: Some(size.width()),
+        height: Some(size.height()),
+        format: Some(format.as_str()),
         palette: palette_report(&plan.resolution),
         seconds: plan.args.seconds,
         fps: plan.args.fps,
@@ -235,16 +330,40 @@ fn draw(
     })
 }
 
+/// Warns about each backend that failed before one worked and records it.
+fn report_fallbacks(
+    attempts: &[Attempt],
+    context: &Context,
+    invocation: &str,
+) -> Vec<FallbackReport> {
+    attempts
+        .iter()
+        .map(|attempt| {
+            Diagnostic::new(
+                Severity::Warn,
+                "BACKEND_FALLBACK",
+                format!("{}; trying the next backend", attempt.error),
+                invocation,
+            )
+            .with_hint(MEMORY_HINT)
+            .emit(context);
+            FallbackReport {
+                backend: attempt.backend.as_str(),
+                error: attempt.error.to_string(),
+                elapsed_ms: attempt.elapsed.as_secs_f64() * 1000.0,
+            }
+        })
+        .collect()
+}
+
 /// Presents the simulated bar for the requested duration; returns the wall time taken.
 fn animate(
     presenter: &mut Presenter,
     args: &PreviewArgs,
-    context: &Context,
     invocation: &str,
 ) -> Result<Duration, AppError> {
     let duration = Duration::from_secs_f64(args.seconds);
     let start = Instant::now();
-    let mut first_frame_logged = false;
     loop {
         let elapsed = start.elapsed();
         let done = elapsed >= duration;
@@ -256,19 +375,6 @@ fn animate(
         presenter
             .present(&Scene::new(percent).with_status(args.status.as_str()))
             .map_err(|e| AppError::from_render(&e, MEMORY_HINT, invocation))?;
-        if !first_frame_logged && let Some(first) = presenter.stats().first_frame() {
-            first_frame_logged = true;
-            Diagnostic::new(
-                Severity::Info,
-                "FIRST_FRAME",
-                format!(
-                    "first frame presented {:.1} ms after process start",
-                    first.as_secs_f64() * 1000.0
-                ),
-                invocation,
-            )
-            .emit(context);
-        }
         if done {
             return Ok(start.elapsed());
         }
@@ -276,39 +382,8 @@ fn animate(
     }
 }
 
-/// Writes the last frame as a binary PPM and confirms it.
-fn write_snapshot(
-    presenter: &Presenter,
-    path: &Path,
-    context: &Context,
-    invocation: &str,
-) -> Result<String, AppError> {
-    let mut file = std::fs::File::create(path).map_err(|e| {
-        AppError::invalid_argument(
-            format!("cannot create `{}`: {e}", path.display()),
-            "fairing preview --backend memory --snapshot ./frame.ppm",
-            invocation,
-        )
-    })?;
-    presenter.frame().write_ppm(&mut file).map_err(|e| {
-        AppError::internal(format!("writing `{}`: {e}", path.display()), invocation)
-    })?;
-    Diagnostic::new(
-        Severity::Ok,
-        "SNAPSHOT_WRITTEN",
-        format!(
-            "wrote `{}` ({} {})",
-            path.display(),
-            presenter.frame().size(),
-            presenter.frame().format()
-        ),
-        invocation,
-    )
-    .emit(context);
-    Ok(path.display().to_string())
-}
-
-/// Picks the palette: `--palette` outranks `SPACECRAFT_THEME`; `NO_COLOR` overlays mono.
+/// Picks the palette: `--palette` is the explicit source; `SPACECRAFT_THEME`
+/// follows; `NO_COLOR` overlays mono (Steelbore Standard §11.6).
 fn resolve_palette(
     args: &PreviewArgs,
     context: &Context,
@@ -316,7 +391,8 @@ fn resolve_palette(
 ) -> Result<Resolution, AppError> {
     let environment = std::env::var(fairing_theme::ENV_VAR).ok();
     let request = Request {
-        kernel_parameter: args.palette.as_deref(),
+        explicit: args.palette.as_deref(),
+        kernel_parameter: None,
         environment: environment.as_deref(),
         declared_default: None,
         no_color: context.no_color,
@@ -327,7 +403,7 @@ fn resolve_palette(
         && resolution
             .skipped
             .iter()
-            .any(|s| s.source == Source::KernelParameter)
+            .any(|s| s.source == Source::Explicit)
     {
         return Err(AppError::invalid_argument(
             format!("palette `{slug}` is not a registered theme"),
@@ -415,6 +491,24 @@ fn palette_report(resolution: &Resolution) -> PaletteReport {
     }
 }
 
+/// The human `preview` line: where the frame went, or would go.
+fn where_line(report: &Report) -> String {
+    if report.planned && report.chain.len() > 1 {
+        return format!("would try {}", report.chain.join(", then "));
+    }
+    let verb = if report.planned { "would draw" } else { "drew" };
+    let geometry = match (report.width, report.height, report.format) {
+        (Some(w), Some(h), Some(f)) => format!(" {w}x{h} {f}"),
+        _ => String::new(),
+    };
+    let device = report
+        .device
+        .as_deref()
+        .map(|d| format!(" ({d})"))
+        .unwrap_or_default();
+    format!("{verb} on {}{geometry}{device}", report.backend)
+}
+
 fn emit(
     report: &Report,
     context: &Context,
@@ -426,41 +520,35 @@ fn emit(
             .with_context(context, flags.dry_run)
             .emit(context, &flags.fields);
     }
-    let verb = if report.planned { "would draw" } else { "drew" };
-    println!(
-        "preview\t{verb} on {} {}x{} {}{}",
-        report.backend,
-        report.width,
-        report.height,
-        report.format,
-        report
-            .device
-            .as_deref()
-            .map(|d| format!(" ({d})"))
-            .unwrap_or_default()
-    );
-    println!(
-        "palette\t{} (base {}, from {}, overlay {})",
-        report.palette.slug, report.palette.base, report.palette.source, report.palette.overlay
-    );
+    write_line(&format!("preview\t{}", where_line(report)), invocation)?;
+    write_line(
+        &format!(
+            "palette\t{} (base {}, from {}, overlay {})",
+            report.palette.slug, report.palette.base, report.palette.source, report.palette.overlay
+        ),
+        invocation,
+    )?;
     if !report.planned {
-        println!(
-            "frames\t{} in {:.1} s at {} fps requested{}{}",
-            report.frames,
-            report.seconds,
-            report.fps,
-            report
-                .measured_fps
-                .map(|f| format!(", {f:.1} measured"))
-                .unwrap_or_default(),
-            report
-                .first_frame_ms
-                .map(|ms| format!(", first frame {ms:.1} ms"))
-                .unwrap_or_default()
-        );
+        write_line(
+            &format!(
+                "frames\t{} in {:.1} s at {} fps requested{}{}",
+                report.frames,
+                report.seconds,
+                report.fps,
+                report
+                    .measured_fps
+                    .map(|f| format!(", {f:.1} measured"))
+                    .unwrap_or_default(),
+                report
+                    .first_frame_ms
+                    .map(|ms| format!(", first frame {ms:.1} ms"))
+                    .unwrap_or_default()
+            ),
+            invocation,
+        )?;
     }
     if let Some(snapshot) = &report.snapshot {
-        println!("snapshot\t{snapshot}");
+        write_line(&format!("snapshot\t{snapshot}"), invocation)?;
     }
     Ok(())
 }
@@ -494,5 +582,27 @@ mod tests {
             assert_eq!(choice.chain().as_str(), name);
         }
         assert_eq!(BackendKind::Memory.as_str(), "memory");
+        assert_eq!(chain_names(Choice::Auto), vec!["drm", "fbdev"]);
+    }
+
+    #[test]
+    fn snapshot_errors_follow_the_cause() {
+        let path = Path::new("/nowhere/frame.ppm");
+        let missing = io::Error::from(io::ErrorKind::NotFound);
+        assert_eq!(snapshot_error(path, &missing, "c").exit_code, 3);
+        let refused = io::Error::from(io::ErrorKind::PermissionDenied);
+        assert_eq!(snapshot_error(path, &refused, "c").exit_code, 4);
+        let odd = io::Error::from(io::ErrorKind::IsADirectory);
+        assert_eq!(snapshot_error(path, &odd, "c").exit_code, 2);
+    }
+
+    #[test]
+    fn unwritten_snapshot_files_are_removed() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let path = dir.path().join("frame.ppm");
+        let target = SnapshotFile::create(&path, "c").unwrap_or_else(|e| panic!("{e}"));
+        assert!(path.exists());
+        drop(target);
+        assert!(!path.exists(), "a stub must not survive a failed run");
     }
 }

@@ -88,18 +88,26 @@ impl Compositor {
     fn draw_bar(&self, frame: &mut Frame, viewport: &Viewport, scene: &Scene) -> Rect {
         let bar = viewport.rect(self.layout.bar);
         let radius = viewport.length(self.layout.bar_radius);
-        if let Some(track) = shapes::rounded_rect(bar, radius) {
-            shapes::fill(frame, &track, self.palette.color(Role::Surface));
+        let track = shapes::rounded_rect(bar, radius);
+        if let Some(track) = &track {
+            shapes::fill(frame, track, self.palette.color(Role::Surface));
+        }
+        // The fill is never narrower than a full pill, so its caps coincide with the
+        // track's and nothing spills past the rounded corners at low percentages.
+        if scene.percent() > 0 {
+            let fill_width = (bar.width * scene.fraction()).max(2.0 * radius);
+            if let Some(fill) = shapes::rounded_rect(bar.with_width(fill_width), radius) {
+                shapes::fill(frame, &fill, self.palette.color(Role::Accent));
+            }
+        }
+        // The outline goes on last so the fill never thins it.
+        if let Some(track) = &track {
             shapes::stroke(
                 frame,
-                &track,
+                track,
                 self.palette.color(Role::Border),
                 viewport.length(self.layout.bar_outline),
             );
-        }
-        let fill_width = bar.width * scene.fraction();
-        if let Some(fill) = shapes::rounded_rect(bar.with_width(fill_width), radius) {
-            shapes::fill(frame, &fill, self.palette.color(Role::Accent));
         }
         bar
     }
@@ -189,7 +197,7 @@ mod tests {
     fn render(width: u32, height: u32, scene: &Scene, format: PixelFormat) -> (Frame, Viewport) {
         let size = Size::new(width, height).unwrap_or_else(|e| panic!("{e}"));
         let mut frame = Frame::new(size, format).unwrap_or_else(|e| panic!("{e}"));
-        let mut compositor = Compositor::new(Selection::Colour(Theme::family_default()))
+        let mut compositor = Compositor::new(Selection::Color(Theme::family_default()))
             .unwrap_or_else(|e| panic!("{e}"));
         compositor.render(&mut frame, scene);
         (frame, Viewport::fit(REFERENCE_SIZE, size))

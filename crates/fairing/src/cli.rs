@@ -15,6 +15,7 @@ use serde::Serialize;
 use crate::error::AppError;
 use crate::output::envelope::Response;
 use crate::output::mode::Context;
+use crate::output::write_line;
 
 /// Project URL (Steelbore Standard §15.1).
 pub const WEBSITE: &str = "https://Fairing.SpacecraftSoftware.org/";
@@ -183,8 +184,8 @@ pub struct PreviewArgs {
     /// Frames per second.
     #[arg(long, default_value_t = 30, value_name = "hz", value_parser = clap::value_parser!(u32).range(1..=240))]
     pub fps: u32,
-    /// Compiled theme to preview (arrives with the theme format in M2).
-    #[arg(long, value_name = "path")]
+    /// Compiled theme to preview; arrives with the theme format (M2) and is hidden until then.
+    #[arg(long, value_name = "path", hide = true)]
     pub theme: Option<PathBuf>,
 }
 
@@ -256,12 +257,17 @@ struct VersionData {
     license: &'static str,
 }
 
-/// Prints `--version` in the mode's rendering.
+/// Prints `--version` in the mode's rendering; `fields` narrows the envelope.
 ///
 /// # Errors
 ///
-/// Returns an internal error when the envelope cannot be serialised.
-pub fn print_version(context: &Context, invocation: &str) -> Result<(), AppError> {
+/// Returns an internal error when the envelope cannot be serialised or stdout
+/// cannot be written.
+pub fn print_version(
+    context: &Context,
+    invocation: &str,
+    fields: &[String],
+) -> Result<(), AppError> {
     let data = VersionData {
         name: env!("CARGO_PKG_NAME"),
         version: env!("CARGO_PKG_VERSION"),
@@ -271,14 +277,20 @@ pub fn print_version(context: &Context, invocation: &str) -> Result<(), AppError
         license: "GPL-3.0-or-later",
     };
     if context.mode.is_machine() {
-        Response::new(invocation, data).emit(context, &[])
-    } else {
-        println!("{} {}", data.name, data.version);
-        println!("Maintained by {MAINTAINER}");
-        println!("{COPYRIGHT}");
-        println!("{WEBSITE}");
-        Ok(())
+        return Response::new(invocation, data)
+            .with_context(context, false)
+            .emit(context, fields);
     }
+    let lines = [
+        format!("{} {}", data.name, data.version),
+        format!("Maintained by {MAINTAINER}"),
+        COPYRIGHT.to_owned(),
+        WEBSITE.to_owned(),
+    ];
+    for line in &lines {
+        write_line(line, invocation)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

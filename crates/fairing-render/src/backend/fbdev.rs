@@ -12,8 +12,14 @@
 //! known exception). The contents found on the device are saved on open and
 //! written back on close, so a preview leaves the console as it was; the
 //! console cursor blink is paused through sysfs for the same reason, where
-//! that attribute is writable.
+//! that attribute is writable. What this backend cannot do without an ioctl is
+//! put the VT into `KD_GRAPHICS`: while the console stays in text mode, kernel
+//! messages and anything written to the console land in the same buffer. The
+//! boot path runs with `quiet`, and `preview` holds its own diagnostics until
+//! the frame loop is over; a graphics-mode switch through a qualified crate is
+//! an M2 decision.
 
+use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::{AsFd, BorrowedFd};
@@ -33,11 +39,13 @@ pub const DEFAULT_DEVICE: &str = "/dev/fb0";
 pub const CURSOR_BLINK: &str = "/sys/class/graphics/fbcon/cursor_blink";
 /// Largest dimension accepted from sysfs; anything bigger is a corrupt attribute, not a panel.
 const MAX_DIMENSION: u32 = 16_384;
+/// Largest console image saved for restoration; above it the console is not restored.
+const MAX_SAVED_BYTES: usize = 64 * 1024 * 1024;
 
 /// The sysfs facts the backend needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FbInfo {
-    /// Visible size: the first `modes` line, else `virtual_size`.
+    /// Visible size: the `mode` attribute, else the first `modes` line, else `virtual_size`.
     pub size: Size,
     /// Colour depth.
     pub bits_per_pixel: u32,
@@ -50,9 +58,10 @@ pub struct FbInfo {
 impl FbInfo {
     /// Reads the geometry attributes from a sysfs directory.
     ///
-    /// The kernel publishes no `xres`/`yres`; the visible size is the first
-    /// `modes` line (`U:1920x1080p-0`), falling back to `virtual_size`, which
-    /// can exceed the panel on multi-head devices.
+    /// The kernel publishes no `xres`/`yres`. The current mode is the `mode`
+    /// attribute when fbcon has set one (`U:1920x1080p-0`); otherwise the first
+    /// `modes` line is the registration mode, and the last resort is
+    /// `virtual_size`, which can exceed the panel on multi-head devices.
     ///
     /// # Errors
     ///
@@ -71,9 +80,15 @@ impl FbInfo {
         let virtual_size = attribute("virtual_size")?;
         let (width, height) = parse_pair(&virtual_size, ',')
             .ok_or_else(|| unsupported(format!("virtual_size `{virtual_size}` is not `W,H`")))?;
-        let (width, height) = attribute("modes")
+        let (width, height) = attribute("mode")
             .ok()
-            .and_then(|modes| modes.lines().next().and_then(parse_mode_line))
+            .filter(|mode| !mode.is_empty())
+            .and_then(|mode| parse_mode_line(&mode))
+            .or_else(|| {
+                attribute("modes")
+                    .ok()
+                    .and_then(|modes| modes.lines().next().and_then(parse_mode_line))
+            })
             .unwrap_or((width, height));
         if width > MAX_DIMENSION || height > MAX_DIMENSION {
             return Err(unsupported(format!(
@@ -129,7 +144,6 @@ pub(crate) fn parse_mode_line(line: &str) -> Option<(u32, u32)> {
 }
 
 /// `/dev/fb0` driven through positional writes.
-#[derive(Debug)]
 pub struct FbdevBackend {
     device: File,
     path: PathBuf,
@@ -170,8 +184,15 @@ impl FbdevBackend {
             .write(true)
             .open(device)
             .map_err(|e| RenderError::from_io(format!("open `{}`", device.display()), e))?;
-        let saved = read_all_at(&file, info.stride * info.size.height() as usize)
-            .map_err(|e| RenderError::from_io(format!("save `{}`", device.display()), e))?;
+        // Save the console image for restoration; an implausibly large one is not
+        // worth gigabytes of memory, so the console is simply not restored then.
+        let image_bytes = info.stride * info.size.height() as usize;
+        let saved = if image_bytes <= MAX_SAVED_BYTES {
+            read_all_at(&file, image_bytes)
+                .map_err(|e| RenderError::from_io(format!("save `{}`", device.display()), e))?
+        } else {
+            Vec::new()
+        };
         Ok(Self {
             device: file,
             path: device.to_owned(),
@@ -257,16 +278,42 @@ impl Backend for FbdevBackend {
         Ok(())
     }
 
-    fn close(self) -> Result<(), RenderError> {
-        if let Some((switch, previous)) = &self.cursor_blink {
+    fn close(mut self) -> Result<(), RenderError> {
+        self.restore()
+            .map_err(|e| RenderError::from_io("restore the console", e).on(BackendKind::Fbdev))
+    }
+}
+
+impl FbdevBackend {
+    /// Writes the saved console image back and resumes the cursor, once.
+    fn restore(&mut self) -> io::Result<()> {
+        if let Some((switch, previous)) = self.cursor_blink.take() {
             let _ = std::fs::write(switch, previous);
         }
-        if self.saved.is_empty() {
+        let saved = std::mem::take(&mut self.saved);
+        if saved.is_empty() {
             return Ok(());
         }
-        self.device
-            .write_all_at(&self.saved, 0)
-            .map_err(|e| RenderError::from_io("restore the console", e).on(BackendKind::Fbdev))
+        self.device.write_all_at(&saved, 0)
+    }
+}
+
+impl Drop for FbdevBackend {
+    /// `close` is the orderly path; on an error path this still restores the console.
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
+}
+
+impl fmt::Debug for FbdevBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FbdevBackend")
+            .field("path", &self.path)
+            .field("info", &self.info)
+            .field("saved_bytes", &self.saved.len())
+            .field("cursor_blink_paused", &self.cursor_blink.is_some())
+            .field("presented", &self.presented)
+            .finish_non_exhaustive()
     }
 }
 
@@ -325,6 +372,14 @@ mod tests {
         let info = FbInfo::read(dir.path()).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!((info.size.width(), info.size.height()), (1280, 800));
         assert_eq!(info.name, "simpledrmdrmfb");
+        std::fs::write(dir.path().join("mode"), "U:1024x600p-0\n")
+            .unwrap_or_else(|e| panic!("{e}"));
+        let info = FbInfo::read(dir.path()).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!((info.size.width(), info.size.height()), (1024, 600));
+        std::fs::write(dir.path().join("mode"), "\n").unwrap_or_else(|e| panic!("{e}"));
+        let info = FbInfo::read(dir.path()).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!((info.size.width(), info.size.height()), (1280, 800));
+        std::fs::remove_file(dir.path().join("mode")).unwrap_or_else(|e| panic!("{e}"));
         std::fs::write(dir.path().join("state"), "1\n").unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(
             FbInfo::read(dir.path()).err().map(|e| e.kind()),
@@ -356,7 +411,6 @@ mod tests {
 
     #[test]
     fn presents_rows_at_the_stride_and_restores_on_close() {
-        // Verifies: FRN-SRS-002
         let dir = TempDir::new().unwrap_or_else(|e| panic!("{e}"));
         let stride = 4 * 4 + 8; // four pixels plus padding
         fake_sysfs(dir.path(), "4,2", "32", &stride.to_string());
@@ -409,6 +463,26 @@ mod tests {
             std::fs::read(&device).unwrap_or_else(|e| panic!("{e}")),
             original,
             "restored"
+        );
+
+        // Dropping without `close` restores too (the preview error path).
+        let mut backend =
+            FbdevBackend::open_at(dir.path(), &device).unwrap_or_else(|e| panic!("{e}"));
+        backend.present(&frame).unwrap_or_else(|e| panic!("{e}"));
+        assert_ne!(
+            std::fs::read(&device).unwrap_or_else(|e| panic!("{e}")),
+            original
+        );
+        let shown = format!("{backend:?}");
+        assert!(
+            shown.contains("saved_bytes") && !shown.contains("[0, 1, 2"),
+            "{shown}"
+        );
+        drop(backend);
+        assert_eq!(
+            std::fs::read(&device).unwrap_or_else(|e| panic!("{e}")),
+            original,
+            "restored on drop"
         );
     }
 

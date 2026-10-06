@@ -164,11 +164,12 @@ Writes the final frame as a binary PPM (@code{P6}, 8 bits per channel) to the
 given path.  The format needs no library and every image viewer opens it.
 @item --palette
 A registered Steelbore theme slug such as @code{steelbore},
-@code{steelbore-high-contrast} or @code{tokyonight}.  It outranks
-@env{SPACECRAFT_THEME}; an unregistered slug is a usage error.  Without it the
-palette is resolved as the Steelbore Standard §11.6 prescribes: the environment
+@code{steelbore-high-contrast} or @code{tokyonight}: the explicit source of
+the Steelbore Standard §11.6 resolution, reported as @code{command-line}.  It
+outranks @env{SPACECRAFT_THEME}; an unregistered slug is a usage error.
+Without it the palette is resolved as §11.6 prescribes: the environment
 variable, then the family default, with @env{NO_COLOR} overlaying the mono
-theme.
+theme.  The theme is resolved once and held for the run.
 @item --status
 The status line drawn under the bar; the boot splash shows the description of
 the systemd job in progress here.
@@ -178,11 +179,10 @@ backend always draws at the connector's preferred mode.
 @item --fps
 The redraw rate, 1 to 240 frames per second (default 30).
 @item --dry-run
-Reports which backend would be tried, with which palette, without touching a
-device.  The envelope carries @code{"dry_run": true}.
-@item --theme
-Reserved for the compiled theme format; until it exists the flag is answered
-with @code{FEATURE_UNAVAILABLE} (exit 1).
+Reports which backends would be tried, in order, with which palette, without
+touching a device.  A device's mode is not guessed: @code{width},
+@code{height} and @code{format} are null in the plan.  The envelope carries
+@code{"dry_run": true}.
 @end table
 
 @cindex layout
@@ -192,8 +192,10 @@ the canvas colour.  The percentage is always rendered as text beside the bar,
 so the state is never carried by colour alone.
 
 @cindex report
-In machine mode the @code{data} object reports @code{backend}, @code{device},
-@code{width}, @code{height}, @code{format}, the resolved @code{palette}
+In machine mode the @code{data} object reports @code{backend} (@code{auto}
+only in a plan, where the chain decides at run time), the @code{chain} tried
+in order, @code{device}, @code{width}, @code{height}, @code{format}, the
+resolved @code{palette}
 (@code{slug}, @code{base}, @code{source}, @code{overlay}, @code{skipped}),
 @code{seconds}, @code{fps}, @code{frames}, @code{dropped},
 @code{first_frame_ms}, @code{measured_fps}, @code{snapshot}, the
@@ -203,9 +205,11 @@ In machine mode the @code{data} object reports @code{backend}, @code{device},
 @cindex console, restoring
 On the DRM path the CRTC is returned to the framebuffer it scanned out before;
 on the fbdev path the device contents are saved on open and written back on
-close, and the console cursor blink is paused meanwhile.  Both paths need the
-process to be the DRM master or to own the framebuffer: run on a text console,
-not under a desktop session.
+close, and the console cursor blink is paused meanwhile.  Both restorations run
+on every exit path, including a failure midway through the run.  Both paths
+need the process to be the DRM master or to own the framebuffer: run on a text
+console, not under a desktop session.  A snapshot path is opened before any
+device, so a bad path fails without switching the console.
 
 @node describe and schema
 @section @command{fairing describe} and @command{fairing schema}
@@ -278,9 +282,6 @@ Colour precedence as the CLI Standard defines it.  @env{NO_COLOR} also selects
 the mono theme for the splash itself.
 @item SPACECRAFT_THEME
 A registered theme slug for the splash palette (Steelbore Standard §11.6).
-@item FAIRING_HW_TESTS
-Set to run the ignored test-suite entries that need a DRM device or
-@file{/dev/fb0} and a free virtual terminal.
 @end table
 
 @node Exit codes
@@ -295,10 +296,14 @@ Set to run the ignored test-suite entries that need a DRM device or
 @item 2 @tab @code{INVALID_ARGUMENT}, @code{MISSING_ARGUMENT}
 @tab Usage error, including a device backend requested under an agent variable.
 @item 3 @tab @code{NOT_FOUND}
-@tab No DRM device or @file{/dev/fb0} to draw on, or an unknown command.
+@tab No DRM device or @file{/dev/fb0} to draw on, a snapshot path in a
+directory that does not exist, or a @command{schema} target that is not a verb.
 @item 4 @tab @code{PERMISSION_DENIED}
-@tab Another client is the DRM master, or the device refused the process.
-@item 5 @tab @code{CONFLICT} @tab Reserved.
+@tab The device refused the process: not in the @code{video} group, or no
+@code{CAP_SYS_ADMIN} to become DRM master.
+@item 5 @tab @code{CONFLICT}
+@tab Another client holds DRM master, such as a running compositor; stop it or
+run on a text console.
 @end multitable
 
 Every non-zero exit in machine mode writes one line

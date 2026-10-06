@@ -111,7 +111,7 @@ fn mono_bindings_equal_the_file() {
     });
     let bindings: &MonoRoles = match selection.selection {
         fairing_theme::Selection::Mono(mono) => mono,
-        fairing_theme::Selection::Colour(_) => panic!("NO_COLOR did not select mono"),
+        fairing_theme::Selection::Color(_) => panic!("NO_COLOR did not select mono"),
     };
     for role in Role::ALL {
         match bindings.get(role) {

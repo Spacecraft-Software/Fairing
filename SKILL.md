@@ -37,8 +37,11 @@ Under `AI_AGENT`, `AGENT`, `CI`, `CLAUDECODE`, `CURSOR_AGENT` or `GEMINI_CLI` no
 terminal is opened: `--backend auto` renders to memory and emits a `[WARN]`
 (`AGENT_MEMORY_BACKEND`); `--backend drm|fbdev` exits 2. Pair memory rendering with
 `--snapshot frame.ppm` (binary PPM, `P6`) to inspect the frame. The JSON `data` carries
-`backend`, `width`, `height`, `format`, `palette.{slug,base,source,overlay,skipped}`,
-`frames`, `dropped`, `first_frame_ms`, `measured_fps`, `snapshot`, `fallbacks`, `planned`.
+`backend`, `chain`, `device`, `width`, `height`, `format`,
+`palette.{slug,base,source,overlay,skipped}`, `seconds`, `fps`, `frames`, `dropped`,
+`first_frame_ms`, `measured_fps`, `snapshot`, `fallbacks`, `planned`. Under `--dry-run`
+with `--backend auto` the `backend` is `auto`, `chain` lists what would be tried, and
+`width`, `height` and `format` are null because a device's mode is read from the device.
 
 ## Output formats
 
@@ -55,10 +58,12 @@ terminal is opened: `--backend auto` renders to memory and emits a `[WARN]`
 ## Exit codes
 
 0 success · 1 general failure (`FEATURE_UNAVAILABLE`, `INTERNAL_ERROR`) · 2 usage error
-(`INVALID_ARGUMENT`, `MISSING_ARGUMENT`) · 3 `NOT_FOUND` (no DRM device or `/dev/fb0`) ·
-4 `PERMISSION_DENIED` (another client is DRM master, or no `video` group) · 5 `CONFLICT`. Every non-zero exit in machine mode writes one line
+(`INVALID_ARGUMENT`, `MISSING_ARGUMENT`) · 3 `NOT_FOUND` (no DRM device or `/dev/fb0`, or
+a snapshot path in a missing directory) · 4 `PERMISSION_DENIED` (the device refused the
+process: no `video` group, no `CAP_SYS_ADMIN`) · 5 `CONFLICT` (another client holds DRM
+master, such as a running compositor). Every non-zero exit in machine mode writes one line
 `{"error":{code,exit_code,message,hint,timestamp,command}}` to stderr; `hint` is a
-runnable command.
+runnable command. A reader that closes stdout early ends the run quietly with status 0.
 
 ## Agent environment
 

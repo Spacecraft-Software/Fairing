@@ -9,6 +9,7 @@ use serde::Serialize;
 use crate::cli::{MAINTAINER, WEBSITE};
 use crate::error::AppError;
 use crate::output::mode::{Context, Mode};
+use crate::output::write_line;
 use crate::time::now_iso8601;
 
 /// Response metadata.
@@ -77,7 +78,7 @@ impl<T: Serialize> Response<T> {
     /// # Errors
     ///
     /// Returns `FEATURE_UNAVAILABLE` for `yaml`/`csv` (not shipped yet) and an
-    /// internal error if serialisation fails.
+    /// internal error if serialisation or the write fails.
     pub fn emit(&self, context: &Context, fields: &[String]) -> Result<(), AppError> {
         let mut value = serde_json::to_value(self)
             .map_err(|e| AppError::internal(e.to_string(), &self.metadata.command))?;
@@ -89,7 +90,9 @@ impl<T: Serialize> Response<T> {
             data.retain(|key, _| fields.iter().any(|f| f == key));
         }
         match context.mode {
-            Mode::Json | Mode::Human | Mode::Jsonl => println!("{value}"),
+            Mode::Json | Mode::Human | Mode::Jsonl => {
+                write_line(&value.to_string(), &self.metadata.command)?;
+            }
             Mode::Yaml | Mode::Csv => {
                 return Err(AppError::feature_unavailable(
                     format!(

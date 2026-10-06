@@ -62,6 +62,6 @@ pub use layout::{Layout, REFERENCE_SIZE};
 #[doc(inline)]
 pub use palette::Palette;
 #[doc(inline)]
-pub use presenter::{DEFAULT_REACQUIRE_BUDGET, Presenter, PresenterConfig, Stats};
+pub use presenter::{DEFAULT_REACQUIRE_BUDGET, Presenter, PresenterConfig, Reopen, Stats};
 #[doc(inline)]
 pub use scene::Scene;

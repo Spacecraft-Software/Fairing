@@ -25,9 +25,9 @@ The full requirement set lives in the manual: `doc/fairing.texi` (Needs and Requ
 
 | Path | What it is |
 |---|---|
-| `crates/fairing` | The binary: CLI, lifecycle state machine, systemd notify (Category B) |
-| `crates/fairing-render` | Backend trait with DRM, fbdev and text implementations; compositor (B) |
-| `crates/fairing-theme` | Compiled theme format, Nickel contract, `theme check` / `theme compile` (B) |
+| `crates/fairing` | The binary: the CLI (`preview`, `describe`, `schema`); the lifecycle state machine and systemd notify arrive at M2 (Category B) |
+| `crates/fairing-render` | Frame compositor, DRM/KMS and fbdev backends, memory backend for tests; the text backend arrives at M4 (B) |
+| `crates/fairing-theme` | Steelbore palette tokens and §11.6 variant resolution; the compiled theme format, Nickel contract and `theme check` / `theme compile` arrive at M2 (B) |
 | `crates/fairing-askpass` | systemd ask-password agent (**Category A**) |
 | `xtask/` | In-tree task runner: requirements generation, traceability, progress, text-format gate |
 | `doc/` | Texinfo manual, requirement set, Makefile |
@@ -62,9 +62,12 @@ fairing preview --palette steelbore-high-contrast --status "Mounting /home"
 The layout is authored at 1920×1080 and scaled uniformly into any mode, letterboxed in the
 canvas colour. Colours are the §11.1 role tokens of a registered Steelbore theme, chosen by
 `--palette`, then `SPACECRAFT_THEME`, then the family default; `NO_COLOR` selects the mono
-theme. Under `AI_AGENT`, `CI` or `CLAUDECODE` no virtual terminal is opened: the automatic
-chain renders to memory and says so. Hardware tests run only on request:
-`FAIRING_HW_TESTS=1 cargo test --workspace -- --ignored` on a free text console.
+theme. The theme is resolved once at start-up and held (§11.6.2): a splash cannot switch
+palettes atomically mid-boot, and a text console has no light/dark preference to follow.
+Under `AI_AGENT`, `CI` or `CLAUDECODE` no virtual terminal is opened: the automatic chain
+renders to memory and says so. Hardware tests are `#[ignore]`d and run only on request:
+`cargo test --workspace -- --ignored` on a free text console; they fail without a device,
+as they should.
 
 ## Requirements and traceability
 

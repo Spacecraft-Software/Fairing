@@ -103,9 +103,13 @@ will not be green there.
   never opens a VT (`Context::is_agent_environment`): `--backend auto` becomes memory with a
   `[WARN]`, an explicit device backend is exit 2. The theme resolver takes `no_color` from
   the `Context`; `SPACECRAFT_THEME` is read once, in `preview.rs`.
-- Tests that need a DRM device or `/dev/fb0` are `#[ignore]`d and additionally gated on
-  `FAIRING_HW_TESTS=1`; everything else runs against the memory backend and fake sysfs
-  trees in temporary directories.
+- Tests that need a DRM device or `/dev/fb0` are `#[ignore]`d and carry no `Verifies:`
+  marker (`cargo test --workspace -- --ignored` on a free text console; they fail without a
+  device, as they should). Everything else runs against the memory backend, fake sysfs
+  trees in temporary directories, and `MemoryBackend::fail_next` (test-only) for the
+  lost-output path. The presenter re-opens through an injectable `Reopen` function.
+- Prose, comments and documentation use British spelling (colour, serialise); identifiers
+  follow the ecosystem's American spelling (`color`, `Selection::Color`, `NO_COLOR`).
 - `xtask` is internal tooling, not a shipped CLI: it honours `--json` and the error
   envelope but not the full CLI Standard flag set.
 
@@ -114,8 +118,9 @@ will not be green there.
 - Editing generated files (`doc/needs.texi`, `doc/requirements.texi`, `target/trace/*`).
 - `unwrap()` / `expect()` outside `#[cfg(test)]` (clippy `unwrap_used`/`expect_used`
   warn, CI denies warnings). Use `?` with `AppError` or `Failure`.
-- `println!` / `eprintln!` for data or diagnostics outside `src/output/`,
-  `src/diagnostic.rs`, `src/error.rs` and the verb renderers.
+- `println!` anywhere in `crates/fairing`: stdout goes through `output::write_line`, which
+  ends quietly on a closed pipe and reports any other write failure. `eprintln!` outside
+  `src/diagnostic.rs` and `src/error.rs`.
 - Hand-written argument parsing, hand-maintained schema JSON, hand-maintained
   traceability tables.
 - `chrono::Local`, `jiff::Zoned` with a non-UTC zone, or any `%H:%M` without `T…Z`.
@@ -148,6 +153,7 @@ will not be green there.
 | Global flags and verb tree | `crates/fairing/src/cli.rs` |
 | Output-mode cascade, colour precedence | `crates/fairing/src/output/mode.rs` |
 | JSON envelope, `--fields` | `crates/fairing/src/output/envelope.rs` |
+| stdout writer, closed-pipe handling | `crates/fairing/src/output/mod.rs` |
 | Structured errors and exit codes | `crates/fairing/src/error.rs` |
 | Diagnostics and severity floor | `crates/fairing/src/diagnostic.rs` |
 | `schema` / `describe` | `crates/fairing/src/schema.rs`, `describe.rs` |
@@ -165,6 +171,7 @@ will not be green there.
 | §6.5 text-file gate | `xtask/src/eol.rs` |
 | Tailoring register | `COMPLIANCE.md` |
 | Dependency qualification | `DEPENDENCIES.md` |
+| Third-party credits (§15.3) | `CREDITS.md` |
 | Plan and task list | `PLAN.md`, `TODO.md` |
 
 ## Standards compliance

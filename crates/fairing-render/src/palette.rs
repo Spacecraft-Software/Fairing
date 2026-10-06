@@ -54,7 +54,7 @@ impl Palette {
     #[must_use]
     pub fn from_selection(selection: Selection) -> Self {
         match selection {
-            Selection::Colour(theme) => Self::from_theme(theme),
+            Selection::Color(theme) => Self::from_theme(theme),
             Selection::Mono(mono) => Self::from_mono(mono, selection.slug()),
         }
     }

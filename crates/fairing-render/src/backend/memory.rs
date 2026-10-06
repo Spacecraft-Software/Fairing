@@ -16,6 +16,8 @@ pub struct MemoryBackend {
     format: PixelFormat,
     last: Option<Frame>,
     presented: u64,
+    #[cfg(test)]
+    fail_next: Option<RenderErrorKind>,
 }
 
 impl MemoryBackend {
@@ -30,7 +32,15 @@ impl MemoryBackend {
             format,
             last: None,
             presented: 0,
+            #[cfg(test)]
+            fail_next: None,
         })
+    }
+
+    /// Makes the next `present` fail with `kind` (tests of the lost-output path).
+    #[cfg(test)]
+    pub(crate) const fn fail_next(&mut self, kind: RenderErrorKind) {
+        self.fail_next = Some(kind);
     }
 
     /// The most recently presented frame.
@@ -60,6 +70,10 @@ impl Backend for MemoryBackend {
     }
 
     fn present(&mut self, frame: &Frame) -> Result<(), RenderError> {
+        #[cfg(test)]
+        if let Some(kind) = self.fail_next.take() {
+            return Err(RenderError::new(kind, "injected failure").on(BackendKind::Memory));
+        }
         if frame.size() != self.size || frame.format() != self.format {
             return Err(RenderError::new(
                 RenderErrorKind::InvalidGeometry,

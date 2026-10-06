@@ -27,8 +27,11 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
   every failing backend, 30 Hz cadence with a mockable clock, presenter with first-frame
   timing. `fairing preview` verb with `--seconds`, `--backend`, `--snapshot` (binary PPM),
   `--palette`, `--status`, `--size`, `--fps`, `--dry-run`; agent environments never open a
-  VT. `PERMISSION_DENIED` (exit 4) error code. Dependency qualification rows for every new
-  crate; `cargo deny` allows Zlib.
+  VT; the console is restored on every exit path and the snapshot path is opened before any
+  device. `PERMISSION_DENIED` (exit 4) and `CONFLICT` (exit 5) error codes. stdout writes
+  end quietly on a closed pipe. `fairing schema` types numeric parameters with their bounds
+  and omits hidden flags. Dependency qualification rows for every new crate; `cargo deny`
+  allows Zlib; `CREDITS.md` (§15.3) for the bundled font and the console palette.
 
 - M0 repository posture: Cargo workspace with `fairing`, `fairing-render`,
   `fairing-theme`, `fairing-askpass` (all `#![forbid(unsafe_code)]`) and the `xtask` task
