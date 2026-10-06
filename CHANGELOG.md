@@ -14,6 +14,28 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 
 ### Added
 
+- M2 boot integration. Themes: the Nickel contract `contracts/fairing-theme.ncl` and the
+  reference theme `themes/steelbore.ncl`; `fairing theme check|compile|inspect`, which
+  evaluate a theme in memory against the embedded contract and print Nickel's own
+  diagnostic on a violation, refuse literal colours, tokens of another palette,
+  surface-coloured text and a bar below 3:1, and write a versioned artefact of at most
+  4 MiB (postcard metadata and role-indexed images, so one artefact draws every variant
+  of its palette); `preview --theme` for artefacts and sources. Progress: the initrd
+  estimate against the previous boot's duration with an 8 s first-boot curve, stage 2 from
+  `Manager.Progress`, a monotonic eased bar that reaches 100 % only at the greetd handoff,
+  the bar carried across switch-root in `/run/fairing/state`, and measured durations cached
+  in `/var/lib/fairing/boot-duration`. Lifecycle: `fairing splash --stage initrd|system`,
+  one thread and one frame per tick, `READY=1` after the first frame, exit within 100 ms of
+  `SIGTERM`, exit within a second of a failed unit or rescue/emergency mode, always exit 0,
+  journal lines with a syslog priority; a systemd D-Bus client on its own thread (cargo
+  feature `dbus`) with property caching off and every call bounded. NixOS: the module
+  `steelbore.fairing` (`nixosModules.fairing`) with `fairing-initrd.service` and
+  `fairing.service`, the theme compiled at build time, simpledrm and the configured KMS
+  drivers in the initrd, `quiet splash`, a Plymouth assertion, least-privilege hardening, a
+  boot-only start condition, and the handoff by greetd stopping the splash; a module
+  evaluation check and two VM tests in `nix flake check`. CI: the feature matrix, a size
+  gate for the initrd binary, and a `nix` job.
+
 - M1 rendering. `fairing-theme`: the house palette file vendored byte-identically and
   compiled by a build script into role tables for the twenty registered colour themes and
   the mono theme (never a retyped hex), `Role`/`Rgb`/`Theme`/`MonoRoles` types, WCAG
@@ -55,5 +77,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
   COMPLIANCE, DEPENDENCIES, NOTICE, PLAN, TODO.
 - CI: fmt, clippy, test, deny, audit, reuse, eol, texinfo and trace jobs; `flake.nix`
   with a development shell and package.
+
+### Changed
+
+- FRN-SRS-032 (draft) no longer asks for `Conflicts=greetd.service`: with both units in
+  the boot transaction, systemd resolves that conflict by dropping greetd's start. The
+  handoff is now ordering plus a stop from greetd's start, for confirmation at G1.
+- The package derivation builds from an explicit file set and takes `withThemeTool` and
+  `withDbus` switches.
 
 [Unreleased]: https://github.com/Spacecraft-Software/Fairing/commits/main

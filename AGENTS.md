@@ -13,17 +13,19 @@ acts as the systemd password agent, and hands the screen to greetd. Part of Spac
 Software. Assurance **Category B**, with `crates/fairing-askpass` and the initrd
 lifecycle unit raised to **Category A** (Steelbore Standard §19). Licence GPL-3.0-or-later.
 
-Milestone state: M0 (repository and posture) is done and M1 (draws a frame: palette
-tokens, compositor, DRM/KMS and fbdev backends, `fairing preview`) is implemented, pending
-G1 baselining for its requirements to be ticked. Progress and lifecycle (M2), the password
-agent (M3) and accessibility (M4) are not started. Do not advertise verbs, flags or files
-that do not exist yet.
+Milestone state: M0 (repository and posture) and M1 (draws a frame) are merged. M2 (boots
+on Bravais: themes, progress, `fairing splash`, the NixOS module) is implemented; its VM
+tests have not yet run on KVM and every requirement waits on G1 baselining. The password
+agent (M3) and accessibility, the shutdown splash and frame-sequence playback (M4) are not
+started. Do not advertise verbs, flags or files that do not exist yet.
 
 ## Build, test, lint
 
 - Build: `cargo build --workspace --locked`
 - Test: `cargo test --workspace --locked`
-- Lint: `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`
+- Lint: `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`,
+  then the splash builds: `cargo clippy -p fairing --all-targets --no-default-features
+  [--features dbus] --locked -- -D warnings`
 - Format check: `cargo fmt --all --check`
 - Text-file gate: `cargo xtask check-eol`
 - Requirements chapters current: `cargo xtask req-texi --check`
@@ -31,6 +33,9 @@ that do not exist yet.
 - Progress block: `cargo xtask progress` (add `--explain` for denominators)
 - Manual: `make check` (zero makeinfo warnings), `make info html`
 - Dependencies: `cargo deny check` and `cargo audit`
+- NixOS module: `nix flake check` (evaluation everywhere; VM tests need x86_64 and KVM).
+  Offline, `--override-input nixpkgs path:<a nixpkgs checkout> --no-write-lock-file`; new
+  files must be staged (`git add`) before a flake can see them
 - Licensing: `reuse lint`
 
 CI (`.github/workflows/ci.yml`) runs exactly these; a command that is not green locally
@@ -99,6 +104,24 @@ will not be green there.
   the device. The XRGB8888 red/blue swap lives only in `Frame::paint`/`PixelFormat::encode`
   and is pinned by a test. tiny-skia, fontdue, drm and rustix types never appear in a `pub`
   signature; backends are the closed `Surface` enum, never `Box<dyn Backend>`.
+- Cargo features of `crates/fairing`: `theme-tool` (Nickel evaluation for `theme
+  check|compile`) and `dbus` (the zbus client of `--stage system`), both default. The
+  initrd binary is built with neither and must stay within 2.5 MiB (CI `size` job); code
+  that only one feature needs is `#[cfg]`-gated, and both feature-off builds are linted
+  and tested in CI.
+- `fairing splash` never fails a boot: every path after argument checking exits 0, sends
+  `READY=1` (after the first frame, or at once when it steps aside) and writes the reason
+  in its report. The loop is single-threaded and polls non-blocking inputs once per frame;
+  the D-Bus client is the only other thread and talks to the loop over an mpsc channel.
+  `NOTIFY_SOCKET` is read in `splash/mod.rs`, `/proc/cmdline` once per run.
+- The splash reaches greetd by ordering, not conflict: `fairing.service` is
+  `Before=greetd.service` and greetd's `ExecStartPre` stops it. Never add
+  `Conflicts=greetd.service` (systemd drops greetd's start from the boot transaction).
+  `fairing.service` only starts while `/run/fairing` exists (the initrd unit leaves it,
+  the stage-2 unit removes it), so `nixos-rebuild switch` never restarts the splash.
+- zbus connects to `/run/dbus/system_bus_socket` by name, never through
+  `DBUS_SYSTEM_BUS_ADDRESS`, and refuses systemd's private socket: zbus 5.19 panics on
+  PID 1's replies there and release builds abort on panic.
 - `fairing preview` under `AI_AGENT`, `CI`, `CLAUDECODE`, `CURSOR_AGENT` or `GEMINI_CLI`
   never opens a VT (`Context::is_agent_environment`): `--backend auto` becomes memory with a
   `[WARN]`, an explicit device backend is exit 2. The theme resolver takes `no_color` from
@@ -158,6 +181,11 @@ will not be green there.
 | Diagnostics and severity floor | `crates/fairing/src/diagnostic.rs` |
 | `schema` / `describe` | `crates/fairing/src/schema.rs`, `describe.rs` |
 | `preview` | `crates/fairing/src/preview.rs` |
+| `splash`: loop, progress model, state files, notify, D-Bus | `crates/fairing/src/splash/` |
+| `theme` verbs, theme loading for preview and splash | `crates/fairing/src/{theme,theme_file,selection}.rs` |
+| Theme contract, reference theme | `contracts/fairing-theme.ncl`, `themes/steelbore.ncl` |
+| Artefact format, compiler, Nickel evaluation, PNG | `crates/fairing-theme/src/{artefact,compile,nickel,png_asset,tokens}.rs` |
+| NixOS module, theme build, module and VM tests | `packaging/nixos/` |
 | Palette tokens, theme resolution (§11.6) | `crates/fairing-theme/src/{theme,resolve}.rs`, generated by `build.rs` |
 | Frame, byte order, PPM snapshot | `crates/fairing-render/src/frame.rs` |
 | Layout and scaling | `crates/fairing-render/src/{layout,geometry}.rs` |

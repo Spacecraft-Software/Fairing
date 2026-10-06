@@ -60,7 +60,9 @@ Maintained by Mohamed Hammad
 
 @menu
 * Introduction::        What Fairing is and how this manual is organised.
-* Invoking Fairing::    The command line: preview, describe, schema, global flags.
+* Invoking Fairing::    The command line: splash, theme, preview, describe, schema.
+* Themes::              Writing, checking and compiling a theme.
+* Running under systemd:: The units, the NixOS module and the greetd handoff.
 * Needs::               Why the software exists and the constraints it serves.
 * Requirements::        What the software shall do, one verifiable statement at a time.
 * Index::               Concept and identifier index.
@@ -127,16 +129,97 @@ single JSON document (@code{--json}) when piped, under an agent variable, or
 when asked.  The live capability manifest is @command{fairing describe --json};
 @command{fairing schema [@var{command}]} returns JSON Schema Draft 2020-12 for
 the whole tool or one verb.  This chapter describes the verbs that exist in
-version @value{VERSION}; the splash, shutdown and theme verbs arrive with
-later milestones and are documented when they do.
+version @value{VERSION}; the shutdown splash and the password prompt arrive
+with later milestones and are documented when they do.
 
 @menu
+* splash::              The boot splash the systemd units run.
+* theme::               Check, compile and inspect themes.
 * preview::             Draw the splash with a simulated bar.
 * describe and schema:: Self-description for people and agents.
 * Global flags::        Output mode, colour, severity floor.
 * Environment::         Variables that change behaviour.
 * Exit codes::          What a non-zero status means.
 @end menu
+
+@node splash
+@section @command{fairing splash}
+
+@cindex splash
+@example
+fairing splash --stage initrd|system [--theme @var{file.fairing}] [--palette @var{slug}]
+@end example
+
+The boot splash itself.  The systemd units run it, once per boot stage
+(@pxref{Running under systemd}); a person runs it only to try a theme, and
+@command{fairing preview} is the better tool for that.
+
+@table @code
+@item --stage initrd
+From early boot until switch-root.  The bar follows elapsed time against the
+initrd's duration on the previous boot, up to 30 percent; on a first boot it
+follows a fixed curve that reaches 30 percent at 8 seconds.  On
+@code{SIGTERM} it writes the bar value to @file{/run/fairing/state} for the
+next stage and exits.
+@item --stage system
+From switch-root until greetd starts.  The bar starts from the value the
+initrd left and follows systemd's own job-queue progress
+(@code{org.freedesktop.systemd1.Manager.Progress}) from 30 to 99 percent; it
+reaches 100 percent only at the handoff.  Under the bar it shows the
+description of the newest running systemd job.  On @code{SIGTERM} it shows the
+full bar, releases the display within 100 ms, writes the measured stage
+durations to @file{/var/lib/fairing/boot-duration} and exits.
+@item --theme
+A compiled theme (@pxref{Themes}).  Without it the built-in theme is drawn.
+@item --palette
+A registered palette slug, as for @command{fairing preview}.
+@end table
+
+@cindex fail-open
+The bar never moves backwards: when a new reading is lower it holds, and a
+higher one is approached smoothly.  A splash never fails the boot.  Every way
+out exits with status 0 and the reason in the report: @code{handoff},
+@code{switch-root}, @code{shutdown}, @code{failed-unit} (a systemd unit
+failed), @code{maintenance} (rescue or emergency mode started),
+@code{no-backend}, @code{render-failed} or @code{theme-unreadable}.  When it
+draws nothing it still tells systemd it is ready, so the unit never delays
+the boot.
+
+@cindex journal
+Under systemd, diagnostics go to the journal as one line each, with a syslog
+priority: a missing display and a missing D-Bus connection are
+@code{notice}, other trouble is @code{warning}.  The report goes to the
+journal too, as one JSON document.
+
+@node theme
+@section @command{fairing theme}
+
+@cindex theme check
+@cindex theme compile
+@cindex theme inspect
+@example
+fairing theme check @var{theme.ncl}
+fairing theme compile @var{theme.ncl} [--output @var{file.fairing}]
+fairing theme inspect @var{file.fairing}
+@end example
+
+@table @code
+@item check
+Evaluates the theme against the contract and applies every rule of
+@code{compile}, writing nothing.  A violation exits 2 and carries Nickel's own
+diagnostic, as plain text, in the error's @code{detail}.
+@item compile
+Writes the artefact the splash loads, by default beside the source with
+@file{.fairing} in place of @file{.ncl}.  The report gives the size and the
+median time this machine takes to load the artefact.  @code{--dry-run}
+compiles and reports without writing.
+@item inspect
+Reads an artefact and shows its layouts and images.
+@end table
+
+@code{check} and @code{compile} need the Nickel evaluator, which only the
+full build carries.  The builds the NixOS module runs at boot do not, and
+answer @code{FEATURE_UNAVAILABLE}; they load compiled themes only.
 
 @node preview
 @section @command{fairing preview}
@@ -147,6 +230,7 @@ later milestones and are documented when they do.
 fairing preview [--seconds @var{n}] [--backend auto|drm|fbdev|memory]
                 [--snapshot @var{file.ppm}] [--palette @var{slug}]
                 [--status @var{text}] [--size @var{W}x@var{H}] [--fps @var{hz}]
+                [--theme @var{file}]
 @end example
 
 Draws the splash with a bar that advances from 0 to 100 percent over
@@ -183,6 +267,9 @@ The frame size for the memory backend (default @code{1920x1080}), each side
 backend always draws at the connector's preferred mode.
 @item --fps
 The redraw rate, 1 to 240 frames per second (default 30).
+@item --theme
+A compiled theme, or a Nickel source that is compiled in memory first (full
+build only).  Without it the built-in theme is drawn.
 @item --dry-run
 Reports which backends would be tried, in order, with which palette, without
 touching a device.  A device's mode is not guessed: @code{width},
@@ -287,7 +374,18 @@ Colour precedence as the CLI Standard defines it.  @env{NO_COLOR} also selects
 the mono theme for the splash itself.
 @item SPACECRAFT_THEME
 A registered theme slug for the splash palette (Steelbore Standard §11.6).
+@item NOTIFY_SOCKET
+Set by systemd for a @code{Type=notify} unit: @command{fairing splash} sends
+@code{READY=1} there after its first frame and @code{STOPPING=1} as it exits.
+@item JOURNAL_STREAM
+Set by systemd when standard error is the journal: diagnostics are then
+written as journal lines with a syslog priority.
 @end table
+
+@cindex kernel command line
+The splash also reads one kernel parameter, @code{fairing.theme=@var{slug}},
+which chooses the palette below @code{--palette} and above
+@env{SPACECRAFT_THEME}.
 
 @node Exit codes
 @section Exit codes
@@ -313,7 +411,149 @@ run on a text console.
 
 Every non-zero exit in machine mode writes one line
 @code{@{"error":@{code,exit_code,message,hint,timestamp,command@}@}} to
-standard error; @code{hint} is a runnable command.
+standard error; @code{hint} is a runnable command.  An error may also carry
+@code{detail}, text another tool produced verbatim, such as Nickel's
+diagnostic for a theme that breaks the contract.
+
+@command{fairing splash} is the exception: it exits 0 in every case it can
+reach, so a splash can never be the reason a boot fails.  Its arguments are
+still checked, and a usage error is still exit 2.
+
+@node Themes
+@chapter Themes
+
+@cindex theme
+@cindex Nickel
+@cindex contract
+A theme is a Nickel file that satisfies the contract
+@file{contracts/fairing-theme.ncl}.  Fairing applies the contract itself, so
+the theme need not import it; importing it as well lets an editor check the
+file as it is written.  The reference theme, @file{themes/steelbore.ncl}, is
+the built-in layout written out in full and is the place to start.
+
+@cindex reference frame
+All geometry is in the 1920x1080 reference frame and is scaled uniformly to
+the active mode at boot.  A theme declares:
+
+@table @code
+@item name
+Shown in reports.
+@item palette
+The registered Steelbore palette the theme is drawn in, such as
+@code{steelbore} or @code{tokyonight}.  It is the theme's default: the palette
+can still be chosen at boot (@pxref{Palette selection}).
+@item layouts.boot
+The logo box, the bar (box, corner radius, outline, and the colours of fill,
+track and border), the percentage (gap and size), the status line (whether it
+is shown, its top and size), the prompt region, and optionally a frame
+sequence.
+@item layouts.shutdown
+The logo, a status line and its message, and optionally a frame sequence.
+@end table
+
+@cindex colour
+@cindex role
+Colours are never written as values.  A colour is a Steelbore role such as
+@code{'accent} or @code{'foreground}, or the name of a token of the theme's
+own palette, @code{@{ token = "Plasma Orange" @}}.  @command{fairing theme
+compile} refuses a literal colour anywhere in the theme, a token of any other
+palette, text drawn in a surface colour, and a bar whose fill does not reach
+3:1 contrast with its track.  Because the compiled theme stores roles, not
+colours, the same artefact draws the high-contrast and mono variants of its
+palette without any extra file.
+
+@cindex logo
+@cindex frame sequence
+A logo is @code{'builtin}, Fairing's vector mark, or a PNG file named
+relative to the theme.  Every opaque pixel of a PNG must be a colour of the
+declared palette, unless the logo sets @code{tint}, in which case only the
+image's alpha channel is used and drawn in that colour.  A frame sequence is
+a list of PNG frames of one size, played at up to 30 frames per second, under
+the same rule.  Sequences are compiled and stored now; playing them arrives
+with the reduced-motion work of a later milestone.
+
+@cindex artefact
+The compiled artefact is one file of at most 4 MiB: an eight-byte magic,
+a format version, the layouts in postcard encoding, and the images as palette
+role indices or alpha masks.  It loads in well under 5 ms.  A version the
+running splash does not know is refused, and the splash then steps aside
+rather than draw a wrong theme.
+
+@node Palette selection
+@section Palette selection
+
+@cindex palette, selection
+@cindex Steelbore Standard §11.6
+The splash chooses its palette in two stages.  The base palette is the first
+registered slug among: @code{--palette} (the NixOS module's @code{palette}
+option), the kernel parameter @code{fairing.theme=}, @env{SPACECRAFT_THEME},
+the theme's declared @code{palette}, and the family default
+@code{steelbore}.  An unregistered slug is skipped, never fatal.  Then,
+unless a @code{-high-contrast} or mono slug was named outright, @env{NO_COLOR}
+selects the mono variant.  The accessible-mode overlay to
+@code{-high-contrast} arrives with the accessibility milestone.
+
+@node Running under systemd
+@chapter Running under systemd
+
+@cindex systemd units
+@cindex NixOS module
+On Steelbore OS Bravais the splash is enabled with one option of the NixOS
+module @code{steelbore.fairing}, exported by the repository's flake as
+@code{nixosModules.fairing}:
+
+@example
+steelbore.fairing = @{
+  enable = true;
+  kmsModules = [ "i915" ];          # the machine's KMS driver
+  # theme = ./my-theme/theme.ncl;   # default: the reference theme
+  # palette = "steelbore-high-contrast";
+@};
+@end example
+
+Enabling it compiles the theme at build time, copies the artefact and a small
+build of Fairing into the systemd initrd, adds @code{simpledrm} and the
+listed KMS drivers to the initrd, adds @code{quiet} and @code{splash} to the
+kernel command line, and installs two units.  The module requires the systemd
+initrd and greetd, and refuses a configuration that also enables Plymouth.
+
+@cindex fairing-initrd.service
+@table @code
+@item fairing-initrd.service
+Runs @code{fairing splash --stage initrd} in the initrd, after the kernel
+modules are loaded and udev has been triggered.  It has no default
+dependencies and is only wanted by @code{initrd.target}.  It is stopped
+before switch-root, and leaves @file{/run/fairing} behind for the next stage.
+@item fairing.service
+Runs @code{fairing splash --stage system} after switch-root, early in
+@code{sysinit.target}, and only when @file{/run/fairing} exists: a restart of
+the boot targets on a running system, as @command{nixos-rebuild switch} does,
+never brings the splash back over a session.  It runs with least privilege:
+only the capabilities to hold the display and the console, the file system
+read-only except its own two directories, and no network.
+@end table
+
+@cindex greetd
+@cindex handoff
+The handoff to greetd is ordering plus one stop.  @code{fairing.service} is
+ordered before @code{greetd.service}, and greetd's start first stops
+@code{fairing.service} and waits for it, so the splash has drawn the full bar
+and released the display before greetd opens the console.  The two units do
+not conflict: in one boot transaction a conflict makes systemd drop greetd's
+start job, and the machine would come up without a login screen.
+
+@cindex fail-open
+Neither unit is required by any target; a splash that fails, hangs or is
+absent cannot stop a boot.  A password question (for example an encrypted
+volume) stops the splash so the console prompt is visible; the in-splash
+prompt replaces this with a later milestone.  The splash's own waits are all
+bounded: five seconds to start, one second to stop.
+
+@cindex D-Bus
+In the initrd there is no bus, and that build of Fairing carries no D-Bus
+client.  After switch-root the splash connects to the system bus; if no
+connection is made within 2 seconds, it says so once in the journal and
+drives the bar from the previous boot's measured duration instead.
 
 @include needs.texi
 
