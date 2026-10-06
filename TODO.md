@@ -28,6 +28,6 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-015 flake.nix and packaging/default.nix
 - [ ] T-016 flake.lock generated and committed (needs github.com access; maintainer)
 - [x] T-017 PRD doc: open questions Q-1 to Q-7 recorded as answered 2026-10-06
-- [ ] T-018 Draft pull request open against main with CI green
+- [x] T-018 Draft pull request open against main with CI green
 - [ ] T-019 PROJECTS.md row added in the Projects repository (maintainer)
 - [ ] T-020 G1: requirements baselined by the maintainer
