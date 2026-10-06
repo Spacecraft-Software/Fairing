@@ -28,7 +28,7 @@ use crate::splash::events::{Event, Snapshot};
 use crate::splash::notify::Notifier;
 use crate::splash::progress::{Bar, Inputs, Stage, target};
 use crate::splash::state::{
-    DURATIONS_FILE, Durations, HANDOFF_FILE, Handoff, read_durations, read_handoff,
+    DURATIONS_FILE, Durations, HANDOFF_FILE, HANDOFF_MARKER, Handoff, read_durations, read_handoff,
     write_durations, write_handoff,
 };
 
@@ -79,8 +79,13 @@ pub struct Plan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Reason {
-    /// SIGTERM in stage 2: greetd's `Conflicts=` stopped us (FRN-SRS-017).
+    /// SIGTERM in stage 2 after greetd's start left the handoff marker: greetd
+    /// is taking the screen (FRN-SRS-017, FRN-SRS-032).
     Handoff,
+    /// SIGTERM in stage 2 without the handoff marker and with no shutdown in
+    /// view, such as a password prompt taking the console: no 100 % frame and
+    /// no measurement.
+    Stopped,
     /// SIGTERM in the initrd: systemd is switching root.
     SwitchRoot,
     /// SIGTERM while the system was stopping.
@@ -103,6 +108,7 @@ impl Reason {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Handoff => "handoff",
+            Self::Stopped => "stopped",
             Self::SwitchRoot => "switch-root",
             Self::Shutdown => "shutdown",
             Self::FailedUnit => "failed-unit",
@@ -182,11 +188,14 @@ pub fn run_with(
             .filter(|handoff| handoff.initrd_end <= started),
         Stage::Initrd => None,
     };
+    // Stage 2 counts from its own start, not from the handoff's initrd end: an
+    // initrd splash stopped by a passphrase prompt left long before switch-root,
+    // and the typing time is no part of stage 2.
     let timeline = Timeline {
         started,
         stage_origin: match plan.stage {
             Stage::Initrd => Duration::ZERO,
-            Stage::System => carried.map_or(started, |handoff| handoff.initrd_end),
+            Stage::System => started,
         },
         carried,
     };
@@ -227,8 +236,8 @@ pub fn run_with(
 struct Timeline {
     /// When this process first read the clock.
     started: Duration,
-    /// Where this stage's elapsed time counts from: zero in the initrd, the
-    /// initrd's end in stage 2 when the handoff says so.
+    /// Where this stage's elapsed time counts from: zero (boot) in the initrd,
+    /// this process's start in stage 2.
     stage_origin: Duration,
     /// The initrd's handoff, read once at start.
     carried: Option<Handoff>,
@@ -272,6 +281,9 @@ fn start(
                     hz: SPLASH_HZ,
                     origin: env.origin,
                     choice: plan.choice,
+                    // One re-open attempt per frame, never a wait inside one:
+                    // a lost output must not hold up SIGTERM (FRN-SRS-033).
+                    reacquire_budget: Duration::ZERO,
                     ..PresenterConfig::default()
                 },
             )
@@ -319,6 +331,11 @@ fn finish(
         session.durations,
         env.clock.now(),
     );
+    // A run that never presented a frame still tells systemd it started, or a
+    // `Type=notify` unit that exits 0 would be failed with result 'protocol'.
+    if !session.ready_sent {
+        notify(env, Notifier::ready, "READY=1");
+    }
     notify(env, Notifier::stopping, "STOPPING=1");
     outcome
 }
@@ -332,6 +349,11 @@ struct Session {
     connected: bool,
     dbus_notice_sent: bool,
     lost_output_reported: bool,
+    ready_sent: bool,
+    /// Failed units at the first reading. Units that failed before the splash
+    /// could see them (the initrd's, or any before the bus came up) are not a
+    /// unit entering the failed state now (FRN-SRS-034).
+    failed_baseline: Option<u32>,
 }
 
 impl Session {
@@ -344,6 +366,8 @@ impl Session {
             connected: false,
             dbus_notice_sent: false,
             lost_output_reported: false,
+            ready_sent: false,
+            failed_baseline: None,
         }
     }
 
@@ -368,6 +392,11 @@ impl Session {
         let exit_after = plan.exit_after.is_some_and(|after| running >= after);
         let terminating = env.terminate.load(Ordering::SeqCst) || exit_after;
         let stopping = self.latest.as_ref().is_some_and(Snapshot::is_stopping);
+        // Only greetd's start leaves the marker; `--exit-after` stands in for it.
+        let handed_over = plan.stage == Stage::System
+            && terminating
+            && !stopping
+            && (exit_after || plan.paths.runtime.join(HANDOFF_MARKER).exists());
         let inputs = Inputs {
             elapsed: now.saturating_sub(timeline.stage_origin),
             cached: self.durations.and_then(|d| match plan.stage {
@@ -379,7 +408,7 @@ impl Session {
                 .as_ref()
                 .filter(|_| self.connected)
                 .map(|s| s.progress),
-            handoff: terminating && plan.stage == Stage::System && !stopping,
+            handoff: handed_over,
         };
         let shown = self
             .bar
@@ -398,6 +427,7 @@ impl Session {
         {
             outcome.first_frame_ms = Some(first.as_secs_f64() * 1000.0);
             notify(env, Notifier::ready, "READY=1");
+            self.ready_sent = true;
             (env.emit)(Diagnostic::new(
                 Severity::Info,
                 "FIRST_FRAME",
@@ -408,11 +438,12 @@ impl Session {
                 env.invocation,
             ));
         }
-        terminating.then_some(match (exit_after, plan.stage, stopping) {
-            (true, _, _) => Reason::ExitAfter,
-            (false, Stage::Initrd, _) => Reason::SwitchRoot,
-            (false, Stage::System, true) => Reason::Shutdown,
-            (false, Stage::System, false) => Reason::Handoff,
+        terminating.then_some(match (exit_after, plan.stage, stopping, handed_over) {
+            (true, _, _, _) => Reason::ExitAfter,
+            (false, Stage::Initrd, _, _) => Reason::SwitchRoot,
+            (false, Stage::System, true, _) => Reason::Shutdown,
+            (false, Stage::System, false, true) => Reason::Handoff,
+            (false, Stage::System, false, false) => Reason::Stopped,
         })
     }
 
@@ -500,6 +531,9 @@ impl Session {
                 Event::Connected => self.connected = true,
                 Event::Snapshot(snapshot) => {
                     self.connected = true;
+                    let baseline = self.failed_baseline.unwrap_or(snapshot.failed_units);
+                    // A `reset-failed` lowers the count; a failure after it still counts.
+                    self.failed_baseline = Some(baseline.min(snapshot.failed_units));
                     self.latest = Some(snapshot);
                 }
                 Event::Lost(why) => {
@@ -516,13 +550,14 @@ impl Session {
             }
         }
         let latest = self.latest.as_ref()?;
-        if latest.failed_units > 0 {
+        let baseline = self.failed_baseline.unwrap_or(0);
+        if latest.failed_units > baseline {
             (env.emit)(Diagnostic::new(
                 Severity::Warn,
                 "UNIT_FAILED",
                 format!(
-                    "{} unit(s) failed; leaving the screen to the console",
-                    latest.failed_units
+                    "{} unit(s) failed during the boot; leaving the screen to the console",
+                    latest.failed_units - baseline
                 ),
                 env.invocation,
             ));
@@ -705,6 +740,13 @@ mod tests {
             run_with(plan, &env, opener)
         }
 
+        /// What greetd's start does before it stops the splash.
+        fn mark_handoff(&self) {
+            let runtime = self.paths().runtime;
+            std::fs::create_dir_all(&runtime).unwrap_or_else(|e| panic!("{e}"));
+            std::fs::write(runtime.join(HANDOFF_MARKER), b"").unwrap_or_else(|e| panic!("{e}"));
+        }
+
         fn notifications(&self) -> Vec<String> {
             let mut buf = [0_u8; 64];
             let mut out = Vec::new();
@@ -733,6 +775,7 @@ mod tests {
         // Verifies: FRN-SRS-015, FRN-SRS-017, FRN-SRS-036
         let harness = Harness::new();
         let plan = harness.plan(Stage::System, None);
+        harness.mark_handoff();
         let outcome = harness.run(
             &plan,
             true,
@@ -764,9 +807,76 @@ mod tests {
         let outcome = harness.run(&plan, false, Vec::new(), memory);
         assert_eq!(outcome.carried_bar, Some(0.27));
         let first = outcome.first_bar.unwrap_or_default();
-        assert!(first >= 0.27, "first frame showed {first}");
+        // The carried value is rounded up to the file's resolution, never down.
+        assert!(
+            (0.27..0.2702).contains(&first),
+            "first frame showed {first}"
+        );
         let cached = read_durations(&plan.paths.state.join(DURATIONS_FILE));
         assert_eq!(cached.initrd, Some(Duration::from_secs(4)));
+    }
+
+    #[test]
+    fn stage_two_counts_from_its_own_start() {
+        // An initrd splash stopped by a passphrase prompt at 1 s; stage 2
+        // starts at 5 s. The typing time is no part of stage 2.
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::System, Some(Duration::from_millis(150)));
+        write_handoff(
+            &plan.paths.runtime.join(HANDOFF_FILE),
+            &Handoff {
+                bar: 0.1,
+                initrd_end: Duration::from_secs(1),
+            },
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let outcome = harness.run(&plan, false, Vec::new(), memory);
+        assert_eq!(outcome.carried_bar, Some(0.1));
+        let cached = read_durations(&plan.paths.state.join(DURATIONS_FILE));
+        let stage2 = cached.stage2.unwrap_or(Duration::MAX);
+        assert!(
+            stage2 < Duration::from_secs(1),
+            "stage 2 measured {stage2:?}"
+        );
+        assert_eq!(cached.initrd, Some(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn a_sigterm_without_the_handoff_marker_is_a_plain_stop() {
+        // Verifies: FRN-SRS-017
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::System, None);
+        let outcome = harness.run(
+            &plan,
+            true,
+            vec![snapshot(0.4, 0, "starting", None)],
+            memory,
+        );
+        assert_eq!(outcome.reason, Reason::Stopped);
+        assert!(outcome.bar < 1.0, "{}", outcome.bar);
+        assert!(
+            !plan.paths.state.join(DURATIONS_FILE).exists(),
+            "a stop is not a measurement"
+        );
+    }
+
+    #[test]
+    fn a_run_that_draws_nothing_still_reports_ready() {
+        // Verifies: FRN-SRS-036
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::System, None);
+        let outcome = harness.run(
+            &plan,
+            false,
+            vec![
+                snapshot(0.4, 0, "starting", None),
+                snapshot(0.5, 1, "degraded", None),
+            ],
+            memory,
+        );
+        assert_eq!(outcome.reason, Reason::FailedUnit);
+        assert_eq!(outcome.frames, 0);
+        assert_eq!(harness.notifications(), ["READY=1", "STOPPING=1"]);
     }
 
     #[test]
@@ -807,7 +917,10 @@ mod tests {
         let failed = harness.run(
             &plan,
             false,
-            vec![snapshot(0.5, 1, "degraded", None)],
+            vec![
+                snapshot(0.4, 0, "starting", None),
+                snapshot(0.5, 1, "degraded", None),
+            ],
             memory,
         );
         assert_eq!(failed.reason, Reason::FailedUnit);
@@ -823,6 +936,20 @@ mod tests {
             !plan.paths.state.join(DURATIONS_FILE).exists(),
             "a failed boot is not a measurement"
         );
+    }
+
+    #[test]
+    fn units_that_failed_before_the_first_reading_do_not_end_the_splash() {
+        // Verifies: FRN-SRS-034
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::System, Some(Duration::from_millis(100)));
+        let outcome = harness.run(
+            &plan,
+            false,
+            vec![snapshot(0.3, 2, "degraded", None)],
+            memory,
+        );
+        assert_eq!(outcome.reason, Reason::ExitAfter);
     }
 
     #[test]

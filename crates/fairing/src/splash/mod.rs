@@ -126,6 +126,7 @@ pub fn run(
             kernel_cmdline: cmdline.as_deref(),
             declared_default: Some(theme.meta().palette.as_str()),
             verb: "splash",
+            strict: false,
         },
         context,
         invocation,

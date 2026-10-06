@@ -31,6 +31,14 @@ pub const STATE_DIR: &str = "/var/lib/fairing";
 pub const SYSROOT_STATE_DIR: &str = "/sysroot/var/lib/fairing";
 /// File name of the switch-root handoff, under [`RUNTIME_DIR`].
 pub const HANDOFF_FILE: &str = "state";
+/// File name of the greetd handoff marker, under [`RUNTIME_DIR`].
+///
+/// greetd's start writes it just before it stops the splash (the NixOS
+/// module's `ExecStartPre`), so the SIGTERM that follows is known to be the
+/// handoff (FRN-SRS-017). Any other SIGTERM in stage 2 (a password prompt, a
+/// stop with no shutdown in view) is not, and neither fills the bar nor counts
+/// as a measurement.
+pub const HANDOFF_MARKER: &str = "handoff";
 /// File name of the duration cache, under [`STATE_DIR`].
 pub const DURATIONS_FILE: &str = "boot-duration";
 
@@ -164,13 +172,16 @@ fn milliseconds(text: &str) -> Option<Duration> {
     clippy::cast_sign_loss,
     reason = "the value is clamped to 0.0..=10000.0 and rounded before the cast"
 )]
+/// Rounded up, never to nearest: the carried value must not be below the
+/// value the initrd last drew, or the bar would step back across switch-root
+/// (FRN-SRS-013).
 fn fraction_to_steps(fraction: f32) -> u32 {
     let clamped = if fraction.is_finite() {
         fraction.clamp(0.0, 1.0)
     } else {
         0.0
     };
-    (clamped * 10_000.0).round().min(10_000.0) as u32
+    (clamped * 10_000.0).ceil().min(10_000.0) as u32
 }
 
 #[expect(
@@ -193,11 +204,12 @@ fn write_atomically(path: &Path, text: &str) -> io::Result<()> {
         fs::create_dir_all(parent)?;
     }
     let part = part_path(path);
+    // No fsync: this runs on the way out, after the display is released and
+    // while greetd waits for the process to exit, and an fsync has no bound
+    // (FRN-SRS-037). The rename keeps a reader from seeing half a file; a crash
+    // can at worst lose the file, which reads as "no previous boot".
     let written = File::create(&part)
-        .and_then(|mut file| {
-            file.write_all(text.as_bytes())?;
-            file.sync_all()
-        })
+        .and_then(|mut file| file.write_all(text.as_bytes()))
         .and_then(|()| fs::rename(&part, path));
     if written.is_err() {
         let _ = fs::remove_file(&part);
@@ -224,7 +236,11 @@ mod tests {
         };
         write_handoff(&path, &handoff).unwrap_or_else(|e| panic!("{e}"));
         let read = read_handoff(&path).unwrap_or_else(|| panic!("handoff missing"));
-        assert!((read.bar - 0.2734).abs() < 1e-4, "{}", read.bar);
+        assert!(
+            read.bar >= 0.2734 && read.bar - 0.2734 < 2e-4,
+            "{}",
+            read.bar
+        );
         assert_eq!(read.initrd_end, Duration::from_millis(4210));
         assert!(!part_path(&path).exists());
         // A machine up for longer than any plausible boot still hands over.
@@ -296,6 +312,13 @@ mod tests {
         assert_eq!(fraction_to_steps(7.0), 10_000);
         assert_eq!(fraction_to_steps(f32::NAN), 0);
         assert_eq!(fraction_to_steps(-1.0), 0);
+        // Never below the drawn value.
+        for drawn in [0.273_44_f32, 0.1, 0.299_99, 0.000_01] {
+            assert!(
+                steps_to_fraction(fraction_to_steps(drawn)) >= drawn,
+                "{drawn}"
+            );
+        }
     }
 
     #[test]

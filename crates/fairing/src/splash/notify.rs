@@ -73,6 +73,8 @@ impl Notifier {
             return Ok(());
         };
         let socket = UnixDatagram::unbound()?;
+        // A full queue is an error to report, never a wait (FRN-SRS-037).
+        socket.set_nonblocking(true)?;
         let sent = socket.send_to_addr(message.as_bytes(), address)?;
         if sent == message.len() {
             Ok(())
