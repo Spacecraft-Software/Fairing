@@ -1,0 +1,33 @@
+<!--
+SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+
+# Changelog
+
+All notable changes to **Fairing** are documented in this file.
+
+Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) ·
+Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates: ISO 8601.
+
+## [Unreleased]
+
+### Added
+
+- M0 repository posture: Cargo workspace with `fairing`, `fairing-render`,
+  `fairing-theme`, `fairing-askpass` (all `#![forbid(unsafe_code)]`) and the `xtask` task
+  runner; REUSE-compliant licensing (GPL-3.0-or-later software, CC-BY-SA-4.0 manual);
+  `.gitattributes`, `.editorconfig`, pinned toolchain, `deny.toml`.
+- Requirement set `doc/requirements.toml` (8 needs, 68 requirements, status draft) and
+  the Texinfo manual `doc/fairing.texi` with generated Needs and Requirements chapters.
+- `cargo xtask`: `req-texi` (generate/check chapters), `trace` (§21.3 traceability matrix
+  and gate), `progress` (§17.1 block), `check-eol` (§6.5 gate).
+- CLI skeleton (R-014): global flags, output-mode cascade with presence-based agent
+  detection, `metadata`+`data` envelope, structured errors and diagnostics,
+  `fairing describe`, `fairing schema`, `--version` with attribution.
+- Posture and context files: README, AGENTS, CLAUDE, SKILL, CONTRIBUTING, SECURITY,
+  COMPLIANCE, DEPENDENCIES, NOTICE, PLAN, TODO.
+- CI: fmt, clippy, test, deny, audit, reuse, eol, texinfo and trace jobs; `flake.nix`
+  with a development shell and package.
+
+[Unreleased]: https://github.com/Spacecraft-Software/Fairing/commits/main
