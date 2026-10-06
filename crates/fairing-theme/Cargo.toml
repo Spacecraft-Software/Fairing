@@ -3,7 +3,7 @@
 
 [package]
 name = "fairing-theme"
-description = "Fairing compiled theme format, Nickel contract and theme check/compile"
+description = "Fairing theme: Steelbore palette tokens, variant resolution and (from M2) the compiled theme format"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,8 +12,16 @@ authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
 publish.workspace = true
+build = "build.rs"
 
 [lints]
 workspace = true
 
 [dependencies]
+
+[build-dependencies]
+# Parses the vendored house palette at build time; nothing of it reaches the binary.
+toml = { workspace = true }
+
+[dev-dependencies]
+toml = { workspace = true }

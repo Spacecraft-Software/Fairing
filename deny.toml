@@ -25,6 +25,7 @@ allow = [
   "Unicode-3.0",
   "Unlicense",
   "MPL-2.0",
+  "Zlib",
 ]
 private = { ignore = true }
 
