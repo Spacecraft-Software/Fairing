@@ -98,6 +98,8 @@ let
       && lib.elem "greetd.service" (directive handoffText "Before")
       && lib.elem "fairing.service" (directive handoffText "After")
       && hasLine handoffText "Type=oneshot";
+    "FRN-SRS-032: the handoff waits until logins are allowed, as greetd does" =
+      lib.elem "systemd-user-sessions.service" (directive handoffText "After");
     "FRN-SRS-017: the handoff is marked before the splash is stopped" =
       let
         exec = lib.filter (lib.hasPrefix "ExecStart=") (lib.splitString "\n" handoffText);

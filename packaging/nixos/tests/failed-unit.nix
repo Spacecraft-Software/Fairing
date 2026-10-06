@@ -4,8 +4,9 @@
 # NixOS VM test: a unit fails during stage 2 and the splash leaves the screen
 # to the console within a second (FRN-SRS-034), exit 0, while the boot goes
 # on. greetd is installed but not started, so nothing but the failure can
-# end the splash. Like boot.nix it carries no marker until it has run green;
-# `tcg = true` runs it without KVM.
+# end the splash. `tcg = true` runs it without KVM.
+#
+# Verifies: FRN-SRS-034
 {
   pkgs,
   module,
@@ -37,12 +38,19 @@ pkgs.testers.runNixOSTest {
       # handoff, and the failure would never be its reason to go.
       systemd.services.greetd.enable = lib.mkForce false;
 
+      # It fails only once the splash can see it fail: after the splash is up
+      # and the bus is running, with time for a first reading. A failure the
+      # first reading already shows does not end the splash (FRN-SRS-034).
       systemd.services.doomed = {
         description = "A unit that fails a few seconds into stage 2";
         wantedBy = [ "multi-user.target" ];
+        after = [
+          "fairing.service"
+          "dbus.service"
+        ];
         serviceConfig = {
           Type = "oneshot";
-          ExecStart = "${pkgs.coreutils}/bin/sleep 3";
+          ExecStart = "${pkgs.coreutils}/bin/sleep ${if tcg then "30" else "5"}";
           ExecStartPost = "${pkgs.coreutils}/bin/false";
         };
       };

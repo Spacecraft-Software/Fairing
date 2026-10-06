@@ -277,11 +277,18 @@ in
     # cached); a stop without it is a plain stop. A unit of its own, not an
     # ExecStartPre of greetd: greetd is Type=idle, and systemd would hold
     # every command of it, ExecStartPre included, for its 5 s idle wait.
-    # Both commands may fail: once the splash has gone, /run/fairing is gone.
+    # It runs once logins are allowed, after systemd-user-sessions.service as
+    # greetd itself and plymouth-quit.service do; ordered after the splash
+    # alone, it would run as soon as the splash sent READY=1 and end it at the
+    # start of stage 2. Both commands may fail: once the splash has gone,
+    # /run/fairing is gone.
     systemd.services.fairing-handoff = {
       description = "Fairing hands the screen to greetd";
       unitConfig.DefaultDependencies = "no";
-      after = [ "fairing.service" ];
+      after = [
+        "fairing.service"
+        "systemd-user-sessions.service"
+      ];
       before = [ "greetd.service" ];
       wantedBy = [ "greetd.service" ];
       restartIfChanged = false;
