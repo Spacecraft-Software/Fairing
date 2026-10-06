@@ -608,13 +608,13 @@ Category A (raised subsystem)
 @end table
 
 @anchor{FRN-SRS-032}
-@subheading FRN-SRS-032 --- fairing.service conflicts with greetd, holds last frame
+@subheading FRN-SRS-032 --- fairing.service hands the screen to greetd, holds last frame
 @cindex FRN-SRS-032
 @table @asis
 @item Requirement
-@code{fairing.service} shall declare @code{Conflicts=greetd.service} and @code{Before=greetd.service}, and shall hold DRM master and the last frame until it receives SIGTERM.
+@code{fairing.service} shall be ordered @code{Before=greetd.service}, greetd's start shall stop @code{fairing.service} and wait for it to exit before greetd runs, and @code{fairing.service} shall hold DRM master and the last frame until it receives SIGTERM.
 @item Rationale
-systemd stops the splash at the exact moment the greeter starts.
+systemd stops the splash at the exact moment the greeter starts. A @code{Conflicts=greetd.service} on the splash cannot do this: both units are wanted by the boot transaction, and systemd 255 resolves the conflicting jobs by deleting greetd's start (@code{systemd --test} on the unit pair, 2026-10-06), so greetd would never run. Amended in draft; for confirmation at G1.
 @item Source
 @ref{FRN-NEED-001}, decision 5.
 @item Priority
