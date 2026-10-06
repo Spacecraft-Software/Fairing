@@ -35,6 +35,13 @@ impl Snapshot {
     pub fn is_stopping(&self) -> bool {
         self.system_state == "stopping"
     }
+
+    /// The boot transaction has finished: no job is left, so no greeter is on
+    /// its way.
+    #[must_use]
+    pub fn is_finished(&self) -> bool {
+        self.system_state == "running" || self.system_state == "degraded"
+    }
 }
 
 /// One message from the D-Bus thread.

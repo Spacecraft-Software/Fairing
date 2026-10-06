@@ -76,6 +76,7 @@ struct Report {
     carried_bar: Option<f32>,
     dbus: bool,
     last_status: Option<String>,
+    release_ms: Option<f64>,
     planned: bool,
 }
 
@@ -145,6 +146,7 @@ pub fn run(
         carried_bar: None,
         dbus: false,
         last_status: None,
+        release_ms: None,
         planned: flags.dry_run,
     };
     if flags.dry_run {
@@ -238,6 +240,7 @@ fn step_aside(
         carried_bar: None,
         dbus: false,
         last_status: None,
+        release_ms: None,
         planned: false,
     };
     emit(&report, context, invocation, flags)
@@ -253,6 +256,7 @@ fn fill(report: &mut Report, outcome: &Outcome) {
     report.carried_bar = outcome.carried_bar;
     report.dbus = outcome.dbus;
     report.last_status.clone_from(&outcome.last_status);
+    report.release_ms = outcome.release_ms;
     if outcome.reason == Reason::NoBackend {
         report.chain.clear();
     }

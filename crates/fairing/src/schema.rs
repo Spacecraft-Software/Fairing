@@ -251,6 +251,7 @@ pub const DIAGNOSTIC_CODES: &[&str] = &[
     "BACKEND_FALLBACK",
     "PALETTE_RESOLVED",
     "PALETTE_SKIPPED",
+    "BOOT_FINISHED",
     "SNAPSHOT_WRITTEN",
     "FIRST_FRAME",
     "NO_BACKEND",
@@ -492,8 +493,9 @@ fn describe_data() -> Value {
 fn preview_data() -> Value {
     json!({
         "type": "object",
-        "required": ["backend", "chain", "width", "height", "format", "palette", "seconds", "frames", "fps", "planned"],
+        "required": ["backend", "chain", "width", "height", "format", "palette", "theme", "seconds", "frames", "fps", "planned"],
         "properties": {
+            "theme": { "type": "string", "description": "The theme drawn: its name, `builtin` without --theme" },
             "backend": {
                 "type": "string",
                 "enum": ["auto", "drm", "fbdev", "memory"],
@@ -540,7 +542,7 @@ fn splash_data() -> Value {
             "stage": { "type": "string", "enum": ["initrd", "system"] },
             "reason": {
                 "type": ["string", "null"],
-                "enum": ["handoff", "stopped", "switch-root", "shutdown", "failed-unit", "maintenance",
+                "enum": ["handoff", "stopped", "boot-finished", "switch-root", "shutdown", "failed-unit", "maintenance",
                          "no-backend", "render-failed", "exit-after", "theme-unreadable", null],
                 "description": "Why the splash ended; null in a plan"
             },
@@ -555,6 +557,7 @@ fn splash_data() -> Value {
             "carried_bar": { "type": ["number", "null"], "description": "The bar value the initrd handed over" },
             "dbus": { "type": "boolean" },
             "last_status": { "type": ["string", "null"] },
+            "release_ms": { "type": ["number", "null"], "description": "From seeing SIGTERM to the output released" },
             "planned": { "type": "boolean" }
         }
     })

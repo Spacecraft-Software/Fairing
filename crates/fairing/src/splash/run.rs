@@ -94,6 +94,10 @@ pub enum Reason {
     FailedUnit,
     /// Rescue or emergency mode started (FRN-SRS-034).
     Maintenance,
+    /// The boot finished with no greetd handoff (booted to a target without
+    /// greetd): the splash leaves rather than hold the screen for ever
+    /// (FRN-SRS-037).
+    BootFinished,
     /// No backend could draw (FRN-SRS-003).
     NoBackend,
     /// Presenting failed for a reason other than a lost output.
@@ -113,6 +117,7 @@ impl Reason {
             Self::Shutdown => "shutdown",
             Self::FailedUnit => "failed-unit",
             Self::Maintenance => "maintenance",
+            Self::BootFinished => "boot-finished",
             Self::NoBackend => "no-backend",
             Self::RenderFailed => "render-failed",
             Self::ExitAfter => "exit-after",
@@ -143,6 +148,9 @@ pub struct Outcome {
     pub first_bar: Option<f32>,
     /// The last status line drawn (FRN-SRS-050).
     pub last_status: Option<String>,
+    /// From seeing SIGTERM to the output released, as this process measured
+    /// it (FRN-SRS-033); `None` when the run did not end on SIGTERM.
+    pub release_ms: Option<f64>,
 }
 
 /// What the loop needs from the process.
@@ -210,6 +218,7 @@ pub fn run_with(
         carried_bar: carried.map(|h| h.bar),
         first_bar: None,
         last_status: None,
+        release_ms: None,
     };
     let mut presenter = match start(plan, env, open_chain) {
         Ok(presenter) => presenter,
@@ -311,7 +320,11 @@ fn finish(
     outcome.bar = session.bar.shown();
     outcome.dbus = session.latest.is_some();
     // Release the output first: greetd is waiting for it (FRN-SRS-033).
-    match presenter.close() {
+    let closed = presenter.close();
+    outcome.release_ms = session
+        .terminate_seen
+        .map(|seen| seen.elapsed().as_secs_f64() * 1000.0);
+    match closed {
         Ok(stats) => {
             outcome.frames = stats.frames();
             outcome.dropped = stats.dropped();
@@ -350,6 +363,8 @@ struct Session {
     dbus_notice_sent: bool,
     lost_output_reported: bool,
     ready_sent: bool,
+    /// When the loop first saw the terminate flag.
+    terminate_seen: Option<Instant>,
     /// Failed units at the first reading. Units that failed before the splash
     /// could see them (the initrd's, or any before the bus came up) are not a
     /// unit entering the failed state now (FRN-SRS-034).
@@ -367,6 +382,7 @@ impl Session {
             dbus_notice_sent: false,
             lost_output_reported: false,
             ready_sent: false,
+            terminate_seen: None,
             failed_baseline: None,
         }
     }
@@ -391,6 +407,9 @@ impl Session {
         }
         let exit_after = plan.exit_after.is_some_and(|after| running >= after);
         let terminating = env.terminate.load(Ordering::SeqCst) || exit_after;
+        if terminating && self.terminate_seen.is_none() {
+            self.terminate_seen = Some(Instant::now());
+        }
         let stopping = self.latest.as_ref().is_some_and(Snapshot::is_stopping);
         // Only greetd's start leaves the marker; `--exit-after` stands in for it.
         let handed_over = plan.stage == Stage::System
@@ -422,12 +441,18 @@ impl Session {
         if let Err(reason) = self.present(env, presenter, &scene, outcome) {
             return Some(reason);
         }
+        // Ready after the first attempt: after the first frame, or at once when
+        // the output is lost mid-swap, since a splash that waits for the native
+        // driver is still running and must not be killed for a late READY=1
+        // (FRN-SRS-036).
+        if !self.ready_sent {
+            notify(env, Notifier::ready, "READY=1");
+            self.ready_sent = true;
+        }
         if outcome.first_frame_ms.is_none()
             && let Some(first) = presenter.stats().first_frame()
         {
             outcome.first_frame_ms = Some(first.as_secs_f64() * 1000.0);
-            notify(env, Notifier::ready, "READY=1");
-            self.ready_sent = true;
             (env.emit)(Diagnostic::new(
                 Severity::Info,
                 "FIRST_FRAME",
@@ -572,6 +597,15 @@ impl Session {
             ));
             return Some(Reason::Maintenance);
         }
+        if latest.is_finished() {
+            (env.emit)(Diagnostic::new(
+                Severity::Info,
+                "BOOT_FINISHED",
+                "the boot finished without a greeter; leaving the screen to the console",
+                env.invocation,
+            ));
+            return Some(Reason::BootFinished);
+        }
         None
     }
 }
@@ -664,8 +698,19 @@ mod tests {
     }
 
     fn nothing(_choice: Choice, _size: Size) -> Result<Opened, NoBackend> {
+        let attempt = |backend| fairing_render::Attempt {
+            backend,
+            error: fairing_render::RenderError::new(
+                fairing_render::RenderErrorKind::NotFound,
+                "no device",
+            ),
+            elapsed: Duration::ZERO,
+        };
         Err(NoBackend {
-            attempts: Vec::new(),
+            attempts: vec![
+                attempt(fairing_render::BackendKind::Drm),
+                attempt(fairing_render::BackendKind::Fbdev),
+            ],
             elapsed: Duration::ZERO,
         })
     }
@@ -946,10 +991,28 @@ mod tests {
         let outcome = harness.run(
             &plan,
             false,
-            vec![snapshot(0.3, 2, "degraded", None)],
+            vec![snapshot(0.3, 2, "starting", None)],
             memory,
         );
         assert_eq!(outcome.reason, Reason::ExitAfter);
+    }
+
+    #[test]
+    fn a_boot_that_finishes_without_greetd_ends_the_splash() {
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::System, None);
+        let outcome = harness.run(
+            &plan,
+            false,
+            vec![
+                snapshot(0.9, 0, "starting", None),
+                snapshot(1.0, 0, "running", None),
+            ],
+            memory,
+        );
+        assert_eq!(outcome.reason, Reason::BootFinished);
+        assert!(outcome.bar < 1.0, "{}", outcome.bar);
+        assert!(!plan.paths.state.join(DURATIONS_FILE).exists());
     }
 
     #[test]
@@ -985,6 +1048,11 @@ mod tests {
             notice.journal_line().starts_with("<5>"),
             "{}",
             notice.journal_line()
+        );
+        assert!(
+            notice.message.contains("drm") && notice.message.contains("fbdev"),
+            "{}",
+            notice.message
         );
         assert_eq!(diagnostics.len(), 1, "exactly one journal entry");
     }
