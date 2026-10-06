@@ -6,8 +6,10 @@
 //!
 //! Stage 1 picks a base palette from the first usable source: a slug named
 //! on the command line, the kernel parameter, `SPACECRAFT_THEME`, the theme's
-//! declared default, the family default. Stage 2 picks a variant of that palette: a pinned sibling stays,
-//! `NO_COLOR` selects mono, accessible mode selects the high-contrast sibling.
+//! declared default, the family default. Stage 2 picks a variant of that
+//! palette: a sibling the user named (command line or `SPACECRAFT_THEME`) is
+//! pinned and stays, `NO_COLOR` selects mono, accessible mode selects the
+//! high-contrast sibling.
 //! An unusable slug is skipped, never fatal (§11.6.5), and every skip is
 //! reported so `--verbose` can say why the machine shows what it shows.
 
@@ -27,7 +29,7 @@ pub const KERNEL_PARAMETER: &str = "fairing.theme";
 /// `NO_COLOR` (and tests need no environment at all).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Request<'a> {
-    /// A slug the operator named on the command line (`--palette`, `--theme=<slug>`): source 1.
+    /// A slug the operator named on the command line (`--palette`): source 1.
     pub explicit: Option<&'a str>,
     /// The value of `fairing.theme=` on the kernel command line.
     pub kernel_parameter: Option<&'a str>,
@@ -81,7 +83,8 @@ impl fmt::Display for Source {
 pub enum Overlay {
     /// The base palette itself.
     None,
-    /// The source named a `-high-contrast` or mono slug outright; no overlay may change it.
+    /// The user named a `-high-contrast` or mono slug on the command line or in
+    /// `SPACECRAFT_THEME` (§11.6.3 sources 1 and 2); no overlay may change it.
     Pinned,
     /// `NO_COLOR` selected the mono theme.
     Mono,
@@ -202,15 +205,24 @@ pub fn resolve(request: &Request<'_>) -> Resolution {
         Selection::Mono(_) => DEFAULT,
     };
 
+    // §11.6.3 stage 2, row 1: only a sibling the *user* named — on the command
+    // line or in `SPACECRAFT_THEME` — is pinned. The kernel parameter and the
+    // declared default are system declarations; a sibling they name is still
+    // a stage-1 choice, so `NO_COLOR` and accessible mode overlay it as usual.
+    let pinnable = matches!(source, Source::Explicit | Source::Environment);
     let (selection, overlay) = match stage_one {
-        Selection::Mono(mono) => (Selection::Mono(mono), Overlay::Pinned),
-        Selection::Color(theme) if theme.variant == Variant::HighContrast => {
+        Selection::Mono(mono) if pinnable => (Selection::Mono(mono), Overlay::Pinned),
+        Selection::Color(theme) if pinnable && theme.variant == Variant::HighContrast => {
             (Selection::Color(theme), Overlay::Pinned)
         }
+        // A mono slug from a system declaration: nothing to overlay, mono is
+        // already the most reduced variant.
+        Selection::Mono(mono) => (Selection::Mono(mono), Overlay::None),
         Selection::Color(theme) => {
             if request.no_color {
                 (Selection::Mono(&MONO), Overlay::Mono)
             } else if request.accessible
+                && theme.variant != Variant::HighContrast
                 && let Some(lifted) = theme.high_contrast()
             {
                 (Selection::Color(lifted), Overlay::HighContrast)
@@ -390,10 +402,10 @@ mod tests {
     }
 
     #[test]
-    fn pinned_siblings_are_never_overridden() {
+    fn user_named_siblings_are_pinned() {
         // Verifies: FRN-SRS-045
         let pinned = resolve(&Request {
-            kernel_parameter: Some("steelbore-high-contrast"),
+            explicit: Some("steelbore-high-contrast"),
             no_color: true,
             ..request()
         });
@@ -408,6 +420,39 @@ mod tests {
         });
         assert_eq!(mono.selection, Selection::Mono(&MONO));
         assert_eq!(mono.overlay, Overlay::Pinned);
+    }
+
+    #[test]
+    fn system_declared_siblings_are_not_pinned() {
+        // Verifies: FRN-SRS-045
+        // `NO_COLOR` outranks a high-contrast sibling the kernel line declared (§11.6.3 row 2).
+        let kernel = resolve(&Request {
+            kernel_parameter: Some("steelbore-high-contrast"),
+            no_color: true,
+            ..request()
+        });
+        assert_eq!(kernel.selection, Selection::Mono(&MONO));
+        assert_eq!(kernel.overlay, Overlay::Mono);
+        assert_eq!(kernel.base.slug, "steelbore");
+        assert_eq!(kernel.source, Source::KernelParameter);
+
+        // The same slug from a declared default: nothing to overlay without `NO_COLOR`.
+        let declared = resolve(&Request {
+            declared_default: Some("tokyonight-high-contrast"),
+            accessible: true,
+            ..request()
+        });
+        assert_eq!(declared.selection.slug(), "tokyonight-high-contrast");
+        assert_eq!(declared.overlay, Overlay::None);
+
+        // A mono slug from a system declaration stays mono and is not reported as pinned.
+        let mono = resolve(&Request {
+            kernel_parameter: Some(MONO_SLUG),
+            accessible: true,
+            ..request()
+        });
+        assert_eq!(mono.selection, Selection::Mono(&MONO));
+        assert_eq!(mono.overlay, Overlay::None);
     }
 
     #[test]

@@ -161,20 +161,25 @@ values try one backend only.  @code{memory} renders off-screen and is the only
 backend an agent environment may use (@pxref{Environment}).
 @item --snapshot
 Writes the final frame as a binary PPM (@code{P6}, 8 bits per channel) to the
-given path.  The format needs no library and every image viewer opens it.
+given path.  The frame is written to a sibling @file{.part} file and renamed
+into place once complete, so a failed run leaves an existing file untouched.
+The format needs no library and every image viewer opens it.
 @item --palette
 A registered Steelbore theme slug such as @code{steelbore},
 @code{steelbore-high-contrast} or @code{tokyonight}: the explicit source of
 the Steelbore Standard §11.6 resolution, reported as @code{command-line}.  It
 outranks @env{SPACECRAFT_THEME}; an unregistered slug is a usage error.
 Without it the palette is resolved as §11.6 prescribes: the environment
-variable, then the family default, with @env{NO_COLOR} overlaying the mono
-theme.  The theme is resolved once and held for the run.
+variable, then the family default, with @env{NO_COLOR} (or @code{--no-color})
+overlaying the mono theme.  A @code{-high-contrast} or mono slug named here or
+in @env{SPACECRAFT_THEME} is pinned and no overlay changes it.  The theme is
+resolved once and held for the run.
 @item --status
 The status line drawn under the bar; the boot splash shows the description of
 the systemd job in progress here.
 @item --size
-The frame size for the memory backend (default @code{1920x1080}).  A device
+The frame size for the memory backend (default @code{1920x1080}), each side
+@code{1} to @code{16384} and the whole frame at most 256 MiB.  A device
 backend always draws at the connector's preferred mode.
 @item --fps
 The redraw rate, 1 to 240 frames per second (default 30).

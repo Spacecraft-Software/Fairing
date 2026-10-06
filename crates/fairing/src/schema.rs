@@ -148,7 +148,7 @@ pub const SPECS: &[CommandSpec] = &[
                 kind: ParamKind::String,
                 minimum: None,
                 maximum: None,
-                pattern: Some("^[0-9]+x[0-9]+$"),
+                pattern: Some("^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$"),
             },
         ],
     },
@@ -535,7 +535,10 @@ mod tests {
         assert_eq!(properties["fps"]["minimum"], 1);
         assert_eq!(properties["fps"]["maximum"], 240);
         assert_eq!(properties["size"]["type"], "string");
-        assert_eq!(properties["size"]["pattern"], "^[0-9]+x[0-9]+$");
+        assert_eq!(
+            properties["size"]["pattern"],
+            "^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$"
+        );
         assert_eq!(properties["size"]["default"], "1920x1080");
         assert_eq!(
             properties["backend"]["enum"],

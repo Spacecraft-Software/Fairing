@@ -837,7 +837,7 @@ M2
 @cindex FRN-SRS-045
 @table @asis
 @item Requirement
-Fairing shall select the theme variant in this order: kernel parameter @code{fairing.theme=}, then @code{SPACECRAFT_THEME}, then the theme's declared default; then overlay @code{NO_COLOR} to mono and accessible mode to high-contrast.
+Fairing shall select the theme variant in two stages: first the base palette from a slug named on the command line, then the kernel parameter @code{fairing.theme=}, then @code{SPACECRAFT_THEME}, then the theme's declared default, then the family default, skipping any unregistered slug; then, unless the command line or @code{SPACECRAFT_THEME} named a @code{-high-contrast} or mono sibling outright (a pinned variant), overlay @code{NO_COLOR} to mono and accessible mode to high-contrast.
 @item Rationale
 §11.6 two-stage resolution, adapted to a process with no in-app selector.
 @item Source

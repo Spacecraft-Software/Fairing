@@ -11,9 +11,10 @@
 //! to ANSI slots ([`MonoRoles`]) for `NO_COLOR` and text consoles.
 //!
 //! [`resolve`] implements the two-stage §11.6 selection adapted to a process
-//! with no in-app selector (FRN-SRS-045): kernel parameter, then
-//! `SPACECRAFT_THEME`, then the theme's declared default, then the family
-//! default; `NO_COLOR` overlays mono and accessible mode overlays the
+//! with no in-app selector (FRN-SRS-045): a slug named on the command line,
+//! then the kernel parameter, then `SPACECRAFT_THEME`, then the theme's
+//! declared default, then the family default; a sibling the user named is
+//! pinned, otherwise `NO_COLOR` overlays mono and accessible mode overlays the
 //! high-contrast sibling. The caller supplies what it already read; this crate
 //! reads no environment of its own.
 //!

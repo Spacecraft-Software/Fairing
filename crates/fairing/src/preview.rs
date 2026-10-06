@@ -10,8 +10,10 @@
 //! VT is ever opened (FRN-SRS-084): the automatic chain becomes the memory
 //! backend with a warning, and an explicit device backend is a usage error.
 //!
-//! Whatever happens while drawing, the output is closed — and the console
-//! restored — before the result is reported.
+//! On every error path while drawing, the output is closed — and the console
+//! restored — before the result is reported. A panic is the one exception:
+//! the release profile aborts without running destructors, so the compositor
+//! and backends are written not to panic rather than relying on `Drop`.
 
 use std::fs::File;
 use std::io;
@@ -92,39 +94,57 @@ struct Plan<'a> {
     memory_size: Size,
 }
 
-/// The snapshot file, created before any device is opened so a bad path fails
-/// fast without taking the console. A file that never received a complete
-/// frame is removed when the target is dropped.
+/// The snapshot target, opened before any device so a bad path fails fast
+/// without taking the console.
+///
+/// The frame is written to a sibling `.part` file and renamed over `path`
+/// only once it is complete, so a failed run never truncates or removes
+/// whatever the operator already had at that path. A part file that never
+/// received a complete frame is removed when the target is dropped.
 struct SnapshotFile {
     path: PathBuf,
-    file: File,
-    written: bool,
+    part: PathBuf,
+    file: Option<File>,
 }
 
 impl SnapshotFile {
     fn create(path: &Path, invocation: &str) -> Result<Self, AppError> {
-        let file = File::create(path).map_err(|e| snapshot_error(path, &e, invocation))?;
+        let part = part_path(path);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&part)
+            .map_err(|e| snapshot_error(&part, &e, invocation))?;
         Ok(Self {
             path: path.to_path_buf(),
-            file,
-            written: false,
+            part,
+            file: Some(file),
         })
     }
 
-    /// Writes the presenter's last frame as a binary PPM and confirms it.
+    /// Writes the presenter's last frame as a binary PPM, moves it into place and confirms it.
     fn write(
         mut self,
         presenter: &Presenter,
         context: &Context,
         invocation: &str,
     ) -> Result<String, AppError> {
-        presenter.frame().write_ppm(&mut self.file).map_err(|e| {
-            AppError::internal(
-                format!("writing `{}`: {e}", self.path.display()),
+        let failed = |what: &str, e: &io::Error| {
+            AppError::internal(format!("{what} `{}`: {e}", self.path.display()), invocation)
+        };
+        let Some(mut file) = self.file.take() else {
+            return Err(AppError::internal(
+                format!("snapshot `{}` was already written", self.path.display()),
                 invocation,
-            )
-        })?;
-        self.written = true;
+            ));
+        };
+        presenter
+            .frame()
+            .write_ppm(&mut file)
+            .and_then(|()| file.sync_all())
+            .map_err(|e| failed("writing", &e))?;
+        drop(file);
+        std::fs::rename(&self.part, &self.path).map_err(|e| failed("moving into place", &e))?;
         Diagnostic::new(
             Severity::Ok,
             "SNAPSHOT_WRITTEN",
@@ -143,11 +163,22 @@ impl SnapshotFile {
 
 impl Drop for SnapshotFile {
     fn drop(&mut self) {
-        if !self.written {
-            // Nothing complete reached the file; do not leave a stub behind.
-            let _ = std::fs::remove_file(&self.path);
+        if self.file.is_some() {
+            // Nothing complete reached the part file; do not leave it behind. The
+            // operator's own file at `path`, if any, was never touched.
+            let _ = std::fs::remove_file(&self.part);
         }
     }
+}
+
+/// `frame.ppm` → `frame.ppm.part`, beside the target so the final rename stays on one filesystem.
+fn part_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(std::ffi::OsString::from)
+        .unwrap_or_default();
+    name.push(".part");
+    path.with_file_name(name)
 }
 
 /// Maps a snapshot creation failure onto the exit-code table by its cause.
@@ -186,7 +217,7 @@ pub fn run(
     let plan = Plan {
         args,
         resolution: resolve_palette(args, context, invocation)?,
-        choice: choose_backend(args, context, invocation)?,
+        choice: choose_backend(args, context, invocation, flags.dry_run)?,
         memory_size: Size::new(args.size.0, args.size.1).map_err(|e| {
             AppError::invalid_argument(
                 e.to_string(),
@@ -400,10 +431,11 @@ fn resolve_palette(
     };
     let resolution = fairing_theme::resolve(&request);
     if let Some(slug) = &args.palette
-        && resolution
-            .skipped
-            .iter()
-            .any(|s| s.source == Source::Explicit)
+        && (slug.trim().is_empty()
+            || resolution
+                .skipped
+                .iter()
+                .any(|s| s.source == Source::Explicit))
     {
         return Err(AppError::invalid_argument(
             format!("palette `{slug}` is not a registered theme"),
@@ -415,16 +447,34 @@ fn resolve_palette(
 }
 
 /// Applies the agent rule (FRN-SRS-084) to the requested backend.
+///
+/// A plan opens nothing, so under `--dry-run` an agent may inspect the device
+/// chain it could not run; the plan carries a warning instead of a refusal.
 fn choose_backend(
     args: &PreviewArgs,
     context: &Context,
     invocation: &str,
+    dry_run: bool,
 ) -> Result<Choice, AppError> {
     if !context.is_agent_environment() {
         return Ok(args.backend.chain());
     }
     match args.backend {
         BackendChoice::Memory => Ok(Choice::Memory),
+        BackendChoice::Drm | BackendChoice::Fbdev if dry_run => {
+            Diagnostic::new(
+                Severity::Warn,
+                "AGENT_DEVICE_PLAN_ONLY",
+                format!(
+                    "agent environment detected; `--backend {}` is planned here but would be refused without --dry-run",
+                    args.backend.chain()
+                ),
+                invocation,
+            )
+            .with_hint(MEMORY_HINT)
+            .emit(context);
+            Ok(args.backend.chain())
+        }
         BackendChoice::Auto => {
             Diagnostic::new(
                 Severity::Warn,
@@ -597,12 +647,26 @@ mod tests {
     }
 
     #[test]
-    fn unwritten_snapshot_files_are_removed() {
+    fn unwritten_snapshot_files_are_removed_and_existing_files_are_kept() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let path = dir.path().join("frame.ppm");
+        std::fs::write(&path, b"PRECIOUS").unwrap_or_else(|e| panic!("{e}"));
         let target = SnapshotFile::create(&path, "c").unwrap_or_else(|e| panic!("{e}"));
-        assert!(path.exists());
+        let part = part_path(&path);
+        assert_eq!(part, dir.path().join("frame.ppm.part"));
+        assert!(part.exists());
         drop(target);
-        assert!(!path.exists(), "a stub must not survive a failed run");
+        assert!(!part.exists(), "a part file must not survive a failed run");
+        assert_eq!(
+            std::fs::read(&path).unwrap_or_default(),
+            b"PRECIOUS",
+            "the operator's file is untouched by a failed run"
+        );
+        // A part file left by a crashed run is reported, never silently overwritten.
+        std::fs::write(&part, b"").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            SnapshotFile::create(&path, "c").err().map(|e| e.exit_code),
+            Some(2)
+        );
     }
 }

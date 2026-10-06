@@ -204,8 +204,15 @@ fn parse_seconds(text: &str) -> Result<f64, String> {
 fn parse_size(text: &str) -> Result<(u32, u32), String> {
     let invalid = || format!("`{text}` is not `WxH`");
     let (w, h) = text.split_once('x').ok_or_else(invalid)?;
-    let width: u32 = w.trim().parse().map_err(|_e| invalid())?;
-    let height: u32 = h.trim().parse().map_err(|_e| invalid())?;
+    // Digits only, as the schema pattern promises: no sign, no whitespace.
+    let digits = |side: &str| -> Result<u32, String> {
+        if side.is_empty() || !side.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(invalid());
+        }
+        side.parse().map_err(|_e| invalid())
+    };
+    let width = digits(w)?;
+    let height = digits(h)?;
     if !(1..=16_384).contains(&width) || !(1..=16_384).contains(&height) {
         return Err(format!("`{text}` is outside 1x1..=16384x16384"));
     }

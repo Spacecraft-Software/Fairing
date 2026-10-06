@@ -715,6 +715,21 @@ fn preview_dry_run_plans_without_opening_a_device() {
         .stdout(predicate::str::contains(
             "preview\twould try drm, then fbdev\n",
         ));
+    // A plan opens nothing, so an agent may inspect a device chain it could not run.
+    let output = fairing()
+        .env("AI_AGENT", "1")
+        .args(["preview", "--dry-run", "--backend", "drm"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let value = json(&output.stdout);
+    assert_eq!(value["data"]["planned"], true);
+    assert_eq!(value["data"]["chain"], serde_json::json!(["drm"]));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("AGENT_DEVICE_PLAN_ONLY"),
+        "the plan says the run itself would be refused"
+    );
     let out = fairing()
         .args(["preview", "--dry-run", "--backend", "memory", "--json"])
         .assert()
@@ -851,6 +866,90 @@ fn preview_snapshot_into_a_missing_directory_exits_not_found() {
 }
 
 #[test]
+fn a_failed_preview_never_touches_an_existing_snapshot_file() {
+    // The snapshot is written beside the target and renamed into place only when complete,
+    // so a run that fails after the target was opened leaves the operator's file as it was.
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let path = dir.path().join("frame.ppm");
+    std::fs::write(&path, b"PRECIOUS").unwrap_or_else(|e| panic!("{e}"));
+    // `--backend drm` under an agent variable is refused before any device is opened but
+    // after argument validation; `--size` is rejected by clap even earlier. Force a failure
+    // that happens with the snapshot already created: an oversize memory frame.
+    fairing()
+        .args([
+            "preview",
+            "--backend",
+            "memory",
+            "--seconds",
+            "0",
+            "--size",
+            "16384x16384",
+            "--snapshot",
+        ])
+        .arg(&path)
+        .arg("--json")
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty());
+    assert_eq!(std::fs::read(&path).unwrap_or_default(), b"PRECIOUS");
+    assert!(!dir.path().join("frame.ppm.part").exists());
+    // A successful run replaces it.
+    fairing()
+        .args([
+            "preview",
+            "--backend",
+            "memory",
+            "--seconds",
+            "0",
+            "--size",
+            "64x36",
+            "--snapshot",
+        ])
+        .arg(&path)
+        .arg("--json")
+        .assert()
+        .success();
+    let written = std::fs::read(&path).unwrap_or_default();
+    assert!(
+        written.starts_with(b"P6\n64 36\n255\n"),
+        "{:?}",
+        &written[..16]
+    );
+    assert!(!dir.path().join("frame.ppm.part").exists());
+}
+
+#[test]
+fn no_color_flag_selects_the_mono_theme_like_the_variable() {
+    // `Context` decides colour once; the §11.6 mono overlay follows that decision, not the
+    // variable alone.
+    for args in [&["--no-color"][..], &["--color", "never"][..]] {
+        let out = fairing()
+            .args([
+                "preview",
+                "--backend",
+                "memory",
+                "--seconds",
+                "0",
+                "--size",
+                "8x8",
+                "--json",
+                "--fields",
+                "palette",
+            ])
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let palette = &json(&out)["data"]["palette"];
+        assert_eq!(palette["slug"], "steelbore-mono", "{args:?}");
+        assert_eq!(palette["overlay"], "mono", "{args:?}");
+        assert_eq!(palette["base"], "steelbore", "{args:?}");
+    }
+}
+
+#[test]
 fn a_closed_stdout_ends_the_run_quietly() {
     // Verifies: FRN-SRS-081
     let (reader, writer) = std::io::pipe().unwrap_or_else(|e| panic!("{e}"));
@@ -883,7 +982,10 @@ fn schema_types_preview_parameters_and_hides_the_theme_flag() {
     assert_eq!(properties["seconds"]["maximum"], 3600);
     assert_eq!(properties["fps"]["type"], "integer");
     assert_eq!(properties["fps"]["default"], 30);
-    assert_eq!(properties["size"]["pattern"], "^[0-9]+x[0-9]+$");
+    assert_eq!(
+        properties["size"]["pattern"],
+        "^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$"
+    );
     assert!(properties.get("theme").is_none());
     assert_eq!(
         document["output_schema"]["properties"]["data"]["properties"]["backend"]["enum"],

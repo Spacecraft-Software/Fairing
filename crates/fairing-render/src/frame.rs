@@ -9,7 +9,8 @@
 //! `0xXXRRGGBB`, i.e. memory order `[b, g, r, x]`. Drawing every opaque colour
 //! with red and blue swapped lands each channel in its scan-out byte, and the
 //! copy to the device is then a plain row copy. The swap lives in exactly one
-//! place, [`Frame::paint`], and is pinned by a test.
+//! place, [`PixelFormat::encode`] (used by [`Frame::paint`] and the text blit), and is
+//! pinned by a test.
 
 use std::fmt;
 use std::io::{self, Write};
@@ -22,6 +23,8 @@ use crate::geometry::Size;
 
 /// Bytes per pixel in every format this crate handles.
 pub const BYTES_PER_PIXEL: usize = 4;
+/// Largest frame allocated: 256 MiB, an 8192x8192 canvas, far beyond any panel.
+const MAX_FRAME_BYTES: u64 = 256 * 1024 * 1024;
 
 /// The byte order of a 32-bit pixel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -80,8 +83,23 @@ impl Frame {
     ///
     /// # Errors
     ///
-    /// [`RenderErrorKind::InvalidGeometry`] when the size overflows tiny-skia's limits.
+    /// [`RenderErrorKind::InvalidGeometry`] when the frame would exceed 256 MiB or
+    /// tiny-skia's limits.
     pub fn new(size: Size, format: PixelFormat) -> Result<Self, RenderError> {
+        // A corrupt mode or sysfs attribute must fail here, not abort the
+        // process in the allocator (the release profile cannot unwind).
+        let bytes = u64::from(size.width())
+            * u64::from(size.height())
+            * u64::try_from(BYTES_PER_PIXEL).unwrap_or(u64::MAX);
+        if bytes > MAX_FRAME_BYTES {
+            return Err(RenderError::new(
+                RenderErrorKind::InvalidGeometry,
+                format!(
+                    "a {size} frame needs {bytes} bytes, above the {} MiB limit",
+                    MAX_FRAME_BYTES / (1024 * 1024)
+                ),
+            ));
+        }
         let pixmap = Pixmap::new(size.width(), size.height()).ok_or_else(|| {
             RenderError::new(
                 RenderErrorKind::InvalidGeometry,

@@ -71,6 +71,10 @@ fn generate(table: &Table) -> Result<String, Box<dyn Error>> {
     let themes = section(table, "themes")?;
 
     let registered = string_list(meta, "registered-set")?;
+    let mut seen = std::collections::HashSet::new();
+    if let Some(twice) = registered.iter().find(|slug| !seen.insert(slug.as_str())) {
+        return Err(format!("`{twice}` is in the registered set twice").into());
+    }
     let default_slug = string(meta, "default-theme")?;
     let mono_slug = string(meta, "mono-theme")?;
     if !registered.iter().any(|s| s == default_slug) {
@@ -212,10 +216,29 @@ fn write_theme(
     if !colour_themes.contains(&base) {
         return Err(format!("theme `{slug}` names base `{base}`, which is not registered").into());
     }
+    // Fills the file marks as non-text (`(tint)` entries and the base theme's
+    // `rules.non-text-fill-only` list) are never role tokens, and a `Lift`
+    // token exists only for the high-contrast sibling; a base theme binding
+    // one is a retyped value in the wrong place, not a palette token.
+    let barred: Vec<String> = theme
+        .get("rules")
+        .and_then(Value::as_table)
+        .and_then(|rules| rules.get("non-text-fill-only"))
+        .and_then(Value::as_array)
+        .map(|hexes| {
+            hexes
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_ascii_uppercase))
+                .collect()
+        })
+        .unwrap_or_default();
     let inventory: Vec<String> = section(section(table, "palettes")?, base)?
         .iter()
         .filter(|(key, _)| key.as_str() != "reference")
+        .filter(|(key, _)| !key.contains("(tint)"))
+        .filter(|(key, _)| variant == "HighContrast" || !key.ends_with(" Lift"))
         .filter_map(|(_, value)| value.as_str().map(str::to_ascii_uppercase))
+        .filter(|hex| !barred.contains(hex))
         .collect();
     let polarity = match string(section(resolution, "polarity")?, base)? {
         "dark" => "Dark",

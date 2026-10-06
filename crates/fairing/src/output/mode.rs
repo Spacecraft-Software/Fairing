@@ -90,7 +90,8 @@ pub struct Context {
     pub tool_agent: Option<&'static str>,
     /// Whether a TUI was requested and refused.
     pub explore_requested: bool,
-    /// `NO_COLOR` is set and non-empty (the §11.6 mono overlay; read here and nowhere else).
+    /// Colour was refused outright: `NO_COLOR` is set and non-empty, or `--no-color` /
+    /// `--color never` was given (the §11.6 mono overlay; decided here and nowhere else).
     pub no_color: bool,
 }
 
@@ -202,7 +203,7 @@ impl Context {
             profile,
             tool_agent: env.tool_agent,
             explore_requested,
-            no_color: env.no_color,
+            no_color: env.no_color || color_flag == Some(ColorChoice::Never),
         }
     }
 

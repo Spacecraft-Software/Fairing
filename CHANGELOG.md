@@ -32,6 +32,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
   end quietly on a closed pipe. `fairing schema` types numeric parameters with their bounds
   and omits hidden flags. Dependency qualification rows for every new crate; `cargo deny`
   allows Zlib; `CREDITS.md` (§15.3) for the bundled font and the console palette.
+  Review hardening: the snapshot is written beside its target and renamed into place so a
+  failed run never truncates an existing file; `--no-color` and `--color never` select the
+  mono theme like `NO_COLOR`; only a sibling named on the command line or in
+  `SPACECRAFT_THEME` is pinned (§11.6.3), a kernel-declared one is overlaid; the palette
+  build rejects non-text fills, base-theme `Lift` tokens and duplicate registrations, and
+  the golden tests re-derive every recorded contrast ratio and polarity; frames are capped
+  at 256 MiB; `--dry-run` plans a device backend under an agent instead of refusing it.
 
 - M0 repository posture: Cargo workspace with `fairing`, `fairing-render`,
   `fairing-theme`, `fairing-askpass` (all `#![forbid(unsafe_code)]`) and the `xtask` task

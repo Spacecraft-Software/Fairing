@@ -154,7 +154,8 @@ impl AppError {
     ///
     /// The most actionable failure wins: a held device (`CONFLICT`), then a
     /// refused one (`PERMISSION_DENIED`), then nothing to open at all
-    /// (`NOT_FOUND`); anything else is a device this release cannot drive.
+    /// (`NOT_FOUND`), then a device this release cannot drive
+    /// (`FEATURE_UNAVAILABLE`); an unclassified device failure is `INTERNAL_ERROR`.
     pub fn from_no_backend(failure: &fairing_render::NoBackend, hint: &str, command: &str) -> Self {
         use fairing_render::RenderErrorKind as Kind;
         let message = failure.to_string();
@@ -165,8 +166,15 @@ impl AppError {
             Self::permission_denied(message, hint, command)
         } else if kinds.iter().all(|k| *k == Kind::NotFound) {
             Self::not_found(message, hint, command)
-        } else {
+        } else if kinds
+            .iter()
+            .all(|k| matches!(k, Kind::NotFound | Kind::Unsupported))
+        {
             Self::new(ErrorCode::FeatureUnavailable, message, hint, command)
+        } else {
+            // The memory hint still lets the operator get a frame while the device
+            // failure is investigated, so it is kept over the generic `--help`.
+            Self::new(ErrorCode::InternalError, message, hint, command)
         }
     }
 
@@ -276,7 +284,8 @@ mod tests {
                 &[Kind::NotFound, Kind::Unsupported],
                 ErrorCode::FeatureUnavailable,
             ),
-            (&[Kind::Io, Kind::NotFound], ErrorCode::FeatureUnavailable),
+            (&[Kind::Io, Kind::NotFound], ErrorCode::InternalError),
+            (&[Kind::Lost, Kind::Unsupported], ErrorCode::InternalError),
         ];
         for (kinds, code) in cases {
             let failure = chain(kinds);

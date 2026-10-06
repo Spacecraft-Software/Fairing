@@ -25,9 +25,16 @@ impl Scene {
 
     /// Sets the status line; an empty string clears it.
     #[must_use]
+    ///
+    /// Control characters (a trailing newline from a unit description, a tab)
+    /// have no glyph and would draw as the substitute mark; they become spaces.
     pub fn with_status(mut self, status: impl Into<String>) -> Self {
-        let status = status.into();
-        self.status = (!status.is_empty()).then_some(status);
+        let status: String = status
+            .into()
+            .chars()
+            .map(|ch| if ch.is_control() { ' ' } else { ch })
+            .collect();
+        self.status = (!status.trim().is_empty()).then_some(status);
         self
     }
 
@@ -79,6 +86,11 @@ mod tests {
     #[test]
     fn empty_status_is_none() {
         assert_eq!(Scene::new(1).with_status("").status(), None);
+        assert_eq!(Scene::new(1).with_status("\n\t").status(), None);
+        assert_eq!(
+            Scene::new(1).with_status("Starting foo\n").status(),
+            Some("Starting foo ")
+        );
         assert_eq!(
             Scene::new(1).with_status("Mounting /").status(),
             Some("Mounting /")

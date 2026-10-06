@@ -166,3 +166,60 @@ fn documented_contrast_floors_hold_for_every_base_theme() {
         }
     }
 }
+
+#[test]
+fn polarity_follows_the_canvas_luminance() {
+    // The file states that `[resolution.polarity]` is derivable from each background's
+    // WCAG relative luminance; derive it and hold the generated table to that.
+    let black = fairing_theme::Rgb::new(0, 0, 0);
+    let white = fairing_theme::Rgb::new(0xFF, 0xFF, 0xFF);
+    for theme in Theme::registered() {
+        let background = theme.color(Role::Background);
+        let derived = if background.contrast_ratio(black) > background.contrast_ratio(white) {
+            Polarity::Light
+        } else {
+            Polarity::Dark
+        };
+        assert_eq!(theme.polarity, derived, "{}", theme.slug);
+    }
+}
+
+#[test]
+fn recorded_contrast_ratios_match_the_wcag_math() {
+    // Every `contrast.vs-background` row of the file is an independent oracle for
+    // `Rgb::contrast_ratio`; the generated colours must reproduce them to the hundredth.
+    let table = table();
+    let themes = sub(&table, "themes");
+    let mut checked = 0;
+    for theme in Theme::registered() {
+        let Some(contrast) = themes
+            .get(theme.slug)
+            .and_then(toml::Value::as_table)
+            .and_then(|t| t.get("contrast"))
+            .and_then(toml::Value::as_table)
+            .and_then(|c| c.get("vs-background"))
+            .and_then(toml::Value::as_table)
+        else {
+            continue;
+        };
+        let background = theme.color(Role::Background);
+        for (key, value) in contrast {
+            let Some(role) = Role::ALL.iter().copied().find(|r| r.as_str() == key) else {
+                continue;
+            };
+            let recorded: f64 = value
+                .as_str()
+                .and_then(|s| s.strip_suffix(":1"))
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| panic!("{}: `{key}` = {value} is not `N:1`", theme.slug));
+            let computed = theme.color(role).contrast_ratio(background);
+            assert!(
+                (computed - recorded).abs() < 0.011,
+                "{}: {key} recorded {recorded} computed {computed:.3}",
+                theme.slug
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 100, "only {checked} ratios checked");
+}

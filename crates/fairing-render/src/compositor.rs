@@ -164,7 +164,7 @@ impl Compositor {
         let mut kept = String::new();
         let mut width = 0.0;
         for ch in text.chars() {
-            let advance = self.text.measure(&ch.to_string(), px);
+            let advance = self.text.advance(ch, px);
             if width + advance + ellipsis_width > available {
                 break;
             }

@@ -48,8 +48,12 @@ impl TextRenderer {
     ///
     /// [`RenderErrorKind::Font`] if the bundled file does not parse (a build defect).
     pub(crate) fn new() -> Result<Self, RenderError> {
+        // fontdue flattens every outline once, at load, with an error budget
+        // relative to this scale; it must cover the largest size the layout can
+        // ask for (the status line on an 8K panel is about 120 px), or curves
+        // turn polygonal exactly where the text is biggest.
         let settings = FontSettings {
-            scale: 30.0,
+            scale: 128.0,
             ..FontSettings::default()
         };
         let font = Font::from_bytes(FONT_BYTES, settings)
@@ -76,9 +80,12 @@ impl TextRenderer {
 
     /// The advance of `text` at `px`, in pixels.
     pub(crate) fn measure(&mut self, text: &str, px: u32) -> f32 {
-        text.chars()
-            .map(|ch| self.glyph(ch, px).metrics.advance_width)
-            .sum()
+        text.chars().map(|ch| self.advance(ch, px)).sum()
+    }
+
+    /// The advance of one character at `px`, in pixels.
+    pub(crate) fn advance(&mut self, ch: char, px: u32) -> f32 {
+        self.glyph(ch, px).metrics.advance_width
     }
 
     /// Draws `text` with its pen at (`x`, `baseline`) and returns the pen's final x.
