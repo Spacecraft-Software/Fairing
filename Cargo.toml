@@ -38,6 +38,20 @@ tiny-skia = { version = "0.12.0", default-features = false, features = ["std", "
 fontdue = { version = "0.9.4", default-features = false, features = ["simd", "hashbrown"] }
 drm = "0.15.0"
 rustix = { version = "1.1", default-features = false, features = ["event", "std"] }
+# Compiled theme artefact (M2): postcard's wire format is specified and stable.
+# No features at all: `to_extend` and `from_bytes` need none, and `use-std`
+# would add two versions of embedded-io for flavours Fairing never uses.
+postcard = { version = "1.1", default-features = false }
+# Theme compilation only (feature `compile`): PNG assets decoded at build time,
+# and the Nickel evaluator without its REPL, doc, markdown and formatter features.
+png = "0.18"
+nickel-lang-core = { version = "0.19", default-features = false }
+# systemd's Manager.Progress for the splash (M2): the blocking API over zbus's
+# own async-io executor (no tokio); `p2p` for a manager endpoint without a bus
+# daemon (`/run/systemd/private`), which costs only `getrandom`.
+zbus = { version = "5.19", default-features = false, features = ["async-io", "blocking-api", "p2p"] }
+# SIGTERM for the splash (M2): `flag::register` is a safe call; no iterator thread.
+signal-hook = { version = "0.4", default-features = false }
 assert_cmd = "2.2"
 predicates = "3.1"
 tempfile = "3.27"
