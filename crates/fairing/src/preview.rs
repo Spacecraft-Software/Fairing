@@ -105,6 +105,8 @@ struct SnapshotFile {
     path: PathBuf,
     part: PathBuf,
     file: Option<File>,
+    /// True once the part file was renamed over `path`.
+    done: bool,
 }
 
 impl SnapshotFile {
@@ -119,6 +121,7 @@ impl SnapshotFile {
             path: path.to_path_buf(),
             part,
             file: Some(file),
+            done: false,
         })
     }
 
@@ -145,6 +148,7 @@ impl SnapshotFile {
             .map_err(|e| failed("writing", &e))?;
         drop(file);
         std::fs::rename(&self.part, &self.path).map_err(|e| failed("moving into place", &e))?;
+        self.done = true;
         Diagnostic::new(
             Severity::Ok,
             "SNAPSHOT_WRITTEN",
@@ -163,9 +167,11 @@ impl SnapshotFile {
 
 impl Drop for SnapshotFile {
     fn drop(&mut self) {
-        if self.file.is_some() {
-            // Nothing complete reached the part file; do not leave it behind. The
-            // operator's own file at `path`, if any, was never touched.
+        if !self.done {
+            // Nothing complete reached `path`: whether the run failed before the
+            // write, during it, or at the rename, the part file must not block the
+            // next attempt. The operator's own file at `path`, if any, was never
+            // touched.
             let _ = std::fs::remove_file(&self.part);
         }
     }
@@ -297,7 +303,6 @@ fn draw(
     let opened = open(plan.choice, plan.memory_size)
         .map_err(|failure| AppError::from_no_backend(&failure, MEMORY_HINT, invocation))?;
     let fallbacks = report_fallbacks(&opened.attempts, context, invocation);
-    let device = device_of(&opened.surface);
 
     let compositor = Compositor::new(plan.resolution.selection)
         .map_err(|e| AppError::from_render(&e, MEMORY_HINT, invocation))?;
@@ -309,9 +314,6 @@ fn draw(
     };
     let mut presenter = Presenter::new(opened.surface, compositor, config)
         .map_err(|e| AppError::from_render(&e, MEMORY_HINT, invocation))?;
-    let size = presenter.frame().size();
-    let format = presenter.frame().format();
-    let backend = presenter.backend();
 
     let outcome = animate(&mut presenter, plan.args, invocation).and_then(|run_time| {
         let written = match snapshot {
@@ -320,6 +322,12 @@ fn draw(
         };
         Ok((run_time, written))
     });
+    // Read after the run: a lost output may have been re-acquired on another
+    // backend or at another mode, and the report names what drew the last frame.
+    let size = presenter.frame().size();
+    let format = presenter.frame().format();
+    let backend = presenter.backend();
+    let device = device_of(presenter.surface());
     let closed = presenter
         .close()
         .map_err(|e| AppError::from_render(&e, MEMORY_HINT, invocation));

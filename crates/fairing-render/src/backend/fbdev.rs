@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use crate::backend::{Backend, BackendKind};
 use crate::fault::{RenderError, RenderErrorKind};
 use crate::frame::{BYTES_PER_PIXEL, Frame, PixelFormat};
-use crate::geometry::Size;
+use crate::geometry::{Size, to_usize};
 
 /// Where the kernel describes the first framebuffer.
 pub const DEFAULT_SYSFS: &str = "/sys/class/graphics/fb0";
@@ -102,7 +102,7 @@ impl FbInfo {
         let stride = attribute("stride")?
             .parse::<usize>()
             .map_err(|e| unsupported(format!("stride does not parse: {e}")))?;
-        if stride < width as usize * BYTES_PER_PIXEL && bits_per_pixel == 32 {
+        if stride < to_usize(width) * BYTES_PER_PIXEL && bits_per_pixel == 32 {
             return Err(unsupported(format!(
                 "stride {stride} is shorter than {width} 32-bit pixels"
             )));
@@ -186,7 +186,7 @@ impl FbdevBackend {
             .map_err(|e| RenderError::from_io(format!("open `{}`", device.display()), e))?;
         // Save the console image for restoration; an implausibly large one is not
         // worth gigabytes of memory, so the console is simply not restored then.
-        let image_bytes = info.stride * info.size.height() as usize;
+        let image_bytes = info.stride * to_usize(info.size.height());
         let saved = if image_bytes <= MAX_SAVED_BYTES {
             read_all_at(&file, image_bytes)
                 .map_err(|e| RenderError::from_io(format!("save `{}`", device.display()), e))?
@@ -269,7 +269,7 @@ impl Backend for FbdevBackend {
         }
         for y in 0..self.info.size.height() {
             let Some(row) = frame.row(y) else { break };
-            let offset = u64::try_from(y as usize * self.info.stride).unwrap_or(u64::MAX);
+            let offset = u64::try_from(to_usize(y) * self.info.stride).unwrap_or(u64::MAX);
             self.device.write_all_at(row, offset).map_err(|e| {
                 RenderError::from_io(format!("write row {y}"), e).on(BackendKind::Fbdev)
             })?;

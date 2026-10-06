@@ -55,7 +55,7 @@ impl Size {
     /// Pixel count.
     #[must_use]
     pub const fn area(self) -> usize {
-        (self.width as usize) * (self.height as usize)
+        to_usize(self.width) * to_usize(self.height)
     }
 }
 
@@ -189,6 +189,17 @@ impl Viewport {
 )]
 pub(crate) fn as_f32(value: u32) -> f32 {
     value as f32
+}
+
+/// Widens a pixel count to `usize`.
+///
+/// The one `as` cast between integer types in rendering code: it is lossless
+/// because `usize` is at least 32 bits wide on every target this crate builds
+/// for, which the assertion below proves at compile time.
+#[must_use]
+pub(crate) const fn to_usize(value: u32) -> usize {
+    const { assert!(usize::BITS >= u32::BITS) };
+    value as usize
 }
 
 /// Rounds a finite pixel coordinate to the nearest integer, saturating.

@@ -148,7 +148,10 @@ pub const SPECS: &[CommandSpec] = &[
                 kind: ParamKind::String,
                 minimum: None,
                 maximum: None,
-                pattern: Some("^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$"),
+                // Each side is 1..=16384, exactly as `cli::parse_size` enforces.
+                pattern: Some(
+                    "^([1-9][0-9]{0,3}|1[0-5][0-9]{3}|16[0-2][0-9]{2}|163[0-7][0-9]|1638[0-4])x([1-9][0-9]{0,3}|1[0-5][0-9]{3}|16[0-2][0-9]{2}|163[0-7][0-9]|1638[0-4])$",
+                ),
             },
         ],
     },
@@ -535,10 +538,32 @@ mod tests {
         assert_eq!(properties["fps"]["minimum"], 1);
         assert_eq!(properties["fps"]["maximum"], 240);
         assert_eq!(properties["size"]["type"], "string");
-        assert_eq!(
-            properties["size"]["pattern"],
-            "^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$"
-        );
+        let pattern = properties["size"]["pattern"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let side = regex::Regex::new(&format!(
+            "^{}$",
+            pattern
+                .trim_start_matches('^')
+                .trim_end_matches('$')
+                .split_once('x')
+                .map(|(w, _)| w)
+                .unwrap_or_default()
+        ))
+        .unwrap_or_else(|e| panic!("{e}"));
+        // The pattern accepts exactly the sides `parse_size` accepts.
+        for n in [
+            0_u32, 1, 9, 10, 9999, 10_000, 15_999, 16_000, 16_299, 16_383, 16_384, 16_385, 20_000,
+            99_999,
+        ] {
+            assert_eq!(
+                side.is_match(&n.to_string()),
+                (1..=16_384).contains(&n),
+                "{n}"
+            );
+        }
+        assert!(!side.is_match("+8") && !side.is_match("08") && !side.is_match(" 8"));
         assert_eq!(properties["size"]["default"], "1920x1080");
         assert_eq!(
             properties["backend"]["enum"],

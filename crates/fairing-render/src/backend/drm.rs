@@ -34,7 +34,7 @@ use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use crate::backend::{Backend, BackendKind};
 use crate::fault::{RenderError, RenderErrorKind};
 use crate::frame::{BYTES_PER_PIXEL, Frame, PixelFormat};
-use crate::geometry::Size;
+use crate::geometry::{Size, to_usize};
 
 /// Primary nodes tried by [`DrmBackend::open`], in order.
 const CARD_RANGE: std::ops::Range<u32> = 0..16;
@@ -77,11 +77,16 @@ struct Scanout {
 }
 
 /// What the CRTC showed before we took it, restored on close.
+///
+/// `fb` is `None` for a CRTC that was inactive; restoring that state means
+/// disabling the CRTC again, not leaving our last buffer attached.
 #[derive(Debug, Clone, Copy)]
 struct Saved {
     fb: Option<framebuffer::Handle>,
     mode: Option<Mode>,
     position: (u32, u32),
+    /// Set once the CRTC has been restored (or was never touched).
+    restored: bool,
 }
 
 /// A connected output and the CRTC that drives it.
@@ -198,6 +203,7 @@ impl DrmBackend {
                 fb: info.framebuffer(),
                 mode: info.mode(),
                 position: info.position(),
+                restored: false,
             })
             .map_err(|e| RenderError::from_io("read the current CRTC state", e))?;
 
@@ -249,8 +255,8 @@ impl DrmBackend {
     /// measurement on the reference machine (TODO T-029) decides whether a kept
     /// mapping is worth the restructuring.
     fn upload(&self, scanout: &mut Scanout, frame: &Frame) -> Result<(), RenderError> {
-        let pitch = scanout.bo.pitch() as usize;
-        let row_bytes = self.size.width() as usize * BYTES_PER_PIXEL;
+        let pitch = to_usize(scanout.bo.pitch());
+        let row_bytes = to_usize(self.size.width()) * BYTES_PER_PIXEL;
         let mut map = self
             .card
             .map_dumb_buffer(&mut scanout.bo)
@@ -258,7 +264,7 @@ impl DrmBackend {
         let bytes: &mut [u8] = &mut map;
         for y in 0..self.size.height() {
             let Some(row) = frame.row(y) else { break };
-            let start = y as usize * pitch;
+            let start = to_usize(y) * pitch;
             if let Some(dst) = bytes.get_mut(start..start + row_bytes) {
                 dst.copy_from_slice(&row[..row_bytes]);
             }
@@ -411,18 +417,29 @@ impl Backend for DrmBackend {
 }
 
 impl DrmBackend {
-    /// Puts the CRTC back on the framebuffer it scanned out before us, once.
+    /// Puts the CRTC back as it was before us, once: on its previous framebuffer,
+    /// or disabled again if it was scanning nothing. A CRTC we never mode-set is
+    /// left alone.
     fn restore_crtc(&mut self) -> io::Result<()> {
-        let Some(saved_fb) = self.saved.fb.take() else {
+        if self.saved.restored {
             return Ok(());
-        };
-        self.card.set_crtc(
-            self.output.crtc,
-            Some(saved_fb),
-            self.saved.position,
-            &[self.output.connector],
-            self.saved.mode,
-        )
+        }
+        self.saved.restored = true;
+        if self.presented == 0 {
+            return Ok(());
+        }
+        match self.saved.fb {
+            Some(saved_fb) => self.card.set_crtc(
+                self.output.crtc,
+                Some(saved_fb),
+                self.saved.position,
+                &[self.output.connector],
+                self.saved.mode,
+            ),
+            None => self
+                .card
+                .set_crtc(self.output.crtc, None, (0, 0), &[], None),
+        }
     }
 
     /// Frees the scan-out buffers and drops master, once.

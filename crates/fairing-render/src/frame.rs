@@ -19,7 +19,7 @@ use fairing_theme::Rgb;
 use tiny_skia::{Paint, Pixmap, PixmapMut};
 
 use crate::fault::{RenderError, RenderErrorKind};
-use crate::geometry::Size;
+use crate::geometry::{Size, to_usize};
 
 /// Bytes per pixel in every format this crate handles.
 pub const BYTES_PER_PIXEL: usize = 4;
@@ -128,7 +128,7 @@ impl Frame {
     /// Bytes per row (`width * 4`; frames are never padded).
     #[must_use]
     pub const fn stride(&self) -> usize {
-        self.size.width() as usize * BYTES_PER_PIXEL
+        to_usize(self.size.width()) * BYTES_PER_PIXEL
     }
 
     /// The whole buffer, row-major, `stride()` bytes per row.
@@ -144,7 +144,7 @@ impl Frame {
             return None;
         }
         let stride = self.stride();
-        let start = y as usize * stride;
+        let start = to_usize(y) * stride;
         self.data().get(start..start + stride)
     }
 
@@ -155,7 +155,7 @@ impl Frame {
             return None;
         }
         let row = self.row(y)?;
-        let start = x as usize * BYTES_PER_PIXEL;
+        let start = to_usize(x) * BYTES_PER_PIXEL;
         let bytes: [u8; BYTES_PER_PIXEL] =
             row.get(start..start + BYTES_PER_PIXEL)?.try_into().ok()?;
         Some(self.format.decode(bytes))
@@ -199,7 +199,7 @@ impl Frame {
             self.size.width(),
             self.size.height()
         )?;
-        let mut row = Vec::with_capacity(self.size.width() as usize * 3);
+        let mut row = Vec::with_capacity(to_usize(self.size.width()) * 3);
         for y in 0..self.size.height() {
             row.clear();
             for x in 0..self.size.width() {

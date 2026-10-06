@@ -982,9 +982,12 @@ fn schema_types_preview_parameters_and_hides_the_theme_flag() {
     assert_eq!(properties["seconds"]["maximum"], 3600);
     assert_eq!(properties["fps"]["type"], "integer");
     assert_eq!(properties["fps"]["default"], 30);
-    assert_eq!(
-        properties["size"]["pattern"],
-        "^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$"
+    assert!(
+        properties["size"]["pattern"]
+            .as_str()
+            .is_some_and(|p| p.starts_with("^(") && p.contains("1638[0-4]")),
+        "{}",
+        properties["size"]["pattern"]
     );
     assert!(properties.get("theme").is_none());
     assert_eq!(

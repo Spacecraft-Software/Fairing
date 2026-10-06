@@ -26,7 +26,7 @@ where the unsafe that Fairing relies on actually lives.
 | `serde_json` | 1.0.151 | JSON envelopes, schema, matrix | serde-rs/json · MIT OR Apache-2.0 | Very active | RUSTSEC-2022 recursion issues long fixed; none open | Minimal, audited upstream | 10 | `json`, `miniserde` | Hand-rolled compact writer for the envelope shapes |
 | `jiff` | 0.2.37 | ISO 8601 UTC timestamps (§14.5 preferred crate) | BurntSushi/jiff · Unlicense OR MIT | Active; 0.2 line stable | No open advisories | Safe Rust by default | 18 | `chrono` | `chrono::Utc` (one function changes) |
 | `toml` | 1.1.6 | Parsing `doc/requirements.toml` (xtask) and the vendored palette file at build time (`fairing-theme` build script and tests; never in the binary) | toml-rs/toml · MIT OR Apache-2.0 | Active | No open advisories | Safe Rust | 14 | `toml_edit`, `basic-toml` | `basic-toml`; both schemas are flat |
-| `regex` | 1.13.1 | Marker and identifier patterns (xtask only) | rust-lang/regex · MIT OR Apache-2.0 | Active, rust-lang owned | No open advisories | Minimal, audited | 4 | `regex-lite`, hand parser | `regex-lite` or a hand parser for the four fixed patterns |
+| `regex` | 1.13.1 | Marker and identifier patterns (xtask); the `--size` schema-pattern test (`fairing` dev-dependency only) | rust-lang/regex · MIT OR Apache-2.0 | Active, rust-lang owned | No open advisories | Minimal, audited | 4 | `regex-lite`, hand parser | `regex-lite` or a hand parser for the four fixed patterns |
 
 ## Adopted (M1 — rendering)
 

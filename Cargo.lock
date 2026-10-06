@@ -309,6 +309,7 @@ dependencies = [
  "fairing-theme",
  "jiff",
  "predicates",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
