@@ -90,6 +90,8 @@ pub struct Context {
     pub tool_agent: Option<&'static str>,
     /// Whether a TUI was requested and refused.
     pub explore_requested: bool,
+    /// `NO_COLOR` is set and non-empty (the §11.6 mono overlay; read here and nowhere else).
+    pub no_color: bool,
 }
 
 impl Context {
@@ -200,7 +202,14 @@ impl Context {
             profile,
             tool_agent: env.tool_agent,
             explore_requested,
+            no_color: env.no_color,
         }
+    }
+
+    /// Whether an agent or CI harness is reading: no VT may be opened (FRN-SRS-084).
+    #[must_use]
+    pub fn is_agent_environment(&self) -> bool {
+        self.profile != Profile::Human || self.tool_agent.is_some()
     }
 }
 
@@ -308,6 +317,35 @@ mod tests {
         };
         let ctx = Context::compute(Some(Format::Human), None, false, false, &e);
         assert!(!ctx.color);
+        assert!(ctx.no_color);
+    }
+
+    #[test]
+    fn agent_environment_covers_agents_ci_and_informational_harnesses() {
+        assert!(!Context::compute(None, None, false, false, &env()).is_agent_environment());
+        assert!(
+            Context::compute(
+                None,
+                None,
+                false,
+                false,
+                &Env {
+                    agent: true,
+                    ..env()
+                }
+            )
+            .is_agent_environment()
+        );
+        assert!(
+            Context::compute(None, None, false, false, &Env { ci: true, ..env() })
+                .is_agent_environment()
+        );
+        let informational = Env {
+            informational_agent: true,
+            tool_agent: Some("claude-code"),
+            ..env()
+        };
+        assert!(Context::compute(None, None, false, false, &informational).is_agent_environment());
     }
 
     #[test]

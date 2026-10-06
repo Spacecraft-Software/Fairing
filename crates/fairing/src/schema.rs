@@ -65,6 +65,26 @@ pub const SPECS: &[CommandSpec] = &[
             ),
         ],
     },
+    CommandSpec {
+        name: "preview",
+        idempotent: true,
+        destructive: false,
+        supports_dry_run: true,
+        examples: &[
+            (
+                "fairing preview --seconds 3",
+                "Draw the splash on the current VT for three seconds",
+            ),
+            (
+                "fairing preview --backend memory --snapshot frame.ppm --json",
+                "Render off-screen, write a PPM, report as JSON",
+            ),
+            (
+                "fairing preview --dry-run --json",
+                "Report what would be drawn without touching a device",
+            ),
+        ],
+    },
 ];
 
 /// The canonical exit-code map (CLI Standard §4) as a JSON object.
@@ -109,8 +129,8 @@ pub fn tool_schema() -> Value {
         "global_flags": global_flags(),
         "commands": commands,
         "exit_codes": exit_codes(),
-        "error_codes": ["NOT_FOUND", "INVALID_ARGUMENT", "MISSING_ARGUMENT", "FEATURE_UNAVAILABLE", "INTERNAL_ERROR"],
-        "diagnostic_codes": ["OUTPUT_MODE", "TUI_FALLBACK"],
+        "error_codes": ["NOT_FOUND", "PERMISSION_DENIED", "INVALID_ARGUMENT", "MISSING_ARGUMENT", "FEATURE_UNAVAILABLE", "INTERNAL_ERROR"],
+        "diagnostic_codes": ["OUTPUT_MODE", "TUI_FALLBACK", "AGENT_MEMORY_BACKEND", "BACKEND_FALLBACK", "PALETTE_RESOLVED", "SNAPSHOT_WRITTEN", "FIRST_FRAME"],
     })
 }
 
@@ -205,6 +225,36 @@ fn output_schema(name: &str) -> Value {
                 "schema_command": { "type": "string" },
                 "context_files": { "type": "array", "items": { "type": "string" } },
                 "profile": { "type": "object" }
+            }
+        }),
+        "preview" => json!({
+            "type": "object",
+            "required": ["backend", "width", "height", "format", "palette", "seconds", "frames", "fps"],
+            "properties": {
+                "backend": { "type": "string", "enum": ["drm", "fbdev", "memory"] },
+                "device": { "type": ["string", "null"] },
+                "width": { "type": "integer" },
+                "height": { "type": "integer" },
+                "format": { "type": "string" },
+                "palette": {
+                    "type": "object",
+                    "properties": {
+                        "slug": { "type": "string" },
+                        "base": { "type": "string" },
+                        "source": { "type": "string" },
+                        "overlay": { "type": "string" },
+                        "skipped": { "type": "array", "items": { "type": "object" } }
+                    }
+                },
+                "seconds": { "type": "number" },
+                "fps": { "type": "integer" },
+                "frames": { "type": "integer" },
+                "dropped": { "type": "integer" },
+                "first_frame_ms": { "type": ["number", "null"] },
+                "measured_fps": { "type": ["number", "null"] },
+                "snapshot": { "type": ["string", "null"] },
+                "fallbacks": { "type": "array", "items": { "type": "object" } },
+                "planned": { "type": "boolean" }
             }
         }),
         _ => json!({ "type": "object", "description": "A JSON Schema Draft 2020-12 document" }),

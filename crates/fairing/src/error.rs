@@ -21,6 +21,8 @@ use crate::time::now_iso8601;
 pub enum ErrorCode {
     /// Referenced resource does not exist (exit 3).
     NotFound,
+    /// The resource exists but refused us: not DRM master, no `video` group (exit 4).
+    PermissionDenied,
     /// Argument failed validation (exit 2).
     InvalidArgument,
     /// Required argument missing in non-interactive mode (exit 2).
@@ -37,6 +39,7 @@ impl ErrorCode {
     pub const fn exit_code(self) -> u8 {
         match self {
             Self::NotFound => 3,
+            Self::PermissionDenied => 4,
             Self::InvalidArgument | Self::MissingArgument => 2,
             Self::FeatureUnavailable | Self::InternalError => 1,
         }
@@ -115,6 +118,46 @@ impl AppError {
         Self::new(ErrorCode::InternalError, message, "fairing --help", command)
     }
 
+    /// `PERMISSION_DENIED` (exit 4).
+    pub fn permission_denied(
+        message: impl Into<String>,
+        hint: impl Into<String>,
+        command: &str,
+    ) -> Self {
+        Self::new(ErrorCode::PermissionDenied, message, hint, command)
+    }
+
+    /// Maps a rendering failure onto the exit-code table, keeping the library's wording.
+    pub fn from_render(error: &fairing_render::RenderError, hint: &str, command: &str) -> Self {
+        use fairing_render::RenderErrorKind as Kind;
+        let message = error.to_string();
+        match error.kind() {
+            Kind::NotFound => Self::not_found(message, hint, command),
+            Kind::PermissionDenied | Kind::Busy => Self::permission_denied(message, hint, command),
+            Kind::Unsupported => Self::new(ErrorCode::FeatureUnavailable, message, hint, command),
+            Kind::InvalidGeometry => Self::invalid_argument(message, hint, command),
+            // Lost, Timeout, Font, Io and anything newer: the bug-report code.
+            _ => Self::internal(message, command),
+        }
+    }
+
+    /// Maps an exhausted backend chain: permission trouble wins, then absence.
+    pub fn from_no_backend(failure: &fairing_render::NoBackend, hint: &str, command: &str) -> Self {
+        use fairing_render::RenderErrorKind as Kind;
+        let message = failure.to_string();
+        let kinds: Vec<Kind> = failure.attempts.iter().map(|a| a.error.kind()).collect();
+        if kinds
+            .iter()
+            .any(|k| matches!(k, Kind::PermissionDenied | Kind::Busy))
+        {
+            Self::permission_denied(message, hint, command)
+        } else if kinds.iter().all(|k| matches!(k, Kind::NotFound)) {
+            Self::not_found(message, hint, command)
+        } else {
+            Self::new(ErrorCode::FeatureUnavailable, message, hint, command)
+        }
+    }
+
     /// Writes the error to stderr in the context's rendering and returns the exit code.
     #[must_use]
     pub fn report(&self, context: &Context) -> u8 {
@@ -154,6 +197,32 @@ mod tests {
         assert_eq!(AppError::missing_argument("a", "b", "c").exit_code, 2);
         assert_eq!(AppError::feature_unavailable("a", "c").exit_code, 1);
         assert_eq!(AppError::internal("a", "c").exit_code, 1);
+        assert_eq!(AppError::permission_denied("a", "b", "c").exit_code, 4);
+    }
+
+    #[test]
+    fn render_errors_map_onto_the_table() {
+        use fairing_render::{RenderError, RenderErrorKind};
+        let denied = RenderError::new(RenderErrorKind::PermissionDenied, "not master");
+        assert_eq!(
+            AppError::from_render(&denied, "h", "c").code,
+            ErrorCode::PermissionDenied
+        );
+        let missing = RenderError::new(RenderErrorKind::NotFound, "no card");
+        assert_eq!(
+            AppError::from_render(&missing, "h", "c").code,
+            ErrorCode::NotFound
+        );
+        let odd = RenderError::new(RenderErrorKind::Unsupported, "16 bpp");
+        assert_eq!(
+            AppError::from_render(&odd, "h", "c").code,
+            ErrorCode::FeatureUnavailable
+        );
+        let io = RenderError::new(RenderErrorKind::Io, "write");
+        assert_eq!(
+            AppError::from_render(&io, "h", "c").code,
+            ErrorCode::InternalError
+        );
     }
 
     #[test]

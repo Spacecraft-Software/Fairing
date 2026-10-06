@@ -9,6 +9,7 @@
 //! markers document intent today and become binding when the set is baselined.
 
 use assert_cmd::Command;
+use fairing_theme::{Role, Theme};
 use predicates::prelude::*;
 
 const ANSI: &str = "\u{1b}[";
@@ -27,6 +28,7 @@ fn fairing() -> Command {
         "FORCE_COLOR",
         "CLICOLOR",
         "TERM",
+        "SPACECRAFT_THEME",
     ] {
         cmd.env_remove(var);
     }
@@ -410,4 +412,314 @@ fn help_exits_zero_with_footer_attribution() {
             "https://Fairing.SpacecraftSoftware.org/",
         ))
         .stdout(predicate::str::contains("Maintained by Mohamed Hammad"));
+}
+
+/// Preview arguments that never touch a device and finish in one frame.
+const MEMORY_FRAME: [&str; 8] = [
+    "preview",
+    "--backend",
+    "memory",
+    "--seconds",
+    "0",
+    "--size",
+    "64x36",
+    "--json",
+];
+
+#[test]
+fn preview_memory_snapshot_reports_and_writes_a_ppm_with_the_percentage() {
+    // Verifies: FRN-SRS-081, FRN-SRS-053
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let snapshot = dir.path().join("frame.ppm");
+    let out = fairing()
+        .args([
+            "preview",
+            "--backend",
+            "memory",
+            "--seconds",
+            "0",
+            "--size",
+            "640x360",
+            "--snapshot",
+        ])
+        .arg(&snapshot)
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value = json(&out);
+    assert_eq!(value["data"]["backend"], "memory");
+    assert_eq!(value["data"]["width"], 640);
+    assert_eq!(value["data"]["height"], 360);
+    assert_eq!(value["data"]["frames"], 1);
+    assert_eq!(value["data"]["planned"], false);
+    assert_eq!(value["data"]["palette"]["slug"], "steelbore");
+    assert_eq!(value["data"]["palette"]["source"], "family-default");
+    assert_eq!(
+        value["data"]["snapshot"].as_str(),
+        Some(snapshot.display().to_string().as_str())
+    );
+    let bytes = std::fs::read(&snapshot).unwrap_or_else(|e| panic!("{e}"));
+    let header = b"P6\n640 360\n255\n";
+    assert!(bytes.starts_with(header));
+    assert_eq!(bytes.len(), header.len() + 640 * 360 * 3);
+    let theme = Theme::family_default();
+    let pixels = bytes[header.len()..].chunks_exact(3);
+    let paints = |role: Role| {
+        let c = theme.color(role);
+        pixels.clone().filter(|p| *p == [c.r, c.g, c.b]).count()
+    };
+    assert!(
+        paints(Role::Background) > 640 * 360 / 2,
+        "canvas is the background role"
+    );
+    assert!(paints(Role::Accent) > 100, "the bar is full at 100%");
+    assert!(
+        paints(Role::Foreground) > 20,
+        "percentage and status text are drawn"
+    );
+}
+
+#[test]
+fn preview_honours_the_duration() {
+    // Verifies: FRN-SRS-081
+    let out = fairing()
+        .args([
+            "preview",
+            "--backend",
+            "memory",
+            "--seconds",
+            "0.3",
+            "--size",
+            "160x90",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value = json(&out);
+    assert_eq!(value["data"]["seconds"], 0.3);
+    assert_eq!(value["data"]["fps"], 30);
+    assert!(
+        value["data"]["frames"].as_u64().is_some_and(|f| f >= 2),
+        "{value}"
+    );
+    assert!(
+        value["data"]["measured_fps"]
+            .as_f64()
+            .is_some_and(|f| f > 0.0)
+    );
+    assert!(
+        value["data"]["first_frame_ms"]
+            .as_f64()
+            .is_some_and(|ms| ms > 0.0)
+    );
+}
+
+#[test]
+fn agent_environments_preview_into_memory_and_never_open_a_vt() {
+    // Verifies: FRN-SRS-084
+    for (var, value) in [
+        ("AI_AGENT", "claude-code_2-1-218_agent"),
+        ("CI", "true"),
+        ("CLAUDECODE", "1"),
+    ] {
+        let output = fairing()
+            .env(var, value)
+            .args(["preview", "--seconds", "0", "--size", "64x36", "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        assert_eq!(json(&output.stdout)["data"]["backend"], "memory", "{var}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("AGENT_MEMORY_BACKEND"), "{var}: {stderr}");
+    }
+    let output = fairing()
+        .env("AI_AGENT", "1")
+        .args(["preview", "--backend", "drm", "--seconds", "0"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .get_output()
+        .clone();
+    assert_eq!(json(&output.stderr)["error"]["code"], "INVALID_ARGUMENT");
+    fairing()
+        .env("AI_AGENT", "1")
+        .args(MEMORY_FRAME)
+        .assert()
+        .success();
+}
+
+#[test]
+fn preview_theme_flag_is_unavailable_until_m2() {
+    // Verifies: FRN-SRS-082
+    let output = fairing()
+        .args(MEMORY_FRAME)
+        .args(["--theme", "steelbore.ncl"])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    assert_eq!(json(&output.stderr)["error"]["code"], "FEATURE_UNAVAILABLE");
+}
+
+#[test]
+fn preview_rejects_unknown_palettes_and_out_of_range_values() {
+    // Verifies: FRN-SRS-082
+    let output = fairing()
+        .args(MEMORY_FRAME)
+        .args(["--palette", "no-such-palette"])
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    let error = json(&output.stderr);
+    assert_eq!(error["error"]["code"], "INVALID_ARGUMENT");
+    assert_eq!(
+        error["error"]["hint"],
+        "fairing preview --palette steelbore"
+    );
+    for bad in [
+        ["--seconds", "-1"],
+        ["--size", "10"],
+        ["--fps", "0"],
+        ["--seconds", "nan"],
+    ] {
+        let output = fairing()
+            .args(["preview", "--backend", "memory", "--json"])
+            .args(bad)
+            .assert()
+            .code(2)
+            .get_output()
+            .clone();
+        assert_eq!(
+            json(&output.stderr)["error"]["code"],
+            "INVALID_ARGUMENT",
+            "{bad:?}"
+        );
+    }
+}
+
+#[test]
+fn preview_palette_selection_follows_the_resolution_order() {
+    // Verifies: FRN-SRS-045
+    let report = |cmd: &mut Command| {
+        let out = cmd.assert().success().get_output().stdout.clone();
+        json(&out)["data"]["palette"].clone()
+    };
+    let pinned = report(
+        fairing()
+            .args(MEMORY_FRAME)
+            .args(["--palette", "steelbore-high-contrast"]),
+    );
+    assert_eq!(pinned["slug"], "steelbore-high-contrast");
+    assert_eq!(pinned["overlay"], "pinned");
+    assert_eq!(pinned["base"], "steelbore");
+
+    let from_env = report(
+        fairing()
+            .env("SPACECRAFT_THEME", "tokyonight")
+            .args(MEMORY_FRAME),
+    );
+    assert_eq!(from_env["slug"], "tokyonight");
+    assert_eq!(from_env["source"], "environment");
+
+    let flag_wins = report(
+        fairing()
+            .env("SPACECRAFT_THEME", "tokyonight")
+            .args(MEMORY_FRAME)
+            .args(["--palette", "steelbore-green"]),
+    );
+    assert_eq!(flag_wins["slug"], "steelbore-green");
+
+    let mono = report(
+        fairing()
+            .env("NO_COLOR", "1")
+            .env("SPACECRAFT_THEME", "steelbore-blue")
+            .args(MEMORY_FRAME),
+    );
+    assert_eq!(mono["slug"], "steelbore-mono");
+    assert_eq!(mono["overlay"], "mono");
+    assert_eq!(mono["base"], "steelbore-blue");
+
+    let typo = report(
+        fairing()
+            .env("SPACECRAFT_THEME", "Steelbore")
+            .args(MEMORY_FRAME),
+    );
+    assert_eq!(typo["slug"], "steelbore");
+    assert_eq!(typo["skipped"][0]["slug"], "Steelbore");
+}
+
+#[test]
+fn preview_dry_run_plans_without_opening_a_device() {
+    // Verifies: FRN-SRS-081
+    let out = fairing()
+        .args(["preview", "--dry-run", "--json", "--seconds", "2"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value = json(&out);
+    assert_eq!(value["metadata"]["dry_run"], true);
+    assert_eq!(value["data"]["planned"], true);
+    assert_eq!(value["data"]["backend"], "drm");
+    assert_eq!(value["data"]["frames"], 0);
+    fairing()
+        .args(["preview", "--dry-run", "--format", "human"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would draw on drm"));
+}
+
+#[test]
+fn preview_without_any_device_exits_not_found_with_the_memory_hint() {
+    // Verifies: FRN-SRS-082
+    if std::path::Path::new("/dev/dri").exists() || std::path::Path::new("/dev/fb0").exists() {
+        return; // A real output exists; the hardware-gated test below covers it.
+    }
+    let output = fairing()
+        .args(["preview", "--seconds", "0", "--json"])
+        .assert()
+        .code(3)
+        .get_output()
+        .clone();
+    let error = json(&output.stderr);
+    assert_eq!(error["error"]["code"], "NOT_FOUND");
+    assert_eq!(
+        error["error"]["hint"],
+        "fairing preview --backend memory --snapshot frame.ppm"
+    );
+}
+
+/// Draws on the real output; needs a DRM device or `/dev/fb0` and a free VT.
+///
+/// `FAIRING_HW_TESTS=1 cargo test -p fairing -- --ignored` on a text console.
+#[test]
+#[ignore = "needs a DRM device or /dev/fb0 and a free VT; run with FAIRING_HW_TESTS=1"]
+fn preview_on_the_vt_draws_and_restores_the_console() {
+    // Verifies: FRN-SRS-083
+    if std::env::var_os("FAIRING_HW_TESTS").is_none() {
+        return;
+    }
+    let out = fairing()
+        .args(["preview", "--seconds", "1", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value = json(&out);
+    let backend = value["data"]["backend"].as_str().unwrap_or_default();
+    assert!(backend == "drm" || backend == "fbdev", "{value}");
+    assert!(
+        value["data"]["frames"].as_u64().is_some_and(|f| f >= 20),
+        "{value}"
+    );
 }
