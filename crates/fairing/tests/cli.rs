@@ -29,6 +29,8 @@ fn fairing() -> Command {
         "CLICOLOR",
         "TERM",
         "SPACECRAFT_THEME",
+        "NOTIFY_SOCKET",
+        "JOURNAL_STREAM",
     ] {
         cmd.env_remove(var);
     }
@@ -586,17 +588,244 @@ fn agent_environments_preview_into_memory_and_never_open_a_vt() {
         .success();
 }
 
+/// The reference theme in the repository.
+fn reference_theme() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/steelbore.ncl")
+}
+
 #[test]
-fn preview_theme_flag_is_unavailable_until_m2() {
-    // Verifies: FRN-SRS-082
+#[cfg(feature = "theme-tool")]
+fn preview_draws_a_theme_from_its_source_or_its_artefact() {
+    // Verifies: FRN-SRS-045
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let artefact = dir.path().join("steelbore.fairing");
+    fairing()
+        .args(["theme", "compile"])
+        .arg(reference_theme())
+        .arg("--output")
+        .arg(&artefact)
+        .arg("--json")
+        .assert()
+        .success();
+    for theme in [reference_theme(), artefact] {
+        let out = fairing()
+            .args(MEMORY_FRAME)
+            .arg("--theme")
+            .arg(&theme)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let data = &json(&out)["data"];
+        assert_eq!(data["theme"], "steelbore", "{}", theme.display());
+        assert_eq!(data["palette"]["source"], "declared-default");
+    }
     let output = fairing()
         .args(MEMORY_FRAME)
-        .args(["--theme", "steelbore.ncl"])
+        .args(["--theme", "/nonexistent/theme.fairing"])
         .assert()
-        .code(1)
+        .code(3)
         .get_output()
         .clone();
-    assert_eq!(json(&output.stderr)["error"]["code"], "FEATURE_UNAVAILABLE");
+    assert_eq!(json(&output.stderr)["error"]["code"], "NOT_FOUND");
+}
+
+/// A copy of the reference theme with one substitution, in `dir`.
+#[cfg(feature = "theme-tool")]
+fn edited_theme(dir: &std::path::Path, from: &str, to: &str) -> std::path::PathBuf {
+    let text = std::fs::read_to_string(reference_theme()).unwrap_or_else(|e| panic!("{e}"));
+    let edited = text.replacen(from, to, 1);
+    assert_ne!(edited, text, "`{from}` not found in the reference theme");
+    let path = dir.join("edited.ncl");
+    std::fs::write(&path, edited).unwrap_or_else(|e| panic!("{e}"));
+    path
+}
+
+#[test]
+#[cfg(not(feature = "theme-tool"))]
+fn without_theme_tool_nickel_sources_are_unavailable() {
+    // The initrd build carries no Nickel evaluator: a source theme is refused
+    // with FEATURE_UNAVAILABLE, never misread as an artefact.
+    for args in [
+        vec!["theme", "check", "--json"],
+        MEMORY_FRAME.iter().copied().chain(["--theme"]).collect(),
+    ] {
+        let output = fairing()
+            .args(&args)
+            .arg(reference_theme())
+            .assert()
+            .code(1)
+            .get_output()
+            .clone();
+        assert_eq!(
+            json(&output.stderr)["error"]["code"],
+            "FEATURE_UNAVAILABLE",
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "theme-tool")]
+fn theme_check_accepts_the_reference_theme() {
+    // Verifies: FRN-SRS-040, FRN-SRS-046
+    let out = fairing()
+        .args(["theme", "check"])
+        .arg(reference_theme())
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let data = &json(&out)["data"];
+    assert_eq!(data["valid"], true);
+    assert_eq!(data["name"], "steelbore");
+    assert_eq!(data["palette"], "steelbore");
+}
+
+#[test]
+#[cfg(feature = "theme-tool")]
+fn theme_check_exits_2_with_the_nickel_diagnostic() {
+    // Verifies: FRN-SRS-041
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let broken = edited_theme(dir.path(), "width = 640,", "width = \"wide\",");
+    let output = fairing()
+        .args(["theme", "check"])
+        .arg(&broken)
+        .arg("--json")
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .get_output()
+        .clone();
+    let error = json(&output.stderr);
+    assert_eq!(error["error"]["code"], "INVALID_ARGUMENT");
+    let detail = error["error"]["detail"].as_str().unwrap_or_default();
+    assert!(detail.contains("width"), "{detail}");
+    assert!(!detail.contains(ANSI), "{detail}");
+    fairing()
+        .args(["--format", "human", "theme", "check"])
+        .arg(&broken)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::starts_with("[ERROR] "))
+        .stderr(predicate::str::contains("width"))
+        .stderr(predicate::str::contains("  hint: fairing theme check"));
+}
+
+#[test]
+#[cfg(feature = "theme-tool")]
+fn themes_may_not_borrow_another_palette_or_spell_a_colour() {
+    // Verifies: FRN-SRS-043, FRN-SRS-044
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let foreign = edited_theme(
+        dir.path(),
+        "fill = 'accent",
+        "fill = { token = \"Electric Blue\" }",
+    );
+    let output = fairing()
+        .args(["theme", "check"])
+        .arg(&foreign)
+        .arg("--json")
+        .assert()
+        .code(2)
+        .get_output()
+        .clone();
+    let message = json(&output.stderr)["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(message.contains("steelbore-blue"), "{message}");
+    let literal = edited_theme(dir.path(), "fill = 'accent", "fill = \"#FF5E00\"");
+    fairing()
+        .args(["theme", "check"])
+        .arg(&literal)
+        .arg("--json")
+        .assert()
+        .code(2);
+    let own_token = edited_theme(
+        dir.path(),
+        "fill = 'accent",
+        "fill = { token = \"Plasma Orange\" }",
+    );
+    fairing()
+        .args(["theme", "check"])
+        .arg(&own_token)
+        .arg("--json")
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(feature = "theme-tool")]
+fn theme_compile_writes_an_artefact_inspect_can_read() {
+    // Verifies: FRN-SRS-042, FRN-SRS-047
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let artefact = dir.path().join("out.fairing");
+    let planned = fairing()
+        .args(["theme", "compile"])
+        .arg(reference_theme())
+        .arg("--output")
+        .arg(&artefact)
+        .args(["--dry-run", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(json(&planned)["data"]["written"], false);
+    assert!(!artefact.exists(), "a dry run writes nothing");
+    let out = fairing()
+        .args(["theme", "compile"])
+        .arg(reference_theme())
+        .arg("--output")
+        .arg(&artefact)
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let data = &json(&out)["data"];
+    assert_eq!(data["written"], true);
+    let bytes = data["bytes"].as_u64().unwrap_or(u64::MAX);
+    assert!(bytes <= 4 * 1024 * 1024, "{bytes}");
+    assert_eq!(
+        std::fs::metadata(&artefact).map(|m| m.len()).ok(),
+        Some(bytes)
+    );
+    // The 5 ms budget belongs to the reference machine; a debug build on any
+    // CI host still loads the reference theme well inside it.
+    assert!(
+        data["load_ms"].as_f64().is_some_and(|ms| ms < 5.0),
+        "{data}"
+    );
+    let inspected = fairing()
+        .args(["theme", "inspect"])
+        .arg(&artefact)
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let inspected = &json(&inspected)["data"];
+    assert_eq!(inspected["name"], "steelbore");
+    assert_eq!(inspected["meta"]["boot"]["bar"]["fill"], "accent");
+    let garbage = dir.path().join("garbage.fairing");
+    std::fs::write(&garbage, b"not a theme").unwrap_or_else(|e| panic!("{e}"));
+    fairing()
+        .args(["theme", "inspect"])
+        .arg(&garbage)
+        .arg("--json")
+        .assert()
+        .code(2);
+    fairing()
+        .args(["theme", "inspect", "/nonexistent.fairing", "--json"])
+        .assert()
+        .code(3);
 }
 
 #[test]
@@ -966,7 +1195,7 @@ fn a_closed_stdout_ends_the_run_quietly() {
 }
 
 #[test]
-fn schema_types_preview_parameters_and_hides_the_theme_flag() {
+fn schema_types_preview_parameters_and_hides_the_test_seams() {
     // Verifies: FRN-SRS-081
     let out = fairing()
         .args(["schema", "preview"])
@@ -989,7 +1218,7 @@ fn schema_types_preview_parameters_and_hides_the_theme_flag() {
         "{}",
         properties["size"]["pattern"]
     );
-    assert!(properties.get("theme").is_none());
+    assert_eq!(properties["theme"]["type"], "string");
     assert_eq!(
         document["output_schema"]["properties"]["data"]["properties"]["backend"]["enum"],
         serde_json::json!(["auto", "drm", "fbdev", "memory"])
@@ -998,8 +1227,14 @@ fn schema_types_preview_parameters_and_hides_the_theme_flag() {
         .args(["preview", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("--theme").not())
+        .stdout(predicate::str::contains("--theme"))
         .stdout(predicate::str::contains("--palette"));
+    fairing()
+        .args(["splash", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--exit-after").not())
+        .stdout(predicate::str::contains("--stage"));
     let out = fairing()
         .arg("schema")
         .assert()
@@ -1037,4 +1272,213 @@ fn preview_on_the_vt_draws_and_restores_the_console() {
         value["data"]["frames"].as_u64().is_some_and(|f| f >= 20),
         "{value}"
     );
+}
+
+/// Arguments of a splash run confined to `dir`: memory backend, no D-Bus, its own files.
+fn splash_args(dir: &std::path::Path, stage: &str) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = [
+        "splash",
+        "--stage",
+        stage,
+        "--backend",
+        "memory",
+        "--size",
+        "64x36",
+        "--bus",
+        "none",
+        "--cmdline",
+        "",
+    ]
+    .iter()
+    .map(Into::into)
+    .collect();
+    for (flag, sub) in [
+        ("--runtime-dir", "run"),
+        ("--state-dir", "var"),
+        ("--sysroot-state-dir", "sysroot"),
+    ] {
+        args.push(flag.into());
+        args.push(dir.join(sub).into_os_string());
+    }
+    args
+}
+
+/// A splash run confined to `dir`.
+fn splash_in(dir: &std::path::Path, stage: &str) -> Command {
+    let mut cmd = fairing();
+    cmd.args(splash_args(dir, stage));
+    cmd
+}
+
+/// A datagram socket standing in for systemd's `NOTIFY_SOCKET`.
+fn notify_socket(dir: &std::path::Path) -> (std::os::unix::net::UnixDatagram, std::path::PathBuf) {
+    let path = dir.join("notify");
+    let socket = std::os::unix::net::UnixDatagram::bind(&path).unwrap_or_else(|e| panic!("{e}"));
+    socket
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap_or_else(|e| panic!("{e}"));
+    (socket, path)
+}
+
+fn receive(socket: &std::os::unix::net::UnixDatagram) -> String {
+    let mut buf = [0_u8; 64];
+    let n = socket.recv(&mut buf).unwrap_or_else(|e| panic!("{e}"));
+    String::from_utf8_lossy(&buf[..n]).trim().to_owned()
+}
+
+#[test]
+fn splash_notifies_readiness_and_hands_the_bar_across_switch_root() {
+    // Verifies: FRN-SRS-014, FRN-SRS-036
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (socket, path) = notify_socket(dir.path());
+    let initrd = splash_in(dir.path(), "initrd")
+        .env("NOTIFY_SOCKET", &path)
+        .args(["--exit-after", "0.3", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let initrd = json(&initrd)["data"].clone();
+    assert_eq!(initrd["reason"], "exit-after");
+    assert_eq!(receive(&socket), "READY=1");
+    assert_eq!(receive(&socket), "STOPPING=1");
+    assert!(dir.path().join("run/state").exists(), "no handoff written");
+
+    let system = splash_in(dir.path(), "system")
+        .args(["--exit-after", "0.2", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let system = json(&system)["data"].clone();
+    let carried = system["carried_bar"].as_f64().unwrap_or(-1.0);
+    let handed = initrd["bar"].as_f64().unwrap_or(-2.0);
+    assert!((carried - handed).abs() < 1e-3, "{carried} vs {handed}");
+    assert!(
+        dir.path().join("var/boot-duration").exists(),
+        "no cache written"
+    );
+}
+
+#[test]
+fn splash_releases_the_output_within_100_ms_of_sigterm() {
+    // Verifies: FRN-SRS-032, FRN-SRS-033
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (socket, path) = notify_socket(dir.path());
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_fairing"))
+        .args(splash_args(dir.path(), "system"))
+        .env_remove("AI_AGENT")
+        .env_remove("AGENT")
+        .env_remove("CI")
+        .env_remove("CLAUDECODE")
+        .env("NOTIFY_SOCKET", &path)
+        .arg("--json")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(receive(&socket), "READY=1");
+    // Let it reach its steady state of pacing frames.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let sent = std::time::Instant::now();
+    let killed = std::process::Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(killed.success());
+    let status = child.wait().unwrap_or_else(|e| panic!("{e}"));
+    let elapsed = sent.elapsed();
+    assert!(status.success(), "{status}");
+    assert!(
+        elapsed < std::time::Duration::from_millis(100),
+        "{elapsed:?}"
+    );
+    let mut stdout = String::new();
+    std::io::Read::read_to_string(
+        &mut child.stdout.take().unwrap_or_else(|| panic!("stdout")),
+        &mut stdout,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let data = json(stdout.as_bytes())["data"].clone();
+    assert_eq!(data["reason"], "handoff");
+    assert_eq!(data["bar"], 1.0, "the handoff frame shows 100%");
+}
+
+#[test]
+fn splash_steps_aside_without_failing_the_boot() {
+    // Verifies: FRN-SRS-003
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let garbage = dir.path().join("theme.fairing");
+    std::fs::write(&garbage, b"FRNTHEME garbage").unwrap_or_else(|e| panic!("{e}"));
+    let (socket, path) = notify_socket(dir.path());
+    let out = splash_in(dir.path(), "system")
+        .env("NOTIFY_SOCKET", &path)
+        .arg("--theme")
+        .arg(&garbage)
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(json(&out.stdout)["data"]["reason"], "theme-unreadable");
+    assert_eq!(receive(&socket), "READY=1");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("THEME_UNREADABLE"), "{stderr}");
+}
+
+#[test]
+fn splash_takes_its_palette_from_the_kernel_command_line() {
+    // Verifies: FRN-SRS-045
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let out = fairing()
+        .args(["splash", "--stage", "system", "--dry-run", "--json"])
+        .args(["--cmdline", "quiet splash fairing.theme=tokyonight"])
+        .arg("--runtime-dir")
+        .arg(dir.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let data = &json(&out)["data"];
+    assert_eq!(data["planned"], true);
+    assert_eq!(data["palette"]["slug"], "tokyonight");
+    assert_eq!(data["palette"]["source"], "kernel-parameter");
+    assert_eq!(data["chain"], serde_json::json!(["drm", "fbdev"]));
+}
+
+#[test]
+fn splash_under_an_agent_never_opens_a_vt() {
+    // Verifies: FRN-SRS-084
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let output = fairing()
+        .env("AI_AGENT", "1")
+        .args([
+            "splash",
+            "--stage",
+            "system",
+            "--bus",
+            "none",
+            "--exit-after",
+            "0",
+            "--size",
+            "64x36",
+        ])
+        .arg("--runtime-dir")
+        .arg(dir.path().join("run"))
+        .arg("--state-dir")
+        .arg(dir.path().join("var"))
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(json(&output.stdout)["data"]["backend"], "memory");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("AGENT_MEMORY_BACKEND"));
+    fairing()
+        .env("AI_AGENT", "1")
+        .args(["splash", "--stage", "system", "--backend", "drm", "--json"])
+        .assert()
+        .code(2);
 }
