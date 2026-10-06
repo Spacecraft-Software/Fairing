@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# cargo-audit configuration. Each ignored advisory is an accepted advisory in
+# DEPENDENCIES.md, with its argument and review gate, and is mirrored in
+# deny.toml.
+
+[advisories]
+ignore = [
+  # imbl-sized-chunks 0.1.3 (via nickel-lang-vector): theme tool only.
+  "RUSTSEC-2026-0292",
+]
