@@ -669,7 +669,7 @@ fn without_theme_tool_nickel_sources_are_unavailable() {
 #[test]
 #[cfg(feature = "theme-tool")]
 fn theme_check_accepts_the_reference_theme() {
-    // Verifies: FRN-SRS-040, FRN-SRS-046
+    // Verifies: FRN-SRS-040
     let out = fairing()
         .args(["theme", "check"])
         .arg(reference_theme())
@@ -683,6 +683,46 @@ fn theme_check_accepts_the_reference_theme() {
     assert_eq!(data["valid"], true);
     assert_eq!(data["name"], "steelbore");
     assert_eq!(data["palette"], "steelbore");
+}
+
+#[test]
+#[cfg(feature = "theme-tool")]
+fn a_theme_without_the_complete_layout_set_is_refused() {
+    // Verifies: FRN-SRS-046
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let no_prompt = edited_theme(
+        dir.path(),
+        "      prompt = { x = 560, y = 780, width = 800, height = 140, size = 28 },\n",
+        "",
+    );
+    let no_shutdown = {
+        let text = std::fs::read_to_string(reference_theme()).unwrap_or_else(|e| panic!("{e}"));
+        let start = text
+            .find("    shutdown = {")
+            .unwrap_or_else(|| panic!("no shutdown"));
+        let end = start
+            + text[start..]
+                .find("    },\n")
+                .unwrap_or_else(|| panic!("no end"))
+            + 7;
+        let path = dir.path().join("no-shutdown.ncl");
+        std::fs::write(&path, format!("{}{}", &text[..start], &text[end..]))
+            .unwrap_or_else(|e| panic!("{e}"));
+        path
+    };
+    for (missing, theme) in [("prompt", no_prompt), ("shutdown", no_shutdown)] {
+        let output = fairing()
+            .args(["theme", "check"])
+            .arg(&theme)
+            .arg("--json")
+            .assert()
+            .code(2)
+            .get_output()
+            .clone();
+        let error = json(&output.stderr);
+        let detail = error["error"]["detail"].as_str().unwrap_or_default();
+        assert!(detail.contains(missing), "{missing}: {detail}");
+    }
 }
 
 #[test]
@@ -1363,6 +1403,24 @@ fn splash_notifies_readiness_and_hands_the_bar_across_switch_root() {
 }
 
 #[test]
+fn splash_skips_an_unregistered_palette_instead_of_failing() {
+    // Verifies: FRN-SRS-045
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let output = splash_in(dir.path(), "system")
+        .args(["--palette", "tokyo-night", "--dry-run", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(json(&output.stdout)["data"]["palette"]["slug"], "steelbore");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("PALETTE_SKIPPED"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn splash_releases_the_output_within_100_ms_of_sigterm() {
     // Verifies: FRN-SRS-032, FRN-SRS-033
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -1382,6 +1440,10 @@ fn splash_releases_the_output_within_100_ms_of_sigterm() {
     assert_eq!(receive(&socket), "READY=1");
     // Let it reach its steady state of pacing frames.
     std::thread::sleep(std::time::Duration::from_millis(200));
+    // What greetd's start does before it stops the splash: the marker makes
+    // this SIGTERM the handoff.
+    std::fs::create_dir_all(dir.path().join("run")).unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(dir.path().join("run/handoff"), b"").unwrap_or_else(|e| panic!("{e}"));
     let sent = std::time::Instant::now();
     let killed = std::process::Command::new("kill")
         .args(["-TERM", &child.id().to_string()])
@@ -1408,7 +1470,8 @@ fn splash_releases_the_output_within_100_ms_of_sigterm() {
 
 #[test]
 fn splash_steps_aside_without_failing_the_boot() {
-    // Verifies: FRN-SRS-003
+    // An unreadable theme is the PRD interface table's step-aside case: exit 0,
+    // READY=1, the reason in the journal.
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let garbage = dir.path().join("theme.fairing");
     std::fs::write(&garbage, b"FRNTHEME garbage").unwrap_or_else(|e| panic!("{e}"));
