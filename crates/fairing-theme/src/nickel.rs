@@ -27,9 +27,11 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use nickel_lang_core::error::Error as NickelError;
 use nickel_lang_core::error::report::{ColorOpt, report_as_str};
 use nickel_lang_core::eval::cache::CacheImpl;
 use nickel_lang_core::program::{Program, ProgramBuilder};
+use nickel_lang_core::serialize::{ExportFormat, validate};
 
 use crate::compile::CONTRACT;
 use crate::fault::{ThemeError, ThemeErrorKind};
@@ -37,9 +39,11 @@ use crate::fault::{ThemeError, ThemeErrorKind};
 /// How long a theme may take to evaluate.
 ///
 /// The reference theme evaluates in milliseconds; a theme still running after
-/// half a minute is looping, and a build that waits forever is worse than a
-/// refusal naming the cause.
-pub const EVALUATION_DEADLINE: Duration = Duration::from_secs(30);
+/// five seconds is looping, and a build that waits forever is worse than a
+/// refusal naming the cause. The deadline also bounds memory: a runaway
+/// evaluation grows by the better part of a gigabyte a second. The process
+/// exits on the refusal, which ends the evaluation thread with it.
+pub const EVALUATION_DEADLINE: Duration = Duration::from_secs(5);
 
 /// Stack size of the evaluation thread.
 ///
@@ -47,6 +51,17 @@ pub const EVALUATION_DEADLINE: Duration = Duration::from_secs(30);
 /// thread stack overflows (aborting the process) on deeply nested input that
 /// 64 MiB evaluates normally.
 const EVALUATION_STACK: usize = 64 * 1024 * 1024;
+
+/// Largest theme file evaluated; the reference theme is under 2 KiB.
+pub const MAX_SOURCE_BYTES: u64 = 1024 * 1024;
+
+/// Deepest bracket nesting evaluated.
+///
+/// Nickel recurses on nesting, and a deep enough literal overflows even the
+/// 64 MiB evaluation stack, which aborts the process instead of returning an
+/// error. A theme needs a handful of levels. Files the theme imports are not
+/// scanned; this bounds the file the operator hands over.
+pub const MAX_NESTING: usize = 256;
 
 /// Name of the wrapper source, inside the theme's directory so its relative
 /// import resolves there; the angle brackets cannot collide with a real file.
@@ -80,6 +95,7 @@ pub fn evaluate(path: &Path) -> Result<serde_json::Value, ThemeError> {
         string_literal(file)?
     );
     let wrapper = directory.join(WRAPPER_NAME).into_os_string();
+    check_shape(&absolute)?;
 
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
@@ -108,15 +124,69 @@ pub fn evaluate(path: &Path) -> Result<serde_json::Value, ThemeError> {
 }
 
 fn evaluate_program(mut program: Program<CacheImpl>) -> Result<serde_json::Value, ThemeError> {
-    match program.eval_full_for_export() {
-        Ok(value) => serde_json::to_value(&value)
-            .map_err(|e| source_error(format!("the evaluated theme is not JSON data: {e}"))),
-        Err(error) => {
-            let mut files = program.files();
-            let report = report_as_str(&mut files, error, ColorOpt::Never);
-            Err(ThemeError::new(ThemeErrorKind::Contract, report))
+    let value = match program.eval_full_for_export() {
+        Ok(value) => value,
+        Err(error) => return Err(diagnostic(&program, error)),
+    };
+    // A value JSON cannot hold (a function left in a field) gets Nickel's
+    // positioned diagnostic, not serde's bare message.
+    if let Err(error) = validate(ExportFormat::Json, &value) {
+        let error: NickelError = error.with_pos_table(program.pos_table().clone()).into();
+        return Err(diagnostic(&program, error));
+    }
+    serde_json::to_value(&value)
+        .map_err(|e| source_error(format!("the evaluated theme is not JSON data: {e}")))
+}
+
+/// Nickel's own diagnostic for `error`, as plain text (FRN-SRS-041).
+fn diagnostic(program: &Program<CacheImpl>, error: NickelError) -> ThemeError {
+    let mut files = program.files();
+    let report = report_as_str(&mut files, error, ColorOpt::Never);
+    ThemeError::new(ThemeErrorKind::Contract, report)
+}
+
+/// Refuses a theme file too large or nested too deep to evaluate safely. A
+/// file that cannot be read is left for Nickel to report.
+fn check_shape(path: &Path) -> Result<(), ThemeError> {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Ok(());
+    };
+    if metadata.len() > MAX_SOURCE_BYTES {
+        return Err(source_error(format!(
+            "`{}` is {} bytes; a theme file is at most {MAX_SOURCE_BYTES}",
+            path.display(),
+            metadata.len()
+        )));
+    }
+    let Ok(text) = std::fs::read(path) else {
+        return Ok(());
+    };
+    let depth = nesting_depth(&text);
+    if depth > MAX_NESTING {
+        return Err(source_error(format!(
+            "`{}` nests brackets {depth} deep; a theme may nest at most {MAX_NESTING}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+/// The deepest nesting of `(`, `[` and `{` in `text`. Brackets inside strings
+/// and comments count too, which can only overstate the depth.
+fn nesting_depth(text: &[u8]) -> usize {
+    let mut depth = 0_usize;
+    let mut deepest = 0_usize;
+    for byte in text {
+        match byte {
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                deepest = deepest.max(depth);
+            }
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            _ => {}
         }
     }
+    deepest
 }
 
 /// `text` as a double-quoted Nickel string: `\`, `"` and `%` (which starts an
@@ -213,5 +283,30 @@ mod tests {
         let value = evaluate(&path).unwrap_or_else(|e| panic!("{e}: {}", e.input()));
         assert_eq!(value["layouts"]["boot"]["bar"]["x"], 640);
         assert!(string_literal("a\nb").is_err());
+    }
+
+    #[test]
+    fn deep_nesting_is_refused_before_nickel_sees_it() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let path = dir.path().join("deep.ncl");
+        let depth = 100_000;
+        let text = format!("{}1{}", "[".repeat(depth), "]".repeat(depth));
+        std::fs::write(&path, text).unwrap_or_else(|e| panic!("{e}"));
+        let error = evaluate(&path).err().unwrap_or_else(|| panic!("evaluated"));
+        assert_eq!(error.kind(), ThemeErrorKind::InvalidSource);
+        assert!(error.to_string().contains("nests brackets"), "{error}");
+        assert_eq!(nesting_depth(b"{ a = [ (1) ] }"), 3);
+    }
+
+    #[test]
+    fn the_reference_theme_file_is_the_builtin_layout() {
+        // The file and `BootLayout::builtin()` must not drift apart.
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../themes/steelbore.ncl");
+        let theme = crate::compile::compile_file(&path).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(theme.meta().boot, crate::artefact::BootLayout::builtin());
+        assert_eq!(
+            theme.meta().shutdown,
+            crate::artefact::ShutdownLayout::builtin()
+        );
     }
 }

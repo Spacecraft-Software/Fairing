@@ -250,6 +250,7 @@ pub const DIAGNOSTIC_CODES: &[&str] = &[
     "AGENT_DEVICE_PLAN_ONLY",
     "BACKEND_FALLBACK",
     "PALETTE_RESOLVED",
+    "PALETTE_SKIPPED",
     "SNAPSHOT_WRITTEN",
     "FIRST_FRAME",
     "NO_BACKEND",
@@ -539,7 +540,7 @@ fn splash_data() -> Value {
             "stage": { "type": "string", "enum": ["initrd", "system"] },
             "reason": {
                 "type": ["string", "null"],
-                "enum": ["handoff", "switch-root", "shutdown", "failed-unit", "maintenance",
+                "enum": ["handoff", "stopped", "switch-root", "shutdown", "failed-unit", "maintenance",
                          "no-backend", "render-failed", "exit-after", "theme-unreadable", null],
                 "description": "Why the splash ended; null in a plan"
             },
