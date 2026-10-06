@@ -7,8 +7,8 @@
 # Two units carry the splash. `fairing-initrd.service` draws from early boot
 # until switch-root and leaves the bar value in /run/fairing/state;
 # `fairing.service` picks it up after switch-root and holds the screen until
-# greetd starts. The shutdown splash, the third unit, arrives with
-# `fairing splash --stage shutdown` at milestone M4.
+# greetd starts, when `fairing-handoff.service` stops it. The shutdown splash
+# arrives with `fairing splash --stage shutdown` at milestone M4.
 #
 # Neither unit is required by anything: a splash that fails, hangs or is
 # missing never stops a boot (FRN-SRS-031).
@@ -95,7 +95,8 @@ in
       defaultText = lib.literalExpression "config.steelbore.fairing.package.override { withThemeTool = false; withDbus = false; }";
       description = ''
         The build the initrd carries: without the Nickel evaluator and without
-        the D-Bus client (no bus runs in the initrd), so the initrd stays small.
+        the D-Bus client, so the initrd stays small. The initrd splash does not
+        use the initrd's bus; emergency mode stops it through a conflict.
       '';
     };
 
@@ -254,7 +255,8 @@ in
         RestrictAddressFamilies = [ "AF_UNIX" ];
         ProtectKernelModules = true;
         ProtectKernelLogs = true;
-        ProtectKernelTunables = true;
+        # Not ProtectKernelTunables: the fbdev fallback pauses fbcon's cursor
+        # blink through /sys/class/graphics/fbcon/cursor_blink.
         ProtectControlGroups = true;
         ProtectClock = true;
         ProtectHostname = true;
@@ -268,14 +270,28 @@ in
       };
     };
 
-    # The handoff (FRN-SRS-017): greetd's start marks it, then stops the
-    # splash and waits for it, so DRM master is free when greetd opens the
-    # console. The marker is what makes this SIGTERM the handoff (a full bar,
-    # the durations cached); a stop without it is a plain stop. Both lines are
-    # allowed to fail: after the splash has gone, /run/fairing is gone too.
-    systemd.services.greetd.serviceConfig.ExecStartPre = [
-      "-${pkgs.coreutils}/bin/touch /run/fairing/handoff"
-      "-${config.systemd.package}/bin/systemctl stop fairing.service"
-    ];
+    # The handoff (FRN-SRS-017, FRN-SRS-032): greetd's start pulls this in and
+    # waits for it. It marks the handoff, then stops the splash and waits for
+    # it to exit, so DRM master is free when greetd opens the console. The
+    # marker is what makes that SIGTERM the handoff (a full bar, the durations
+    # cached); a stop without it is a plain stop. A unit of its own, not an
+    # ExecStartPre of greetd: greetd is Type=idle, and systemd would hold
+    # every command of it, ExecStartPre included, for its 5 s idle wait.
+    # Both commands may fail: once the splash has gone, /run/fairing is gone.
+    systemd.services.fairing-handoff = {
+      description = "Fairing hands the screen to greetd";
+      unitConfig.DefaultDependencies = "no";
+      after = [ "fairing.service" ];
+      before = [ "greetd.service" ];
+      wantedBy = [ "greetd.service" ];
+      restartIfChanged = false;
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = [
+          "-${pkgs.coreutils}/bin/touch /run/fairing/handoff"
+          "-${config.systemd.package}/bin/systemctl stop fairing.service"
+        ];
+      };
+    };
   };
 }

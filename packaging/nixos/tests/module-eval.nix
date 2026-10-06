@@ -46,6 +46,7 @@ let
   systemUnits = config.systemd.units;
   initrdText = initrdUnits."fairing-initrd.service".text;
   systemText = systemUnits."fairing.service".text;
+  handoffText = systemUnits."fairing-handoff.service".text;
   greetdText = systemUnits."greetd.service".text;
 
   # Does `text` hold the line `line` exactly?
@@ -71,7 +72,12 @@ let
     && lib.hasInfix "fairing" line
   );
   unitHardDepends = unit: unit.text != null && hardDependency (lib.splitString "\n" unit.text);
-  fairingUnits = lib.filterAttrs (name: _: lib.hasPrefix "fairing" name) (initrdUnits // systemUnits);
+  # Both stages, kept apart: many units exist under one name in each.
+  allUnits = lib.attrValues initrdUnits ++ lib.attrValues systemUnits;
+  fairingUnits = lib.filter (unit: lib.hasPrefix "fairing" unit.name) (
+    lib.mapAttrsToList (name: unit: unit // { inherit name; }) initrdUnits
+    ++ lib.mapAttrsToList (name: unit: unit // { inherit name; }) systemUnits
+  );
 
   checks = {
     "FRN-SRS-030: fairing-initrd has DefaultDependencies=no" =
@@ -81,21 +87,26 @@ let
     "FRN-SRS-030: fairing-initrd is wanted by initrd.target" =
       lib.elem "initrd.target" initrdUnits."fairing-initrd.service".wantedBy;
     "FRN-SRS-031: no unit hard-depends on a Fairing unit" =
-      !(lib.any unitHardDepends (lib.attrValues (initrdUnits // systemUnits)));
+      !(lib.any unitHardDepends allUnits);
     "FRN-SRS-031: no Fairing unit is installed as a hard dependency" = lib.all (
       unit: unit.requiredBy == [ ] && (unit.upheldBy or [ ]) == [ ]
-    ) (lib.attrValues fairingUnits);
+    ) fairingUnits;
     "FRN-SRS-032: fairing.service is ordered before greetd.service" =
       lib.elem "greetd.service" (directive systemText "Before");
-    "FRN-SRS-032: greetd stops fairing.service before it runs" =
-      lib.hasInfix "systemctl stop fairing.service" greetdText;
-    "FRN-SRS-017: greetd marks the handoff before it stops the splash" =
+    "FRN-SRS-032: greetd's start stops fairing.service first" =
+      lib.elem "greetd.service" systemUnits."fairing-handoff.service".wantedBy
+      && lib.elem "greetd.service" (directive handoffText "Before")
+      && lib.elem "fairing.service" (directive handoffText "After")
+      && hasLine handoffText "Type=oneshot";
+    "FRN-SRS-017: the handoff is marked before the splash is stopped" =
       let
-        pre = lib.filter (lib.hasPrefix "ExecStartPre=") (lib.splitString "\n" greetdText);
-        index = needle: lib.lists.findFirstIndex (lib.hasInfix needle) null pre;
+        exec = lib.filter (lib.hasPrefix "ExecStart=") (lib.splitString "\n" handoffText);
+        index = needle: lib.lists.findFirstIndex (lib.hasInfix needle) null exec;
       in
       index "touch /run/fairing/handoff" != null
       && index "touch /run/fairing/handoff" < index "systemctl stop fairing.service";
+    "the stop is not carried by greetd, which is Type=idle" =
+      !(lib.hasInfix "fairing" greetdText);
     "FRN-SRS-032: fairing.service does not conflict with greetd.service" =
       !(lib.elem "greetd.service" (directive systemText "Conflicts"));
     "FRN-SRS-034: emergency mode stops the initrd splash" =

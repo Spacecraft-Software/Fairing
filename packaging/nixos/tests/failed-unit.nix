@@ -32,9 +32,10 @@ pkgs.testers.runNixOSTest {
         enable = true;
         settings.default_session.command = "${lib.getExe' config.services.greetd.package "agreety"} --cmd true";
       };
-      # Leave greetd out of the boot: the splash would otherwise stop at the
-      # handoff and the failure would never be its reason to go.
-      systemd.services.greetd.wantedBy = lib.mkForce [ ];
+      # Keep greetd out of the boot (graphical.target would still pull it in as
+      # display-manager.service): the splash would otherwise stop at the
+      # handoff, and the failure would never be its reason to go.
+      systemd.services.greetd.enable = lib.mkForce false;
 
       systemd.services.doomed = {
         description = "A unit that fails a few seconds into stage 2";

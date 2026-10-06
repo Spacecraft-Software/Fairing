@@ -74,6 +74,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed("test \"$(systemctl show fairing.service -p ExecMainStatus --value)\" = 0")
     machine.fail("systemctl is-failed --quiet fairing-initrd.service")
     machine.fail("systemctl is-failed --quiet fairing.service")
+    machine.succeed("test \"$(systemctl show fairing-handoff.service -p Result --value)\" = success")
     # The splash stopped before greetd ran.
     stopped = int(machine.succeed("systemctl show fairing.service -p InactiveEnterTimestampMonotonic --value"))
     started = int(machine.succeed("systemctl show greetd.service -p ExecMainStartTimestampMonotonic --value"))
