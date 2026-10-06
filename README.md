@@ -7,7 +7,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 a Rust boot splash for Steelbore OS Bravais that shows real boot progress, prompts for disk passphrases in-theme, and holds the screen until greetd takes over.
 
-**Status:** pre-release. Milestones M0 (repository and posture) and M1 (draws a frame) are merged. Milestone M2 (boots on Bravais) is implemented: Nickel themes compiled into a compact artefact, the hybrid progress model, `fairing splash` for the initrd and stage 2, and the NixOS module `steelbore.fairing` with its units. Its NixOS VM tests have yet to run on KVM, and its figures on the reference machine are the maintainer's to take. The password agent (M3) and accessibility (M4) are not started.
+**Status:** pre-release. Milestones M0 (repository and posture) and M1 (draws a frame) are merged. Milestone M2 (boots on Bravais) is implemented: Nickel themes compiled into a compact artefact, the hybrid progress model, `fairing splash` for the initrd and stage 2, and the NixOS module `steelbore.fairing` with its units. Its NixOS VM tests pass under QEMU's emulator (TCG), and its figures on the reference machine are the maintainer's to take. The password agent (M3) and accessibility (M4) are not started.
 
 Conforms to The Steelbore Standard v2.12 — Category B (password agent and initrd unit raised to A), tailored (§6.1, §10, §13, §18.3, §20.1; see [COMPLIANCE.md](COMPLIANCE.md)).
 

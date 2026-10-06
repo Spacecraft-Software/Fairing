@@ -189,7 +189,9 @@ for example when booted to @code{multi-user.target}), @code{switch-root}, @code{
 systemd unit failed), @code{maintenance} (rescue or emergency mode started),
 @code{no-backend}, @code{render-failed} or @code{theme-unreadable}.  When it
 draws nothing it still tells systemd it is ready, so the unit never delays
-the boot.
+the boot.  A page flip that completes late costs one frame, not the splash:
+only a display that has not flipped for two seconds ends it with
+@code{render-failed}.
 
 @cindex journal
 Under systemd, diagnostics go to the journal as one line each, with a syslog
@@ -545,8 +547,8 @@ never brings the splash back over a session.  It runs with least privilege:
 only the capabilities to hold the display and the console, the file system
 read-only except its own two directories, and no network.
 @item fairing-handoff.service
-Runs when greetd starts, before it: writes the handoff marker, stops
-@code{fairing.service} and waits for it to exit.
+Runs once logins are allowed, just before greetd: writes the handoff marker,
+stops @code{fairing.service} and waits for it to exit.
 @end table
 
 @cindex greetd
@@ -556,7 +558,11 @@ ordered before @code{greetd.service}, and greetd's start pulls in
 @code{fairing-handoff.service}, which writes the handoff marker
 @file{/run/fairing/handoff}, then stops @code{fairing.service} and waits for
 it, so the splash has drawn the full bar and released the display before
-greetd opens the console.  The stop is a unit of its own because greetd is
+greetd opens the console.  The handoff unit is ordered after
+@code{systemd-user-sessions.service}, as greetd is (and as Plymouth's quit
+unit is), so the splash holds the screen until the greeter is next; ordered
+after the splash alone, it would run as soon as the splash was ready and end
+it at the start of stage 2.  The stop is a unit of its own because greetd is
 @code{Type=idle}: systemd would hold any command of greetd's for its idle
 wait of five seconds.  The two units do
 not conflict: in one boot transaction a conflict makes systemd drop greetd's

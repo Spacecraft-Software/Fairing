@@ -15,7 +15,7 @@ lifecycle unit raised to **Category A** (Steelbore Standard §19). Licence GPL-3
 
 Milestone state: M0 (repository and posture) and M1 (draws a frame) are merged. M2 (boots
 on Bravais: themes, progress, `fairing splash`, the NixOS module) is implemented; its VM
-tests have not yet run on KVM and every requirement waits on G1 baselining. The password
+tests pass under TCG, and every requirement waits on G1 baselining. The password
 agent (M3) and accessibility, the shutdown splash and frame-sequence playback (M4) are not
 started. Do not advertise verbs, flags or files that do not exist yet.
 
@@ -116,8 +116,11 @@ will not be green there.
   `NOTIFY_SOCKET` is read in `splash/mod.rs`, `/proc/cmdline` once per run.
 - The splash reaches greetd by ordering, not conflict: `fairing.service` is
   `Before=greetd.service`, and `fairing-handoff.service` (a oneshot greetd wants and
-  waits for) writes `/run/fairing/handoff` and then stops it. Never put the stop in
-  greetd's own `ExecStartPre`: greetd is `Type=idle` and systemd holds it 5 s. Only a
+  waits for) writes `/run/fairing/handoff` and then stops it. The handoff is ordered
+  `After=systemd-user-sessions.service`, as greetd is: ordered after `fairing.service`
+  alone it runs at the splash's `READY=1` and ends it at the start of stage 2. Never
+  put the stop in greetd's own `ExecStartPre`: greetd is `Type=idle` and systemd holds
+  it 5 s. Only a
   SIGTERM with the marker is the handoff (100 % frame, durations cached); any other
   stage-2 SIGTERM is reason `stopped`, and a boot that finishes without greetd ends
   the splash with reason `boot-finished`. Never add

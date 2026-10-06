@@ -27,17 +27,18 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
   in `/var/lib/fairing/boot-duration`. Lifecycle: `fairing splash --stage initrd|system`,
   one thread and one frame per tick, `READY=1` after the first frame, exit within 100 ms of
   `SIGTERM`, exit within a second of a failed unit or rescue/emergency mode, always exit 0,
+  a late page flip dropped as one frame (two seconds without a flip end the splash),
   journal lines with a syslog priority; a systemd D-Bus client on its own thread (cargo
   feature `dbus`) with property caching off and every call bounded. NixOS: the module
   `steelbore.fairing` (`nixosModules.fairing`) with `fairing-initrd.service` and
   `fairing.service`, the theme compiled at build time, simpledrm and the configured KMS
   drivers in the initrd, `quiet splash`, a Plymouth assertion, least-privilege hardening, a
   boot-only start condition, and the handoff: `fairing-handoff.service`, which greetd's
-  start pulls in, writes `/run/fairing/handoff` and stops the splash, and only that stop
-  fills the bar and records the durations; a boot that finishes without greetd ends the
-  splash too. A module evaluation check and two VM tests in `nix flake check`, runnable
-  without KVM. CI: the feature matrix, a size
-  gate for the initrd binary, and a `nix` job.
+  start pulls in once logins are allowed, writes `/run/fairing/handoff` and stops the
+  splash, and only that stop fills the bar and records the durations; a boot that
+  finishes without greetd ends the splash too. A module evaluation check and two VM tests
+  in `nix flake check`, runnable without KVM. CI: the feature matrix, a size gate for the
+  initrd binary, and a `nix` job.
 
 - M1 rendering. `fairing-theme`: the house palette file vendored byte-identically and
   compiled by a build script into role tables for the twenty registered colour themes and
