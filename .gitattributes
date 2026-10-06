@@ -3,3 +3,8 @@
 
 # Steelbore Standard §6.5: every text file is stored LF-terminated.
 * text=auto eol=lf
+
+# Steelbore Standard §6.5: binary assets are declared, not auto-detected.
+*.ttf binary
+*.otf binary
+*.ppm binary

@@ -4,11 +4,12 @@ description: >
   Fairing is the boot splash for Steelbore OS Bravais (Rust, GPL-3.0-or-later). Use this
   skill when an agent must drive the `fairing` command line or work in its repository:
   `fairing describe --json` returns the live capability manifest, `fairing schema
-  [<command>]` returns JSON Schema Draft 2020-12 for function calling, and `--version
-  --json` returns the attribution envelope. In the repository, `cargo xtask` runs the
-  requirements generator, traceability gate, progress block and text-format gate. The
-  splash, shutdown, theme and preview verbs arrive with milestones M1–M4 and are not
-  available yet.
+  [<command>]` returns JSON Schema Draft 2020-12 for function calling, `fairing preview`
+  draws the splash with a simulated bar (off-screen with `--backend memory --snapshot`
+  under an agent), and `--version --json` returns the attribution envelope. In the
+  repository, `cargo xtask` runs the requirements generator, traceability gate, progress
+  block and text-format gate. The splash, shutdown and theme verbs arrive with milestones
+  M2–M4 and are not available yet.
 license: GPL-3.0-or-later
 project: Spacecraft Software
 component: Fairing
@@ -21,10 +22,23 @@ version: 0.1.0
 
 - `fairing describe` — capability manifest; safe, idempotent, no side effects
 - `fairing schema [<command>]` — JSON Schema Draft 2020-12 for the tool or one command
+- `fairing preview [--seconds n] [--backend auto|drm|fbdev|memory] [--snapshot file.ppm]
+  [--palette slug] [--status text] [--size WxH] [--fps hz]` — draw the splash with a
+  simulated bar, then restore the console; `--dry-run` reports the plan without opening
+  a device; `--theme <path>` is refused with `FEATURE_UNAVAILABLE` until M2
 - `fairing --version` — name, version, maintainer, website, copyright
 
 Planned (not yet present): `fairing splash`, `fairing shutdown`, `fairing theme check`,
-`fairing theme compile`, `fairing preview`.
+`fairing theme compile`.
+
+## Agents and `preview`
+
+Under `AI_AGENT`, `AGENT`, `CI`, `CLAUDECODE`, `CURSOR_AGENT` or `GEMINI_CLI` no virtual
+terminal is opened: `--backend auto` renders to memory and emits a `[WARN]`
+(`AGENT_MEMORY_BACKEND`); `--backend drm|fbdev` exits 2. Pair memory rendering with
+`--snapshot frame.ppm` (binary PPM, `P6`) to inspect the frame. The JSON `data` carries
+`backend`, `width`, `height`, `format`, `palette.{slug,base,source,overlay,skipped}`,
+`frames`, `dropped`, `first_frame_ms`, `measured_fps`, `snapshot`, `fallbacks`, `planned`.
 
 ## Output formats
 
@@ -41,8 +55,8 @@ Planned (not yet present): `fairing splash`, `fairing shutdown`, `fairing theme 
 ## Exit codes
 
 0 success · 1 general failure (`FEATURE_UNAVAILABLE`, `INTERNAL_ERROR`) · 2 usage error
-(`INVALID_ARGUMENT`, `MISSING_ARGUMENT`) · 3 `NOT_FOUND` · 4 `PERMISSION_DENIED` ·
-5 `CONFLICT`. Every non-zero exit in machine mode writes one line
+(`INVALID_ARGUMENT`, `MISSING_ARGUMENT`) · 3 `NOT_FOUND` (no DRM device or `/dev/fb0`) ·
+4 `PERMISSION_DENIED` (another client is DRM master, or no `video` group) · 5 `CONFLICT`. Every non-zero exit in machine mode writes one line
 `{"error":{code,exit_code,message,hint,timestamp,command}}` to stderr; `hint` is a
 runnable command.
 
@@ -59,8 +73,10 @@ precedence.
 ```sh
 fairing describe --json | jq .data.commands
 fairing describe --json --fields tool,version
-fairing schema describe
+fairing schema preview
 AI_AGENT=my-agent fairing describe        # JSON without asking
+fairing preview --backend memory --seconds 0 --snapshot frame.ppm --json
+fairing preview --dry-run --json          # plan only: backend chain and palette
 ```
 
 ```nu

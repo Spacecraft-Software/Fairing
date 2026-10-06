@@ -60,6 +60,7 @@ Maintained by Mohamed Hammad
 
 @menu
 * Introduction::        What Fairing is and how this manual is organised.
+* Invoking Fairing::    The command line: preview, describe, schema, global flags.
 * Needs::               Why the software exists and the constraints it serves.
 * Requirements::        What the software shall do, one verifiable statement at a time.
 * Index::               Concept and identifier index.
@@ -114,6 +115,195 @@ root.  This manual carries the two artefacts the Standard places in Texinfo:
 the Needs (@pxref{Needs}) and the Requirements (@pxref{Requirements}).  The
 Interfaces (ICD, Standard §23) and Dependencies chapters are added at
 the G2 design gate.
+
+@node Invoking Fairing
+@chapter Invoking Fairing
+
+@cindex command line
+@cindex invoking
+@command{fairing} follows the Spacecraft Software Dual-Mode Self-Documenting CLI
+Standard: every verb answers in human-readable text on a terminal and in a
+single JSON document (@code{--json}) when piped, under an agent variable, or
+when asked.  The live capability manifest is @command{fairing describe --json};
+@command{fairing schema [@var{command}]} returns JSON Schema Draft 2020-12 for
+the whole tool or one verb.  This chapter describes the verbs that exist in
+version @value{VERSION}; the splash, shutdown and theme verbs arrive with
+later milestones and are documented when they do.
+
+@menu
+* preview::             Draw the splash with a simulated bar.
+* describe and schema:: Self-description for people and agents.
+* Global flags::        Output mode, colour, severity floor.
+* Environment::         Variables that change behaviour.
+* Exit codes::          What a non-zero status means.
+@end menu
+
+@node preview
+@section @command{fairing preview}
+
+@cindex preview
+@cindex simulated bar
+@example
+fairing preview [--seconds @var{n}] [--backend auto|drm|fbdev|memory]
+                [--snapshot @var{file.ppm}] [--palette @var{slug}]
+                [--status @var{text}] [--size @var{W}x@var{H}] [--fps @var{hz}]
+@end example
+
+Draws the splash with a bar that advances from 0 to 100 percent over
+@var{n} seconds (default 5; fractions are accepted and @code{0} draws a single
+frame), then restores the console.  Theme authors use it to iterate without
+rebooting.  The same compositor and backends serve the boot splash.
+
+@table @code
+@item --backend
+@code{auto} tries DRM/KMS first and falls back to @file{/dev/fb0}; the other
+values try one backend only.  @code{memory} renders off-screen and is the only
+backend an agent environment may use (@pxref{Environment}).
+@item --snapshot
+Writes the final frame as a binary PPM (@code{P6}, 8 bits per channel) to the
+given path.  The format needs no library and every image viewer opens it.
+@item --palette
+A registered Steelbore theme slug such as @code{steelbore},
+@code{steelbore-high-contrast} or @code{tokyonight}.  It outranks
+@env{SPACECRAFT_THEME}; an unregistered slug is a usage error.  Without it the
+palette is resolved as the Steelbore Standard §11.6 prescribes: the environment
+variable, then the family default, with @env{NO_COLOR} overlaying the mono
+theme.
+@item --status
+The status line drawn under the bar; the boot splash shows the description of
+the systemd job in progress here.
+@item --size
+The frame size for the memory backend (default @code{1920x1080}).  A device
+backend always draws at the connector's preferred mode.
+@item --fps
+The redraw rate, 1 to 240 frames per second (default 30).
+@item --dry-run
+Reports which backend would be tried, with which palette, without touching a
+device.  The envelope carries @code{"dry_run": true}.
+@item --theme
+Reserved for the compiled theme format; until it exists the flag is answered
+with @code{FEATURE_UNAVAILABLE} (exit 1).
+@end table
+
+@cindex layout
+The layout is authored in a 1920x1080 reference frame and scaled
+uniformly into the active mode, centred, with the uncovered bands painted in
+the canvas colour.  The percentage is always rendered as text beside the bar,
+so the state is never carried by colour alone.
+
+@cindex report
+In machine mode the @code{data} object reports @code{backend}, @code{device},
+@code{width}, @code{height}, @code{format}, the resolved @code{palette}
+(@code{slug}, @code{base}, @code{source}, @code{overlay}, @code{skipped}),
+@code{seconds}, @code{fps}, @code{frames}, @code{dropped},
+@code{first_frame_ms}, @code{measured_fps}, @code{snapshot}, the
+@code{fallbacks} that were tried before the working backend, and
+@code{planned}.
+
+@cindex console, restoring
+On the DRM path the CRTC is returned to the framebuffer it scanned out before;
+on the fbdev path the device contents are saved on open and written back on
+close, and the console cursor blink is paused meanwhile.  Both paths need the
+process to be the DRM master or to own the framebuffer: run on a text console,
+not under a desktop session.
+
+@node describe and schema
+@section @command{fairing describe} and @command{fairing schema}
+
+@cindex describe
+@cindex schema
+@command{fairing describe} emits the capability manifest: every verb with its
+idempotency, destructiveness and dry-run support, the global flags, the output
+formats, and the detected reader profile.  It has no side effects.
+@command{fairing schema} with no argument emits the schema of the whole tool;
+with a verb name it emits that verb's parameters, output schema, exit codes and
+examples, all derived from the same argument parser that runs the verb, so the
+two cannot drift.
+
+@node Global flags
+@section Global flags
+
+@cindex flags, global
+@table @code
+@item --json
+@itemx --format human|json|jsonl|yaml|csv|explore
+Output mode.  @code{yaml}, @code{csv} and @code{explore} are accepted and
+answered with @code{FEATURE_UNAVAILABLE}, or with a @code{TUI_FALLBACK} warning
+plus JSON for @code{explore}.
+@item --fields @var{f1,f2,...}
+Keep only the named top-level keys of @code{data}.
+@item --dry-run
+Report the plan without side effects, where the verb supports it.
+@item --verbose
+@itemx --quiet
+Lower the diagnostic floor to @code{info}, or raise it to @code{error}.
+Mutually exclusive.
+@item --no-color
+@itemx --color auto|always|never
+Colour policy for human mode.
+@item --absolute-time
+Timestamps as ISO 8601 UTC in human mode (the only form Fairing uses anyway).
+@item --print0
+NUL-delimited output for @command{xargs -0}.
+@item --yes
+@itemx --force
+Skip confirmations.
+@item --version
+Name, version, maintainer, website and copyright, as text or as an envelope.
+@end table
+
+@node Environment
+@section Environment
+
+@cindex environment variables
+@cindex agents
+@table @env
+@item AI_AGENT
+@itemx AGENT
+Set to any non-empty value other than @code{0} or @code{false}: machine
+output, no colour, no prompts, no virtual terminal, diagnostic floor
+@code{warn}.
+@item CI
+Truthy: machine output, no colour, no virtual terminal.
+@item CLAUDECODE
+@itemx CURSOR_AGENT
+@itemx GEMINI_CLI
+Informational: recorded as @code{metadata.tool_agent}; colour, prompts and
+the virtual terminal are off, the output format is unchanged.
+@item NO_COLOR
+@itemx FORCE_COLOR
+@itemx CLICOLOR
+@itemx TERM
+Colour precedence as the CLI Standard defines it.  @env{NO_COLOR} also selects
+the mono theme for the splash itself.
+@item SPACECRAFT_THEME
+A registered theme slug for the splash palette (Steelbore Standard §11.6).
+@item FAIRING_HW_TESTS
+Set to run the ignored test-suite entries that need a DRM device or
+@file{/dev/fb0} and a free virtual terminal.
+@end table
+
+@node Exit codes
+@section Exit codes
+
+@cindex exit codes
+@multitable @columnfractions .1 .3 .6
+@headitem Code @tab Error codes @tab Meaning
+@item 0 @tab @tab Success.
+@item 1 @tab @code{FEATURE_UNAVAILABLE}, @code{INTERNAL_ERROR}
+@tab Not built into this release, or an unexpected failure.
+@item 2 @tab @code{INVALID_ARGUMENT}, @code{MISSING_ARGUMENT}
+@tab Usage error, including a device backend requested under an agent variable.
+@item 3 @tab @code{NOT_FOUND}
+@tab No DRM device or @file{/dev/fb0} to draw on, or an unknown command.
+@item 4 @tab @code{PERMISSION_DENIED}
+@tab Another client is the DRM master, or the device refused the process.
+@item 5 @tab @code{CONFLICT} @tab Reserved.
+@end multitable
+
+Every non-zero exit in machine mode writes one line
+@code{@{"error":@{code,exit_code,message,hint,timestamp,command@}@}} to
+standard error; @code{hint} is a runnable command.
 
 @include needs.texi
 

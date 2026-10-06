@@ -14,6 +14,22 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 
 ### Added
 
+- M1 rendering. `fairing-theme`: the house palette file vendored byte-identically and
+  compiled by a build script into role tables for the twenty registered colour themes and
+  the mono theme (never a retyped hex), `Role`/`Rgb`/`Theme`/`MonoRoles` types, WCAG
+  contrast helpers, and the two-stage §11.6 variant resolver with a kernel-faithful
+  command-line parser. `fairing-render`: a heap `Frame` in the output's byte order,
+  compositor (canvas, built-in vector mark, capsule bar, percentage text beside the bar,
+  status line) over a 1920×1080 reference layout scaled uniformly and letterboxed, glyph
+  rendering with bundled Inconsolata (OFL-1.1), DRM/KMS backend (preferred mode, two dumb
+  buffers, page flips, re-acquire on `ENODEV`), `/dev/fb0` backend through sysfs and
+  positional writes with console save/restore, memory backend, fallback chain that names
+  every failing backend, 30 Hz cadence with a mockable clock, presenter with first-frame
+  timing. `fairing preview` verb with `--seconds`, `--backend`, `--snapshot` (binary PPM),
+  `--palette`, `--status`, `--size`, `--fps`, `--dry-run`; agent environments never open a
+  VT. `PERMISSION_DENIED` (exit 4) error code. Dependency qualification rows for every new
+  crate; `cargo deny` allows Zlib.
+
 - M0 repository posture: Cargo workspace with `fairing`, `fairing-render`,
   `fairing-theme`, `fairing-askpass` (all `#![forbid(unsafe_code)]`) and the `xtask` task
   runner; REUSE-compliant licensing (GPL-3.0-or-later software, CC-BY-SA-4.0 manual);

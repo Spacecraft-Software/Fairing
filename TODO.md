@@ -9,6 +9,19 @@ Fine-grained tasks for the milestone in progress. `PLAN.md` holds the milestone 
 this file holds the steps behind them and is rewritten as milestones open. Ticked means
 done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 
+## M1 — Draws a frame
+
+- [x] T-021 Vendor steelbore.toml byte-identically; build.rs generates the registered set and mono bindings with provenance, sibling and inventory checks
+- [x] T-022 fairing-theme API: Role, Rgb (WCAG contrast), Theme, MonoRoles, two-stage resolver with base reporting, kernel command-line parser; golden tests against the TOML
+- [x] T-023 fairing-render core: Size/Rect/Viewport (1920x1080 reference, uniform scale, letterbox), Frame with the one-place XRGB byte swap, canonical RenderError with errno classification
+- [x] T-024 Compositor: canvas, built-in vector mark, capsule bar with border, percentage beside the bar, status line with ellipsis; bundled Inconsolata glyph cache and lerp blit
+- [x] T-025 Backends: DRM/KMS (preferred mode, dumb buffers, page flip, poll with timeout, CRTC restore), fbdev (sysfs geometry, write_at, console save/restore, cursor-blink pause), memory; fallback chain with timings; Presenter with 30 Hz cadence, first-frame stat and re-acquire
+- [x] T-026 fairing preview verb: flags, agent rule, dry run, PPM snapshot, structured report; PERMISSION_DENIED error code; schema and describe rows; CLI tests with Verifies markers
+- [x] T-027 Font assets with REUSE sidecars and LICENSES/OFL-1.1.txt; .gitattributes binary declarations; deny.toml Zlib
+- [x] T-028 DEPENDENCIES.md rows for every M1 crate, accepted advisory RUSTSEC-2026-0192, bundled-asset table; README, AGENTS, SKILL, CHANGELOG, NOTICE, manual chapter
+- [ ] T-029 Hardware run on the reference machine (ThinkPad T490s): `FAIRING_HW_TESTS=1 cargo test --workspace -- --ignored` on a free VT; record first-frame and 30 Hz figures (maintainer)
+- [ ] T-030 M1 pull request reviewed and merged
+
 ## M0 — Repository and posture
 
 - [x] T-001 LICENSES/ with the GPL symlink and the CC-BY-SA-4.0 text; REUSE.toml for the lockfiles and SKILL.md

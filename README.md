@@ -7,7 +7,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 a Rust boot splash for Steelbore OS Bravais that shows real boot progress, prompts for disk passphrases in-theme, and holds the screen until greetd takes over.
 
-**Status:** pre-release. Milestone M0 (repository and posture) and the CLI skeleton of M1 are in place; nothing draws to a screen yet.
+**Status:** pre-release. Milestone M0 (repository and posture) is in place and milestone M1 (draws a frame) is implemented: `fairing preview` renders the splash with a simulated bar through DRM/KMS, `/dev/fb0` or an off-screen buffer. Boot integration (M2), the password agent (M3) and accessibility (M4) are not started.
 
 Conforms to The Steelbore Standard v2.12 — Category B (password agent and initrd unit raised to A), tailored (§6.1, §10, §13, §18.3, §20.1; see [COMPLIANCE.md](COMPLIANCE.md)).
 
@@ -49,7 +49,22 @@ cargo deny check && cargo audit
 reuse lint
 ```
 
-`nix develop` provides every tool above. The `fairing` binary itself currently offers `fairing describe`, `fairing schema [<command>]`, `--version` and the global flags of the Spacecraft Software CLI Standard; run `fairing describe --json` for the live capability manifest.
+`nix develop` provides every tool above. The `fairing` binary currently offers `fairing preview`, `fairing describe`, `fairing schema [<command>]`, `--version` and the global flags of the Spacecraft Software CLI Standard; run `fairing describe --json` for the live capability manifest.
+
+### Previewing the splash
+
+```sh
+fairing preview --seconds 3                                   # on a text console: DRM/KMS, then /dev/fb0
+fairing preview --backend memory --snapshot frame.ppm --json  # off-screen, for agents and CI
+fairing preview --palette steelbore-high-contrast --status "Mounting /home"
+```
+
+The layout is authored at 1920×1080 and scaled uniformly into any mode, letterboxed in the
+canvas colour. Colours are the §11.1 role tokens of a registered Steelbore theme, chosen by
+`--palette`, then `SPACECRAFT_THEME`, then the family default; `NO_COLOR` selects the mono
+theme. Under `AI_AGENT`, `CI` or `CLAUDECODE` no virtual terminal is opened: the automatic
+chain renders to memory and says so. Hardware tests run only on request:
+`FAIRING_HW_TESTS=1 cargo test --workspace -- --ignored` on a free text console.
 
 ## Requirements and traceability
 
