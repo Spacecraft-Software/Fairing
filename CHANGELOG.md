@@ -32,8 +32,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
   `steelbore.fairing` (`nixosModules.fairing`) with `fairing-initrd.service` and
   `fairing.service`, the theme compiled at build time, simpledrm and the configured KMS
   drivers in the initrd, `quiet splash`, a Plymouth assertion, least-privilege hardening, a
-  boot-only start condition, and the handoff by greetd stopping the splash; a module
-  evaluation check and two VM tests in `nix flake check`. CI: the feature matrix, a size
+  boot-only start condition, and the handoff: greetd's start writes `/run/fairing/handoff`
+  and stops the splash, and only that stop fills the bar and records the durations; a
+  module evaluation check and two VM tests in `nix flake check`, runnable without KVM. CI: the feature matrix, a size
   gate for the initrd binary, and a `nix` job.
 
 - M1 rendering. `fairing-theme`: the house palette file vendored byte-identically and
@@ -83,6 +84,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 - FRN-SRS-032 (draft) no longer asks for `Conflicts=greetd.service`: with both units in
   the boot transaction, systemd resolves that conflict by dropping greetd's start. The
   handoff is now ordering plus a stop from greetd's start, for confirmation at G1.
+- FRN-SRS-010 (draft) now reads as the scaled formula the design uses (0.30 times elapsed
+  over the cached duration), for confirmation at G1.
 - The package derivation builds from an explicit file set and takes `withThemeTool` and
   `withDbus` switches.
 

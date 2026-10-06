@@ -115,7 +115,9 @@ will not be green there.
   the D-Bus client is the only other thread and talks to the loop over an mpsc channel.
   `NOTIFY_SOCKET` is read in `splash/mod.rs`, `/proc/cmdline` once per run.
 - The splash reaches greetd by ordering, not conflict: `fairing.service` is
-  `Before=greetd.service` and greetd's `ExecStartPre` stops it. Never add
+  `Before=greetd.service`, and greetd's `ExecStartPre` writes `/run/fairing/handoff`
+  and then stops it. Only a SIGTERM with that marker is the handoff (100 % frame,
+  durations cached); any other stage-2 SIGTERM is reason `stopped`. Never add
   `Conflicts=greetd.service` (systemd drops greetd's start from the boot transaction).
   `fairing.service` only starts while `/run/fairing` exists (the initrd unit leaves it,
   the stage-2 unit removes it), so `nixos-rebuild switch` never restarts the splash.
@@ -125,7 +127,8 @@ will not be green there.
 - `fairing preview` under `AI_AGENT`, `CI`, `CLAUDECODE`, `CURSOR_AGENT` or `GEMINI_CLI`
   never opens a VT (`Context::is_agent_environment`): `--backend auto` becomes memory with a
   `[WARN]`, an explicit device backend is exit 2. The theme resolver takes `no_color` from
-  the `Context`; `SPACECRAFT_THEME` is read once, in `preview.rs`.
+  the `Context`; `SPACECRAFT_THEME` is read once, in `selection.rs` (`resolve_palette`),
+  for both `preview` and `splash`.
 - Tests that need a DRM device or `/dev/fb0` are `#[ignore]`d and carry no `Verifies:`
   marker (`cargo test --workspace -- --ignored` on a free text console; they fail without a
   device, as they should). Everything else runs against the memory backend, fake sysfs

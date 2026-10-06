@@ -22,11 +22,12 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-039 zbus client on its own thread (`dbus` feature): property caching off, method timeout, explicit system-bus socket, systemd's private socket refused, p2p fake manager in tests
 - [x] T-040 NixOS module `steelbore.fairing`, build-time theme compile, three package variants (full, splash, initrd), flake outputs
 - [x] T-041 module-eval check (unit directives, the FRN-SRS-031 negative property, Plymouth assertion), green under `nix flake check --no-build`
-- [ ] T-042 VM tests `boot.nix` and `failed-unit.nix` green under KVM (CI `nix` job or the maintainer); then their requirement markers
+- [ ] T-042 VM tests `boot.nix` and `failed-unit.nix` green (KVM in CI, or `tcg = true` locally); then their requirement markers
 - [x] T-043 CI: feature-matrix lint and tests, size gate for the initrd binary, `nix` job
-- [ ] T-044 DEPENDENCIES.md rows for the M2 crates; accepted advisory RUSTSEC-2026-0292 and the malachite licence exception, both for the maintainer to confirm
+- [x] T-044 DEPENDENCIES.md rows for the M2 crates; accepted advisory RUSTSEC-2026-0292 and the malachite licence exception, both for the maintainer to confirm
 - [x] T-045 Manual: splash and theme sections, Themes and Running under systemd chapters; README, AGENTS, SKILL, CHANGELOG
-- [ ] T-046 G1 decisions: the FRN-SRS-032 amendment (handoff by stop, not `Conflicts=`), the FRN-SRS-010 carrier, the third unit of FRN-SRS-090 at M4, nickel-lang-core's licence and advisory (maintainer)
+- [x] T-049 Adversarial review and research critique folded in: explicit handoff marker, READY=1 on every path, stage 2 timed from its own start, one re-open per frame, bounded D-Bus handshake, job start order for the status line, failed-unit baseline, emergency and rescue conflicts, private socket refused by identity, palette skipped not fatal in the splash, tint and image limits checked early, Nickel nesting bound
+- [ ] T-046 G1 decisions: the FRN-SRS-032 amendment (handoff by stop, not `Conflicts=`); the FRN-SRS-010 wording and carrier; FRN-SRS-034 as a transition (failures already present at the first reading do not count); `PrivateTmp=disconnected` for FRN-SRS-093 (`yes` orders the splash after tmpfiles setup); the third unit of FRN-SRS-090 at M4; nickel-lang-core's licence and advisory; the stage-2 binary over 2.5 MiB (maintainer)
 - [ ] T-047 Hardware run on the T490s with the module enabled: first frame, 30 Hz, added boot time (maintainer)
 - [ ] T-048 M2 pull request reviewed and merged
 

@@ -166,9 +166,13 @@ From switch-root until greetd starts.  The bar starts from the value the
 initrd left and follows systemd's own job-queue progress
 (@code{org.freedesktop.systemd1.Manager.Progress}) from 30 to 99 percent; it
 reaches 100 percent only at the handoff.  Under the bar it shows the
-description of the newest running systemd job.  On @code{SIGTERM} it shows the
-full bar, releases the display within 100 ms, writes the measured stage
-durations to @file{/var/lib/fairing/boot-duration} and exits.
+description of the newest running systemd job.  A @code{SIGTERM} that follows
+the handoff marker @file{/run/fairing/handoff}, which greetd's start writes,
+is the handoff: the splash shows the full bar, releases the display within
+100 ms, writes the measured stage durations to
+@file{/var/lib/fairing/boot-duration} and exits.  Any other @code{SIGTERM}
+releases the display just as fast, without the full bar or the
+measurement.
 @item --theme
 A compiled theme (@pxref{Themes}).  Without it the built-in theme is drawn.
 @item --palette
@@ -179,8 +183,9 @@ A registered palette slug, as for @command{fairing preview}.
 The bar never moves backwards: when a new reading is lower it holds, and a
 higher one is approached smoothly.  A splash never fails the boot.  Every way
 out exits with status 0 and the reason in the report: @code{handoff},
-@code{switch-root}, @code{shutdown}, @code{failed-unit} (a systemd unit
-failed), @code{maintenance} (rescue or emergency mode started),
+@code{stopped} (stopped in stage 2 without the greetd handoff, for example by
+a password prompt), @code{switch-root}, @code{shutdown}, @code{failed-unit} (a
+systemd unit failed), @code{maintenance} (rescue or emergency mode started),
 @code{no-backend}, @code{render-failed} or @code{theme-unreadable}.  When it
 draws nothing it still tells systemd it is ready, so the unit never delays
 the boot.
@@ -254,7 +259,8 @@ A registered Steelbore theme slug such as @code{steelbore},
 the Steelbore Standard §11.6 resolution, reported as @code{command-line}.  It
 outranks @env{SPACECRAFT_THEME}; an unregistered slug is a usage error.
 Without it the palette is resolved as §11.6 prescribes: the environment
-variable, then the family default, with @env{NO_COLOR} (or @code{--no-color})
+variable, then the theme's declared palette (with @code{--theme}), then the
+family default, with @env{NO_COLOR} (or @code{--no-color})
 overlaying the mono theme.  A @code{-high-contrast} or mono slug named here or
 in @env{SPACECRAFT_THEME} is pinned and no overlay changes it.  The theme is
 resolved once and held for the run.
@@ -488,7 +494,10 @@ The splash chooses its palette in two stages.  The base palette is the first
 registered slug among: @code{--palette} (the NixOS module's @code{palette}
 option), the kernel parameter @code{fairing.theme=}, @env{SPACECRAFT_THEME},
 the theme's declared @code{palette}, and the family default
-@code{steelbore}.  An unregistered slug is skipped, never fatal.  Then,
+@code{steelbore}.  An unregistered slug is skipped with a warning, never
+fatal; the module also refuses an unregistered @code{palette} option at build
+time.  @command{fairing preview}, run by a person, treats an unregistered
+@code{--palette} as a usage error instead.  Then,
 unless a @code{-high-contrast} or mono slug was named outright, @env{NO_COLOR}
 selects the mono variant.  The accessible-mode overlay to
 @code{-high-contrast} arrives with the accessibility milestone.
@@ -536,9 +545,10 @@ read-only except its own two directories, and no network.
 @cindex greetd
 @cindex handoff
 The handoff to greetd is ordering plus one stop.  @code{fairing.service} is
-ordered before @code{greetd.service}, and greetd's start first stops
-@code{fairing.service} and waits for it, so the splash has drawn the full bar
-and released the display before greetd opens the console.  The two units do
+ordered before @code{greetd.service}.  greetd's start first writes the
+handoff marker @file{/run/fairing/handoff}, then stops @code{fairing.service}
+and waits for it, so the splash has drawn the full bar and released the
+display before greetd opens the console.  The two units do
 not conflict: in one boot transaction a conflict makes systemd drop greetd's
 start job, and the machine would come up without a login screen.
 
