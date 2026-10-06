@@ -23,6 +23,11 @@
 let
   cfg = config.steelbore.fairing;
 
+  # The registered palette slugs, read from the palette file the binary is
+  # built from, never retyped.
+  registered =
+    (lib.importTOML ../../crates/fairing-theme/assets/steelbore.toml).meta."registered-set";
+
   artefact = pkgs.callPackage ./theme.nix {
     fairing = cfg.package;
     inherit (cfg) theme;
@@ -138,6 +143,10 @@ in
         message = "steelbore.fairing runs in the systemd initrd; set boot.initrd.systemd.enable = true.";
       }
       {
+        assertion = cfg.palette == null || lib.elem cfg.palette registered;
+        message = "steelbore.fairing.palette `${toString cfg.palette}` is not a registered palette; one of: ${lib.concatStringsSep ", " registered}.";
+      }
+      {
         assertion = config.services.greetd.enable;
         message = "steelbore.fairing holds the screen until greetd starts; enable services.greetd.";
       }
@@ -175,9 +184,12 @@ in
       ];
       # A password question steps the splash aside so the console agent's
       # prompt is visible; the in-splash agent replaces this at M3.
+      # Emergency mode takes the console, and the initrd has no bus to tell
+      # the splash: the conflict stops it (FRN-SRS-034 in the initrd).
       conflicts = [
         "initrd-switch-root.target"
         "shutdown.target"
+        "emergency.target"
         "systemd-ask-password-console.service"
       ];
       serviceConfig = common // {
@@ -213,8 +225,13 @@ in
         "greetd.service"
         "shutdown.target"
       ];
+      # Rescue and emergency mode take the console. `OnFailure=` starts them
+      # without isolating, so the conflict is what stops the splash; D-Bus would
+      # only see it a poll later (FRN-SRS-034).
       conflicts = [
         "shutdown.target"
+        "emergency.target"
+        "rescue.target"
         "systemd-ask-password-console.service"
       ];
       restartIfChanged = false;
@@ -251,9 +268,13 @@ in
       };
     };
 
-    # The handoff (FRN-SRS-017): greetd's start stops the splash first, and
-    # waits for it, so DRM master is free when greetd opens the console.
+    # The handoff (FRN-SRS-017): greetd's start marks it, then stops the
+    # splash and waits for it, so DRM master is free when greetd opens the
+    # console. The marker is what makes this SIGTERM the handoff (a full bar,
+    # the durations cached); a stop without it is a plain stop. Both lines are
+    # allowed to fail: after the splash has gone, /run/fairing is gone too.
     systemd.services.greetd.serviceConfig.ExecStartPre = [
+      "-${pkgs.coreutils}/bin/touch /run/fairing/handoff"
       "-${config.systemd.package}/bin/systemctl stop fairing.service"
     ];
   };

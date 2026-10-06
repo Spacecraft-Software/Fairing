@@ -4,14 +4,16 @@
 # NixOS VM test: a unit fails during stage 2 and the splash leaves the screen
 # to the console within a second (FRN-SRS-034), exit 0, while the boot goes
 # on. greetd is installed but not started, so nothing but the failure can
-# end the splash. Like boot.nix it needs KVM and carries no marker until it
-# has run green there.
+# end the splash. Like boot.nix it carries no marker until it has run green;
+# `tcg = true` runs it without KVM.
 {
   pkgs,
   module,
+  tcg ? false,
 }:
 pkgs.testers.runNixOSTest {
   name = "fairing-failed-unit";
+  requiredFeatures.kvm = !tcg;
 
   nodes.machine =
     { config, lib, ... }:
@@ -22,6 +24,10 @@ pkgs.testers.runNixOSTest {
         kmsModules = [ "bochs" ];
       };
       boot.initrd.systemd.enable = true;
+      systemd.services.fairing.serviceConfig.TimeoutStartSec = lib.mkIf tcg (lib.mkForce "120s");
+      boot.initrd.systemd.services.fairing-initrd.serviceConfig.TimeoutStartSec = lib.mkIf tcg (
+        lib.mkForce "120s"
+      );
       services.greetd = {
         enable = true;
         settings.default_session.command = "${lib.getExe' config.services.greetd.package "agreety"} --cmd true";

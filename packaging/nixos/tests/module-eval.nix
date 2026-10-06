@@ -89,8 +89,20 @@ let
       lib.elem "greetd.service" (directive systemText "Before");
     "FRN-SRS-032: greetd stops fairing.service before it runs" =
       lib.hasInfix "systemctl stop fairing.service" greetdText;
+    "FRN-SRS-017: greetd marks the handoff before it stops the splash" =
+      let
+        pre = lib.filter (lib.hasPrefix "ExecStartPre=") (lib.splitString "\n" greetdText);
+        index = needle: lib.lists.findFirstIndex (lib.hasInfix needle) null pre;
+      in
+      index "touch /run/fairing/handoff" != null
+      && index "touch /run/fairing/handoff" < index "systemctl stop fairing.service";
     "FRN-SRS-032: fairing.service does not conflict with greetd.service" =
       !(lib.elem "greetd.service" (directive systemText "Conflicts"));
+    "FRN-SRS-034: emergency mode stops the initrd splash" =
+      lib.elem "emergency.target" (directive initrdText "Conflicts");
+    "FRN-SRS-034: rescue and emergency mode stop the stage-2 splash" = lib.all (
+      target: lib.elem target (directive systemText "Conflicts")
+    ) [ "emergency.target" "rescue.target" ];
     "fairing.service starts only during a boot" =
       hasLine systemText "ConditionPathIsDirectory=/run/fairing";
     "the initrd keeps /run/fairing across switch-root" =
@@ -117,6 +129,11 @@ let
     "FRN-SRS-091: Plymouth alongside Fairing is a configuration error" = lib.any (
       message: lib.hasInfix "replaces Plymouth" message
     ) (failedAssertions (evaluate { boot.plymouth.enable = true; }));
+    "an unregistered palette is a configuration error" = lib.any (
+      message: lib.hasInfix "not a registered palette" message
+    ) (failedAssertions (evaluate { steelbore.fairing.palette = "tokyo-night"; }));
+    "a registered palette is accepted" =
+      failedAssertions (evaluate { steelbore.fairing.palette = "steelbore-high-contrast"; }) == [ ];
     "a disabled module adds no unit" =
       !((evaluate { steelbore.fairing.enable = lib.mkForce false; }).config.systemd.units ? "fairing.service");
   };

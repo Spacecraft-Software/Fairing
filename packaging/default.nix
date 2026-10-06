@@ -86,7 +86,17 @@ rustPlatform.buildRustPackage (finalAttrs: {
   meta = {
     description = "Boot splash for Steelbore OS Bravais: real systemd progress, in-splash LUKS prompt, greetd handoff";
     homepage = "https://Fairing.SpacecraftSoftware.org/";
-    license = lib.licenses.gpl3Plus;
+    # The theme tool links LGPL-3.0-only malachite (under nickel-lang-core), so
+    # a build with it is conveyed under GPL-3.0; the splash builds are
+    # GPL-3.0-or-later throughout (DEPENDENCIES.md).
+    license =
+      if withThemeTool then
+        [
+          lib.licenses.gpl3Only
+          lib.licenses.lgpl3Only
+        ]
+      else
+        lib.licenses.gpl3Plus;
     platforms = lib.platforms.linux;
     mainProgram = "fairing";
   };
