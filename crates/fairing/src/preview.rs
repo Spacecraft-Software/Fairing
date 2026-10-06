@@ -227,6 +227,7 @@ pub fn run(
             explicit: args.palette.as_deref(),
             declared_default: args.theme.as_ref().map(|_| theme.meta().palette.as_str()),
             verb: "preview",
+            strict: true,
             ..PaletteSources::default()
         },
         context,

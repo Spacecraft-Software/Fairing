@@ -237,7 +237,7 @@ pub struct SplashArgs {
     /// D-Bus to read progress from: `system`, `none`, or a bus address (test seam).
     #[arg(long, value_name = "bus", default_value = "system", hide = true)]
     pub bus: String,
-    /// Stop as if SIGTERM arrived after this many seconds (test seam).
+    /// Stop as if the greetd handoff arrived after this many seconds (test seam).
     #[arg(long, value_name = "n", value_parser = parse_seconds, hide = true)]
     pub exit_after: Option<f64>,
 }

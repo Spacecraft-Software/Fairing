@@ -47,8 +47,9 @@ postcard = { version = "1.1", default-features = false }
 png = "0.18"
 nickel-lang-core = { version = "0.19", default-features = false }
 # systemd's Manager.Progress for the splash (M2): the blocking API over zbus's
-# own async-io executor (no tokio); `p2p` for a manager endpoint without a bus
-# daemon (`/run/systemd/private`), which costs only `getrandom`.
+# own async-io executor (no tokio); `p2p` for the peer-to-peer fake manager the
+# tests serve, which costs only `getrandom`. systemd's private socket is refused:
+# zbus 5.19 panics on PID 1's replies there.
 zbus = { version = "5.19", default-features = false, features = ["async-io", "blocking-api", "p2p"] }
 # SIGTERM for the splash (M2): `flag::register` is a safe call; no iterator thread.
 signal-hook = { version = "0.4", default-features = false }

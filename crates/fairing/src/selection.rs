@@ -78,8 +78,12 @@ pub fn choose_backend(
 /// Where a palette may come from, besides the environment and `NO_COLOR`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PaletteSources<'a> {
-    /// `--palette`: source 1, and a usage error when unregistered.
+    /// `--palette`: source 1.
     pub explicit: Option<&'a str>,
+    /// Whether an unregistered `--palette` is a usage error (`preview`, run
+    /// by a person) rather than skipped with a warning like every other source
+    /// (`splash`, run by a unit, where a typo must not cost the splash).
+    pub strict: bool,
     /// The kernel command line, searched for `fairing.theme=`.
     pub kernel_cmdline: Option<&'a str>,
     /// The compiled theme's declared palette.
@@ -95,8 +99,9 @@ pub struct PaletteSources<'a> {
 ///
 /// # Errors
 ///
-/// `INVALID_ARGUMENT` when `--palette` is empty or not a registered theme; a
-/// slug from any other source is skipped instead, as §11.6 requires.
+/// `INVALID_ARGUMENT` when `--palette` is empty or not a registered theme and
+/// the caller is `strict`; otherwise that slug, like one from any other
+/// source, is skipped with a warning, as §11.6 and FRN-SRS-045 require.
 pub fn resolve_palette(
     sources: &PaletteSources<'_>,
     context: &Context,
@@ -114,13 +119,27 @@ pub fn resolve_palette(
         accessible: false,
     };
     let resolution = fairing_theme::resolve(&request);
-    if let Some(slug) = sources.explicit
-        && (slug.trim().is_empty()
+    let unusable = sources.explicit.filter(|slug| {
+        slug.trim().is_empty()
             || resolution
                 .skipped
                 .iter()
-                .any(|s| s.source == Source::Explicit))
+                .any(|s| s.source == Source::Explicit)
+    });
+    if let Some(slug) = unusable
+        && !sources.strict
     {
+        Diagnostic::new(
+            Severity::Warn,
+            "PALETTE_SKIPPED",
+            format!(
+                "palette `{slug}` is not a registered theme; using `{}` from {}",
+                resolution.selection, resolution.source
+            ),
+            invocation,
+        )
+        .emit(context);
+    } else if let Some(slug) = unusable {
         return Err(AppError::invalid_argument(
             format!("palette `{slug}` is not a registered theme"),
             format!(

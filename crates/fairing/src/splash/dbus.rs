@@ -6,11 +6,12 @@
 //! FRN-SRS-034, FRN-SRS-050).
 //!
 //! One thread connects, polls the manager every [`POLL_INTERVAL`] and sends
-//! what it reads to the render loop as [`Event`]s. Every call is bounded by
-//! [`METHOD_TIMEOUT`], so a wedged PID 1 costs this thread half a second per
-//! call and the render loop nothing: the loop never waits on the channel, and
-//! the 2 s degrade deadline (FRN-SRS-016) is the loop's own, independent of
-//! how long a connect attempt takes (FRN-SRS-037).
+//! what it reads to the render loop as [`Event`]s. A connection attempt,
+//! handshake included, is bounded by [`CONNECT_TIMEOUT`] and every call by
+//! [`METHOD_TIMEOUT`], so a broker that accepts and never answers, or a
+//! wedged PID 1, costs this thread a second at most before it reports and
+//! retries, and the render loop nothing: the loop never waits on the channel,
+//! and the 2 s degrade deadline (FRN-SRS-016) is the loop's own (FRN-SRS-037).
 //!
 //! `Progress` and `SystemState` are annotated `EmitsChangedSignal=false` by
 //! systemd, so the proxies never cache properties: a cached value would never
@@ -19,10 +20,12 @@
 //! The thread lives until the process exits; the splash exits by returning
 //! from `main`, which ends it.
 
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Duration;
+use std::task::{Context, Poll, Wake, Waker};
+use std::time::{Duration, Instant};
 
-use zbus::blocking::{Connection, connection};
+use zbus::blocking::Connection;
 use zbus::proxy;
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::OwnedObjectPath;
@@ -35,6 +38,12 @@ use crate::splash::events::{Event, Snapshot};
 /// generous for a loaded early boot and short enough that a failed unit is
 /// still noticed within FRN-SRS-034's second.
 pub const METHOD_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Bound on one connection attempt: socket, authentication and `Hello`.
+///
+/// zbus bounds method calls but not the handshake: with the socket listening
+/// and the broker not yet answering, a connect would otherwise wait for ever.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Time between polls.
 ///
@@ -109,25 +118,43 @@ pub const SYSTEM_BUS: &str = "unix:path=/run/dbus/system_bus_socket";
 /// profile turns any panic into an abort of the whole splash.
 const PRIVATE_SOCKET: &str = "/run/systemd/private";
 
-/// Checks a `--bus` value: `system`, `none`, or a peer-to-peer D-Bus address
-/// (tests serve a fake manager this way).
+/// Checks a `--bus` value: `system`, `none`, or `unix:path=<absolute path>` of
+/// a peer-to-peer endpoint (tests serve a fake manager this way).
+///
+/// systemd's private socket is refused by identity, not by spelling: a path
+/// that names it through `//`, `.` or a symlink is the same file, and a
+/// connection to it would abort the splash.
 ///
 /// # Errors
 ///
-/// Why the value cannot be used: not a D-Bus address, or systemd's private
-/// socket.
+/// Why the value cannot be used: another transport, a relative path, or
+/// systemd's private socket.
 pub fn check_bus(bus: &str) -> Result<(), String> {
     if bus == "system" || bus == "none" {
         return Ok(());
     }
-    if bus.contains(PRIVATE_SOCKET) {
+    let path = bus
+        .strip_prefix("unix:path=")
+        .filter(|path| !path.is_empty() && !path.contains(','))
+        .map(std::path::Path::new)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| format!("`{bus}` is not `system`, `none` or `unix:path=<absolute path>`"))?;
+    if names_file(path, std::path::Path::new(PRIVATE_SOCKET)) {
         return Err(format!(
             "`{PRIVATE_SOCKET}` is not supported; use the system bus"
         ));
     }
-    zbus::Address::try_from(bus)
-        .map(drop)
-        .map_err(|e| format!("`{bus}` is not a D-Bus address: {e}"))
+    Ok(())
+}
+
+/// Whether `path` names `target`: the same file when both exist, the same
+/// path once `.` and repeated separators are dropped otherwise.
+fn names_file(path: &std::path::Path, target: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    if let (Ok(given), Ok(wanted)) = (std::fs::metadata(path), std::fs::metadata(target)) {
+        return given.dev() == wanted.dev() && given.ino() == wanted.ino();
+    }
+    path.components().eq(target.components())
 }
 
 /// Starts the client for `bus` and returns its message channel.
@@ -164,11 +191,50 @@ fn run(bus: &str, tx: &Sender<Event>) {
 
 fn connect(bus: &str) -> zbus::Result<Connection> {
     let builder = if bus == "system" {
-        connection::Builder::address(SYSTEM_BUS)?
+        zbus::connection::Builder::address(SYSTEM_BUS)?
     } else {
-        connection::Builder::address(bus)?.p2p()
+        zbus::connection::Builder::address(bus)?.p2p()
     };
-    builder.method_timeout(METHOD_TIMEOUT).build()
+    let pending = builder.method_timeout(METHOD_TIMEOUT).build();
+    block_on_until(pending, Instant::now() + CONNECT_TIMEOUT).map_or_else(
+        || {
+            Err(zbus::Error::Failure(format!(
+                "no answer from the bus within {} s",
+                CONNECT_TIMEOUT.as_secs()
+            )))
+        },
+        |built| built.map(Connection::from),
+    )
+}
+
+/// Runs `future` on this thread until it completes or `deadline` passes.
+///
+/// zbus's I/O is driven by async-io's own reactor thread, which wakes this one
+/// through the waker; a future still pending at the deadline is dropped, which
+/// closes its socket, so nothing is left behind.
+fn block_on_until<F: Future>(future: F, deadline: Instant) -> Option<F::Output> {
+    struct Unpark(std::thread::Thread);
+    impl Wake for Unpark {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let waker = Waker::from(Arc::new(Unpark(std::thread::current())));
+    let mut context = Context::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    loop {
+        if let Poll::Ready(output) = future.as_mut().poll(&mut context) {
+            return Some(output);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return None;
+        }
+        std::thread::park_timeout(deadline - now);
+    }
 }
 
 /// Polls until a call fails (returns `true`: reconnect) or the loop is gone
@@ -181,8 +247,9 @@ fn poll(connection: &Connection, tx: &Sender<Event>) -> bool {
         Ok(manager) => manager,
         Err(error) => return tx.send(Event::Lost(error.to_string())).is_ok(),
     };
+    let mut jobs = JobOrder::default();
     loop {
-        let event = match snapshot(connection, &manager) {
+        let event = match snapshot(connection, &manager, &mut jobs) {
             Ok(snapshot) => Event::Snapshot(snapshot),
             Err(error) => return tx.send(Event::Lost(error.to_string())).is_ok(),
         };
@@ -193,19 +260,49 @@ fn poll(connection: &Connection, tx: &Sender<Event>) -> bool {
     }
 }
 
+/// When each job was first seen running, in polls.
+///
+/// systemd numbers a job when it is queued, not when it starts: the whole
+/// boot transaction is queued at once, so a job's id says nothing about when
+/// it began to run. Start order is what the client sees change between polls.
+#[derive(Debug, Default)]
+struct JobOrder {
+    poll: u64,
+    first_running: std::collections::HashMap<u32, u64>,
+}
+
+impl JobOrder {
+    /// The running job that started most recently, from one `ListJobs` reply.
+    ///
+    /// Jobs that started in the same poll are told apart by id, which is as
+    /// good as any order between them. Waiting jobs have not started and are
+    /// never chosen.
+    fn newest<'a>(&mut self, jobs: &'a [Job]) -> Option<&'a Job> {
+        self.poll += 1;
+        let poll = self.poll;
+        let running: Vec<&Job> = jobs.iter().filter(|job| job.3 == "running").collect();
+        self.first_running
+            .retain(|id, _| running.iter().any(|job| job.0 == *id));
+        for job in &running {
+            self.first_running.entry(job.0).or_insert(poll);
+        }
+        running
+            .into_iter()
+            .max_by_key(|job| (self.first_running.get(&job.0).copied(), job.0))
+    }
+}
+
 /// One reading of the manager, with the newest job's unit description.
-fn snapshot(connection: &Connection, manager: &ManagerProxy<'_>) -> zbus::Result<Snapshot> {
+fn snapshot(
+    connection: &Connection,
+    manager: &ManagerProxy<'_>,
+    order: &mut JobOrder,
+) -> zbus::Result<Snapshot> {
     let progress = manager.progress()?;
     let failed_units = manager.n_failed_units()?;
     let system_state = manager.system_state()?;
     let jobs = manager.list_jobs()?;
-    // Job ids only grow, so the highest running id is the job started last.
-    let newest = jobs
-        .iter()
-        .filter(|job| job.3 == "running")
-        .max_by_key(|job| job.0)
-        .or_else(|| jobs.iter().max_by_key(|job| job.0));
-    let job = match newest {
+    let job = match order.newest(&jobs) {
         Some(job) => {
             let unit = UnitProxy::builder(connection)
                 .path(job.5.clone())?
@@ -227,8 +324,8 @@ fn snapshot(connection: &Connection, manager: &ManagerProxy<'_>) -> zbus::Result
 #[cfg(test)]
 mod tests {
     use std::os::unix::net::UnixListener;
-    use std::time::Instant;
 
+    use zbus::blocking::connection;
     use zbus::{Guid, interface};
 
     use super::*;
@@ -352,7 +449,6 @@ mod tests {
 
     #[test]
     fn an_absent_bus_is_reported_and_retried() {
-        // Verifies: FRN-SRS-016
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let address = format!("unix:path={}", dir.path().join("nobody").display());
         let rx = spawn(&address);
@@ -382,5 +478,95 @@ mod tests {
             .unwrap_or_default();
         assert!(private.contains("not supported"), "{private}");
         assert!(check_bus("not an address").is_err());
+    }
+
+    #[test]
+    fn a_bus_that_never_answers_is_given_up_on_and_retried() {
+        // Verifies: FRN-SRS-037
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let path = dir.path().join("silent");
+        let listener = UnixListener::bind(&path).unwrap_or_else(|e| panic!("{e}"));
+        // Accept every connection and hold it open without a word.
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming().flatten() {
+                held.push(stream);
+            }
+        });
+        let rx = spawn(&format!("unix:path={}", path.display()));
+        let started = Instant::now();
+        let mut lost = 0;
+        while lost < 2 {
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Ok(Event::Lost(_)) => lost += 1,
+                Ok(other) => panic!("unexpected {other:?}"),
+                Err(e) => panic!("{e}"),
+            }
+        }
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < CONNECT_TIMEOUT * 2 + Duration::from_secs(1),
+            "{elapsed:?}"
+        );
+    }
+
+    fn job(id: u32, state: &str) -> Job {
+        let path = OwnedObjectPath::try_from(format!("/org/freedesktop/systemd1/job/{id}"))
+            .unwrap_or_else(|e| panic!("{e}"));
+        (
+            id,
+            format!("unit{id}.service"),
+            "start".to_owned(),
+            state.to_owned(),
+            path.clone(),
+            path,
+        )
+    }
+
+    #[test]
+    fn the_newest_job_is_the_last_to_start_running_not_the_highest_id() {
+        // Verifies: FRN-SRS-050
+        let mut order = JobOrder::default();
+        // Job 300 runs first; job 120 starts a poll later.
+        let first = [job(300, "running"), job(120, "waiting")];
+        assert_eq!(order.newest(&first).map(|j| j.0), Some(300));
+        let second = [job(300, "running"), job(120, "running")];
+        assert_eq!(order.newest(&second).map(|j| j.0), Some(120));
+        // 120 finishes; 300 is still the one running.
+        let third = [job(300, "running")];
+        assert_eq!(order.newest(&third).map(|j| j.0), Some(300));
+        // Only waiting jobs: nothing has started, nothing is shown.
+        assert_eq!(order.newest(&[job(400, "waiting")]).map(|j| j.0), None);
+    }
+
+    #[test]
+    fn the_private_socket_is_refused_however_it_is_spelt() {
+        for spelling in [
+            "unix:path=/run/systemd/private",
+            "unix:path=/run/systemd//private",
+            "unix:path=/run//systemd/./private",
+        ] {
+            assert!(check_bus(spelling).is_err(), "{spelling}");
+        }
+        assert!(
+            check_bus("unix:path=run/systemd/private").is_err(),
+            "relative"
+        );
+        assert!(
+            check_bus("unixexec:path=/bin/true").is_err(),
+            "other transports"
+        );
+        // A symlink to a socket is the socket.
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let socket = dir.path().join("manager");
+        let _listener = UnixListener::bind(&socket).unwrap_or_else(|e| panic!("{e}"));
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&socket, &link).unwrap_or_else(|e| panic!("{e}"));
+        assert!(names_file(&link, &socket));
+        assert!(!names_file(&socket, dir.path()));
+        assert!(names_file(
+            std::path::Path::new("/nonexistent//dir/./socket"),
+            std::path::Path::new("/nonexistent/dir/socket")
+        ));
     }
 }
