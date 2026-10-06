@@ -2,12 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Rust guideline compliant 2026-05-18
 
-//! The built-in layout, authored in the 1920×1080 reference frame.
+//! The layout the compositor draws, in the 1920×1080 reference frame.
 //!
-//! Milestone M2 makes the layout theme data (the Nickel contract); until then
-//! this is the one layout Fairing draws. Everything here is in reference
-//! pixels and goes through a [`Viewport`](crate::Viewport) before it is drawn
-//! (FRN-SRS-007).
+//! A theme's boot layout ([`BootLayout`]) arrives from the compiled theme
+//! artefact; [`Layout::from_spec`] turns it into rectangles and roles here.
+//! Without a theme, [`Layout::builtin`] is the same layout the reference theme
+//! declares. Everything is in reference pixels and goes through a
+//! [`Viewport`](crate::Viewport) before it is drawn (FRN-SRS-007).
+
+use fairing_theme::{BootLayout, RectSpec, Role};
 
 use crate::geometry::{Rect, Size};
 
@@ -17,10 +20,10 @@ pub const REFERENCE_SIZE: Size = match Size::checked(1920, 1080) {
     None => panic!("the reference frame is non-empty"),
 };
 
-/// Positions and sizes of the splash elements in reference pixels.
+/// Positions, sizes and roles of the splash elements, in reference pixels.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Layout {
-    /// The square the logo is drawn in.
+    /// The box the logo is fitted into.
     pub logo: Rect,
     /// The progress-bar track.
     pub bar: Rect,
@@ -28,31 +31,59 @@ pub struct Layout {
     pub bar_radius: f32,
     /// Stroke width of the bar outline.
     pub bar_outline: f32,
+    /// The bar's filled part.
+    pub bar_fill: Role,
+    /// The bar's empty part.
+    pub bar_track: Role,
+    /// The bar's outline.
+    pub bar_border: Role,
     /// Gap between the bar's right edge and the percentage text.
     pub percent_gap: f32,
     /// Font size of the percentage text (FRN-SRS-053).
     pub percent_size: f32,
+    /// Colour of the percentage text.
+    pub percent_color: Role,
+    /// Whether the status line is drawn (FRN-SRS-050).
+    pub show_status: bool,
     /// Top of the status line.
     pub status_top: f32,
     /// Font size of the status line.
     pub status_size: f32,
+    /// Colour of the status line.
+    pub status_color: Role,
 }
 
 impl Layout {
     /// The built-in layout: logo above a centred bar, percentage beside it, status below.
     #[must_use]
     pub const fn builtin() -> Self {
+        Self::from_spec(&BootLayout::builtin())
+    }
+
+    /// The layout a compiled theme's boot layout describes.
+    #[must_use]
+    pub const fn from_spec(spec: &BootLayout) -> Self {
         Self {
-            logo: Rect::new(840.0, 300.0, 240.0, 240.0),
-            bar: Rect::new(640.0, 640.0, 640.0, 14.0),
-            bar_radius: 7.0,
-            bar_outline: 1.5,
-            percent_gap: 28.0,
-            percent_size: 30.0,
-            status_top: 704.0,
-            status_size: 26.0,
+            logo: rect(spec.logo.rect),
+            bar: rect(spec.bar.rect),
+            bar_radius: spec.bar.radius,
+            bar_outline: spec.bar.outline,
+            bar_fill: spec.bar.fill,
+            bar_track: spec.bar.track,
+            bar_border: spec.bar.border,
+            percent_gap: spec.percent.gap,
+            percent_size: spec.percent.size,
+            percent_color: spec.percent.color,
+            show_status: spec.status.show,
+            status_top: spec.status.top,
+            status_size: spec.status.size,
+            status_color: spec.status.color,
         }
     }
+}
+
+const fn rect(spec: RectSpec) -> Rect {
+    Rect::new(spec.x, spec.y, spec.width, spec.height)
 }
 
 impl Default for Layout {

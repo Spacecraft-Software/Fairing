@@ -16,6 +16,17 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["theme-tool", "dbus"]
+# `fairing theme check` / `compile`: Nickel evaluation and PNG decoding. The
+# NixOS module builds the splash without it (the boot path only loads
+# compiled themes), keeping the evaluator off the boot path.
+theme-tool = ["fairing-theme/compile"]
+# The systemd D-Bus client of the stage-2 splash (FRN-SRS-012, FRN-SRS-034,
+# FRN-SRS-050). The initrd has no bus, so its copy is built without it;
+# without it `--stage system` drives the bar from the cached duration.
+dbus = ["dep:zbus"]
+
 [dependencies]
 fairing-render = { version = "0.1.0", path = "../fairing-render" }
 fairing-theme = { version = "0.1.0", path = "../fairing-theme" }
@@ -23,6 +34,11 @@ clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 jiff = { workspace = true }
+# CLOCK_BOOTTIME for the boot-time progress estimate (the `time` feature's
+# clock_gettime is a safe call); rustix is already qualified for the renderer.
+rustix = { workspace = true, features = ["time"] }
+signal-hook = { workspace = true }
+zbus = { workspace = true, optional = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
