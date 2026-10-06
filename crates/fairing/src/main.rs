@@ -8,9 +8,10 @@
 //! carries the CLI skeleton of the Spacecraft Software CLI Standard (R-014):
 //! global flags, the output-mode cascade, the `metadata` + `data` envelope,
 //! structured errors and diagnostics, `schema` and `describe`; and, from
-//! milestone M1, `preview`, which draws the splash with a simulated bar. The
-//! splash, shutdown and theme verbs arrive with their milestones and are not
-//! advertised until they exist.
+//! milestone M1, `preview`, which draws the splash with a simulated bar; and,
+//! from M2, `splash` (the boot splash the units run) and `theme` (check,
+//! compile, inspect). The shutdown stage arrives with M4 and is not advertised
+//! until it exists.
 
 #![forbid(unsafe_code)]
 
@@ -107,6 +108,21 @@ fn handle_parse_error(error: &clap::Error, argv: &[String], invocation: &str) ->
             let _ = error.print();
             ExitCode::SUCCESS
         }
+        ErrorKind::MissingRequiredArgument | ErrorKind::MissingSubcommand => {
+            use clap::error::{ContextKind, ContextValue};
+            let context = Context::from_argv(argv);
+            let missing = match error.get(ContextKind::InvalidArg) {
+                Some(ContextValue::Strings(names)) => names.join(", "),
+                Some(ContextValue::String(name)) => name.clone(),
+                _ => "a subcommand".to_owned(),
+            };
+            let app_error = AppError::missing_argument(
+                format!("missing required argument {missing}"),
+                help_hint(argv),
+                invocation,
+            );
+            ExitCode::from(app_error.report(&context))
+        }
         _ => {
             let context = Context::from_argv(argv);
             let message = error
@@ -123,9 +139,42 @@ fn handle_parse_error(error: &clap::Error, argv: &[String], invocation: &str) ->
     }
 }
 
+/// `fairing <verb> --help` for the verb (and theme sub-verb) on the command
+/// line, `fairing --help` when there is none.
+fn help_hint(argv: &[String]) -> String {
+    const VERBS: [&str; 5] = ["splash", "theme", "preview", "describe", "schema"];
+    const THEME_VERBS: [&str; 3] = ["check", "compile", "inspect"];
+    let mut words = argv.iter().skip(1).map(String::as_str);
+    let Some(verb) = words.find(|word| VERBS.contains(word)) else {
+        return "fairing --help".to_owned();
+    };
+    match words
+        .next()
+        .filter(|word| verb == "theme" && THEME_VERBS.contains(word))
+    {
+        Some(sub) => format!("fairing theme {sub} --help"),
+        None => format!("fairing {verb} --help"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::help_hint;
     use crate::output::mode::Mode;
+
+    #[test]
+    fn the_help_hint_names_the_verb() {
+        let argv = |words: &[&str]| words.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            help_hint(&argv(&["fairing", "--json", "splash"])),
+            "fairing splash --help"
+        );
+        assert_eq!(
+            help_hint(&argv(&["fairing", "theme", "check"])),
+            "fairing theme check --help"
+        );
+        assert_eq!(help_hint(&argv(&["fairing", "--json"])), "fairing --help");
+    }
 
     #[test]
     fn mode_names_are_stable() {

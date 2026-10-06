@@ -46,3 +46,5 @@ predicates = { workspace = true }
 tempfile = { workspace = true }
 # Test-only: checks the `--size` schema pattern against the parser's range.
 regex = { workspace = true }
+# Test-only: sends SIGTERM in-process, so the 100 ms measurement holds no fork.
+rustix = { workspace = true, features = ["process"] }

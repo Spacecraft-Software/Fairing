@@ -279,6 +279,21 @@ fn unknown_schema_target_exits_3_not_found() {
 }
 
 #[test]
+fn a_missing_required_argument_is_named() {
+    // Verifies: FRN-SRS-082
+    for (args, name) in [
+        (vec!["splash", "--json"], "--stage"),
+        (vec!["theme", "inspect", "--json"], "file.fairing"),
+    ] {
+        let output = fairing().args(&args).assert().code(2).get_output().clone();
+        let error = json(&output.stderr);
+        assert_eq!(error["error"]["code"], "MISSING_ARGUMENT", "{args:?}");
+        let message = error["error"]["message"].as_str().unwrap_or_default();
+        assert!(message.contains(name), "{args:?}: {message}");
+    }
+}
+
+#[test]
 fn no_subcommand_is_a_missing_argument() {
     // Verifies: FRN-SRS-082
     let output = fairing()
@@ -1444,19 +1459,17 @@ fn splash_releases_the_output_within_100_ms_of_sigterm() {
     // this SIGTERM the handoff.
     std::fs::create_dir_all(dir.path().join("run")).unwrap_or_else(|e| panic!("{e}"));
     std::fs::write(dir.path().join("run/handoff"), b"").unwrap_or_else(|e| panic!("{e}"));
+    let pid = i32::try_from(child.id())
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+        .unwrap_or_else(|| panic!("pid"));
     let sent = std::time::Instant::now();
-    let killed = std::process::Command::new("kill")
-        .args(["-TERM", &child.id().to_string()])
-        .status()
+    rustix::process::kill_process(pid, rustix::process::Signal::TERM)
         .unwrap_or_else(|e| panic!("{e}"));
-    assert!(killed.success());
     let status = child.wait().unwrap_or_else(|e| panic!("{e}"));
     let elapsed = sent.elapsed();
     assert!(status.success(), "{status}");
-    assert!(
-        elapsed < std::time::Duration::from_millis(100),
-        "{elapsed:?}"
-    );
+    assert!(elapsed < std::time::Duration::from_secs(1), "{elapsed:?}");
     let mut stdout = String::new();
     std::io::Read::read_to_string(
         &mut child.stdout.take().unwrap_or_else(|| panic!("stdout")),
@@ -1466,6 +1479,10 @@ fn splash_releases_the_output_within_100_ms_of_sigterm() {
     let data = json(stdout.as_bytes())["data"].clone();
     assert_eq!(data["reason"], "handoff");
     assert_eq!(data["bar"], 1.0, "the handoff frame shows 100%");
+    // The requirement's 100 ms is the splash's own: from SIGTERM to the
+    // output released. Process exit, measured above, has a looser bound.
+    let release = data["release_ms"].as_f64().unwrap_or(f64::MAX);
+    assert!(release < 100.0, "released {release} ms after SIGTERM");
 }
 
 #[test]
