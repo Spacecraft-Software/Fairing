@@ -17,7 +17,8 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use fairing_render::{
-    Choice, Compositor, NoBackend, Opened, Presenter, PresenterConfig, Scene, Size, open,
+    Choice, Compositor, NoBackend, Opened, Presenter, PresenterConfig, RenderErrorKind, Scene,
+    Size, open,
 };
 use fairing_theme::{CompiledTheme, Selection};
 use serde::Serialize;
@@ -44,6 +45,14 @@ pub const CACHE_RETRY: Duration = Duration::from_secs(1);
 
 /// Frames per second while booting (FRN-SRS-005).
 pub const SPLASH_HZ: u32 = 30;
+
+/// How long flips may stay late before the splash gives up on the output.
+///
+/// A flip whose completion misses the backend's wait is a dropped frame, not
+/// a failed output: a busy boot can hold the kernel's commit work that long.
+/// A display that has not flipped for this long has failed. The bound sits
+/// inside the 5 s of FRN-SRS-037.
+pub const FLIP_STALL_LIMIT: Duration = Duration::from_secs(2);
 
 /// Where the splash reads and writes its files.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -353,6 +362,26 @@ fn finish(
     outcome
 }
 
+/// Late flips in a row, timed on the boot clock from the first of them.
+#[derive(Debug, Default)]
+struct Stall {
+    since: Option<Duration>,
+}
+
+impl Stall {
+    /// A frame was presented: any stall is over.
+    fn clear(&mut self) {
+        self.since = None;
+    }
+
+    /// A frame was late at `now`. `true` once flips have been late for longer
+    /// than [`FLIP_STALL_LIMIT`].
+    fn late(&mut self, now: Duration) -> bool {
+        let since = *self.since.get_or_insert(now);
+        now.saturating_sub(since) > FLIP_STALL_LIMIT
+    }
+}
+
 /// Mutable loop state.
 struct Session {
     bar: Bar,
@@ -362,6 +391,8 @@ struct Session {
     connected: bool,
     dbus_notice_sent: bool,
     lost_output_reported: bool,
+    late_flip_reported: bool,
+    stall: Stall,
     ready_sent: bool,
     /// When the loop first saw the terminate flag.
     terminate_seen: Option<Instant>,
@@ -381,6 +412,8 @@ impl Session {
             connected: false,
             dbus_notice_sent: false,
             lost_output_reported: false,
+            late_flip_reported: false,
+            stall: Stall::default(),
             ready_sent: false,
             terminate_seen: None,
             failed_baseline: None,
@@ -438,7 +471,7 @@ impl Session {
                 .and_then(|s| s.job.clone())
                 .unwrap_or_default(),
         );
-        if let Err(reason) = self.present(env, presenter, &scene, outcome) {
+        if let Err(reason) = self.present(env, presenter, &scene, outcome, now) {
             return Some(reason);
         }
         // Ready after the first attempt: after the first frame, or at once when
@@ -493,16 +526,19 @@ impl Session {
     }
 
     /// Presents one frame. A lost output is retried next tick with the last
-    /// frame left up; any other failure ends the run.
+    /// frame left up, and a late flip drops the frame until flips have been
+    /// late for [`FLIP_STALL_LIMIT`]; any other failure ends the run.
     fn present(
         &mut self,
         env: &Environment<'_>,
         presenter: &mut Presenter,
         scene: &Scene,
         outcome: &mut Outcome,
+        now: Duration,
     ) -> Result<(), Reason> {
         match presenter.present(scene) {
             Ok(()) => {
+                self.stall.clear();
                 outcome.first_bar.get_or_insert(self.bar.shown());
                 outcome.last_status = scene.status().map(str::to_owned);
                 Ok(())
@@ -521,6 +557,18 @@ impl Session {
                 Ok(())
             }
             Err(error) => {
+                if error.kind() == RenderErrorKind::Timeout && !self.stall.late(now) {
+                    if !self.late_flip_reported {
+                        self.late_flip_reported = true;
+                        (env.emit)(Diagnostic::new(
+                            Severity::Warn,
+                            "FLIP_LATE",
+                            format!("{error}; dropping the frame"),
+                            env.invocation,
+                        ));
+                    }
+                    return Ok(());
+                }
                 (env.emit)(Diagnostic::new(
                     Severity::Warn,
                     "RENDER_FAILED",
@@ -995,6 +1043,25 @@ mod tests {
             memory,
         );
         assert_eq!(outcome.reason, Reason::ExitAfter);
+    }
+
+    #[test]
+    fn a_late_flip_is_a_dropped_frame() {
+        let mut stall = Stall::default();
+        let first = Duration::from_secs(10);
+        assert!(!stall.late(first));
+        assert!(!stall.late(first + FLIP_STALL_LIMIT));
+        // A frame landed; the next late flip starts a new stall.
+        stall.clear();
+        assert!(!stall.late(first + FLIP_STALL_LIMIT * 2));
+    }
+
+    #[test]
+    fn flips_late_for_longer_than_the_limit_end_the_run() {
+        let mut stall = Stall::default();
+        let first = Duration::from_secs(10);
+        assert!(!stall.late(first));
+        assert!(stall.late(first + FLIP_STALL_LIMIT + Duration::from_millis(1)));
     }
 
     #[test]

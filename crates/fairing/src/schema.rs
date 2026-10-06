@@ -256,6 +256,7 @@ pub const DIAGNOSTIC_CODES: &[&str] = &[
     "FIRST_FRAME",
     "NO_BACKEND",
     "RENDER_FAILED",
+    "FLIP_LATE",
     "OUTPUT_LOST",
     "DBUS_DEGRADED",
     "DBUS_LOST",
