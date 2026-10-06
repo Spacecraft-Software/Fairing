@@ -178,9 +178,9 @@ Source: FRN-NEED-002; decision 3 (hybrid progress). A time estimate in the initr
 @cindex FRN-SRS-010
 @table @asis
 @item Requirement
-In the initrd, the bar shall display elapsed time divided by the cached initrd duration, clamped to the range 0.00 to 0.30.
+In the initrd, the bar shall display 0.30 times the elapsed time divided by the cached initrd duration, clamped to the range 0.00 to 0.30.
 @item Rationale
-No D-Bus exists before switch-root; the cache is the best available signal.
+No D-Bus exists before switch-root; the cache is the best available signal. Scaled rather than clamped, so the initrd's share of the bar fills over the whole initrd instead of stalling at 30 % of it; the wording was amended in draft to the formula the design and the code use, for confirmation at G1. The cache is read from /sysroot/var/lib/fairing once the root is mounted; until then the first-boot curve applies.
 @item Source
 @ref{FRN-NEED-002}, decision 3.
 @item Priority
