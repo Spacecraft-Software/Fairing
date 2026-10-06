@@ -24,15 +24,16 @@ use fairing_render::{
     Attempt, Choice, Compositor, PixelFormat, Presenter, PresenterConfig, Scene, Size, Surface,
     open,
 };
-use fairing_theme::{Request, Resolution, Source};
+use fairing_theme::{CompiledTheme, Resolution};
 use serde::Serialize;
 
-use crate::cli::{BackendChoice, GlobalFlags, PreviewArgs};
+use crate::cli::{GlobalFlags, PreviewArgs};
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::error::AppError;
 use crate::output::envelope::Response;
 use crate::output::mode::Context;
 use crate::output::write_line;
+use crate::selection::{PaletteSources, choose_backend, resolve_palette};
 
 /// The runnable hint for every "could not draw" failure.
 const MEMORY_HINT: &str = "fairing preview --backend memory --snapshot frame.ppm";
@@ -73,6 +74,8 @@ struct Report {
     width: Option<u32>,
     height: Option<u32>,
     format: Option<&'static str>,
+    /// The theme drawn: its name, `builtin` without `--theme`.
+    theme: String,
     palette: PaletteReport,
     seconds: f64,
     fps: u32,
@@ -89,6 +92,7 @@ struct Report {
 /// Everything decided before a device is touched.
 struct Plan<'a> {
     args: &'a PreviewArgs,
+    theme: CompiledTheme,
     resolution: Resolution,
     choice: Choice,
     memory_size: Size,
@@ -203,7 +207,7 @@ fn snapshot_error(path: &Path, error: &io::Error, invocation: &str) -> AppError 
 ///
 /// # Errors
 ///
-/// `FEATURE_UNAVAILABLE` for `--theme` until M2; `INVALID_ARGUMENT` for an
+/// `NOT_FOUND` or `INVALID_ARGUMENT` for a `--theme` that cannot be loaded; `INVALID_ARGUMENT` for an
 /// unregistered `--palette` or a device backend under an agent harness;
 /// `NOT_FOUND`, `PERMISSION_DENIED` or `CONFLICT` when no backend could draw;
 /// the backend's classified error if drawing fails midway.
@@ -214,16 +218,31 @@ pub fn run(
     flags: &GlobalFlags,
     origin: Instant,
 ) -> Result<(), AppError> {
-    if args.theme.is_some() {
-        return Err(AppError::feature_unavailable(
-            "`--theme` previews a compiled theme, which arrives with the theme format (M2)",
-            invocation,
-        ));
-    }
+    let theme = match &args.theme {
+        None => CompiledTheme::builtin(),
+        Some(path) => load_theme(path, invocation)?,
+    };
+    let resolution = resolve_palette(
+        &PaletteSources {
+            explicit: args.palette.as_deref(),
+            declared_default: args.theme.as_ref().map(|_| theme.meta().palette.as_str()),
+            verb: "preview",
+            ..PaletteSources::default()
+        },
+        context,
+        invocation,
+    )?;
     let plan = Plan {
         args,
-        resolution: resolve_palette(args, context, invocation)?,
-        choice: choose_backend(args, context, invocation, flags.dry_run)?,
+        theme,
+        resolution,
+        choice: choose_backend(
+            args.backend,
+            MEMORY_HINT,
+            context,
+            invocation,
+            flags.dry_run,
+        )?,
         memory_size: Size::new(args.size.0, args.size.1).map_err(|e| {
             AppError::invalid_argument(
                 e.to_string(),
@@ -232,20 +251,6 @@ pub fn run(
             )
         })?,
     };
-    Diagnostic::new(
-        Severity::Info,
-        "PALETTE_RESOLVED",
-        format!(
-            "palette `{}` from {} (base `{}`, overlay {})",
-            plan.resolution.selection,
-            plan.resolution.source,
-            plan.resolution.base,
-            plan.resolution.overlay
-        ),
-        invocation,
-    )
-    .emit(context);
-
     let report = if flags.dry_run {
         planned_report(&plan)
     } else {
@@ -272,6 +277,7 @@ fn planned_report(plan: &Plan<'_>) -> Report {
         width: memory.then(|| plan.memory_size.width()),
         height: memory.then(|| plan.memory_size.height()),
         format: memory.then_some(PixelFormat::Rgba8888.as_str()),
+        theme: plan.theme.meta().name.clone(),
         palette: palette_report(&plan.resolution),
         seconds: plan.args.seconds,
         fps: plan.args.fps,
@@ -304,7 +310,7 @@ fn draw(
         .map_err(|failure| AppError::from_no_backend(&failure, MEMORY_HINT, invocation))?;
     let fallbacks = report_fallbacks(&opened.attempts, context, invocation);
 
-    let compositor = Compositor::new(plan.resolution.selection)
+    let compositor = Compositor::with_theme(plan.resolution.selection, &plan.theme)
         .map_err(|e| AppError::from_render(&e, MEMORY_HINT, invocation))?;
     let config = PresenterConfig {
         hz: plan.args.fps,
@@ -356,6 +362,7 @@ fn draw(
         width: Some(size.width()),
         height: Some(size.height()),
         format: Some(format.as_str()),
+        theme: plan.theme.meta().name.clone(),
         palette: palette_report(&plan.resolution),
         seconds: plan.args.seconds,
         fps: plan.args.fps,
@@ -421,88 +428,13 @@ fn animate(
     }
 }
 
-/// Picks the palette: `--palette` is the explicit source; `SPACECRAFT_THEME`
-/// follows; `NO_COLOR` overlays mono (Steelbore Standard §11.6).
-fn resolve_palette(
-    args: &PreviewArgs,
-    context: &Context,
-    invocation: &str,
-) -> Result<Resolution, AppError> {
-    let environment = std::env::var(fairing_theme::ENV_VAR).ok();
-    let request = Request {
-        explicit: args.palette.as_deref(),
-        kernel_parameter: None,
-        environment: environment.as_deref(),
-        declared_default: None,
-        no_color: context.no_color,
-        accessible: false,
-    };
-    let resolution = fairing_theme::resolve(&request);
-    if let Some(slug) = &args.palette
-        && (slug.trim().is_empty()
-            || resolution
-                .skipped
-                .iter()
-                .any(|s| s.source == Source::Explicit))
-    {
-        return Err(AppError::invalid_argument(
-            format!("palette `{slug}` is not a registered theme"),
-            format!("fairing preview --palette {}", fairing_theme::DEFAULT_SLUG),
-            invocation,
-        ));
+/// The theme `--theme` names: a compiled `.fairing` artefact, or a Nickel
+/// source compiled in memory when this build has `theme-tool` (FRN-SRS-083).
+fn load_theme(path: &Path, invocation: &str) -> Result<CompiledTheme, AppError> {
+    if path.extension().is_some_and(|ext| ext == "ncl") {
+        return crate::theme::compile_source(path, invocation);
     }
-    Ok(resolution)
-}
-
-/// Applies the agent rule (FRN-SRS-084) to the requested backend.
-///
-/// A plan opens nothing, so under `--dry-run` an agent may inspect the device
-/// chain it could not run; the plan carries a warning instead of a refusal.
-fn choose_backend(
-    args: &PreviewArgs,
-    context: &Context,
-    invocation: &str,
-    dry_run: bool,
-) -> Result<Choice, AppError> {
-    if !context.is_agent_environment() {
-        return Ok(args.backend.chain());
-    }
-    match args.backend {
-        BackendChoice::Memory => Ok(Choice::Memory),
-        BackendChoice::Drm | BackendChoice::Fbdev if dry_run => {
-            Diagnostic::new(
-                Severity::Warn,
-                "AGENT_DEVICE_PLAN_ONLY",
-                format!(
-                    "agent environment detected; `--backend {}` is planned here but would be refused without --dry-run",
-                    args.backend.chain()
-                ),
-                invocation,
-            )
-            .with_hint(MEMORY_HINT)
-            .emit(context);
-            Ok(args.backend.chain())
-        }
-        BackendChoice::Auto => {
-            Diagnostic::new(
-                Severity::Warn,
-                "AGENT_MEMORY_BACKEND",
-                "agent environment detected; rendering to memory instead of a VT",
-                invocation,
-            )
-            .with_hint(MEMORY_HINT)
-            .emit(context);
-            Ok(Choice::Memory)
-        }
-        BackendChoice::Drm | BackendChoice::Fbdev => Err(AppError::invalid_argument(
-            format!(
-                "`--backend {}` opens a VT, which an agent environment must not",
-                args.backend.chain()
-            ),
-            MEMORY_HINT,
-            invocation,
-        )),
-    }
+    crate::theme_file::load(path, "fairing theme compile theme.ncl", invocation)
 }
 
 /// The bar position for `elapsed` out of `duration`, in whole percent below 100.
@@ -616,6 +548,7 @@ mod tests {
     use fairing_render::BackendKind;
 
     use super::*;
+    use crate::cli::BackendChoice;
 
     #[test]
     fn simulated_bar_never_reaches_100_before_the_end() {

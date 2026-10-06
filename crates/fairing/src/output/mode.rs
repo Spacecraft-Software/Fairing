@@ -93,6 +93,9 @@ pub struct Context {
     /// Colour was refused outright: `NO_COLOR` is set and non-empty, or `--no-color` /
     /// `--color never` was given (the §11.6 mono overlay; decided here and nowhere else).
     pub no_color: bool,
+    /// stderr is the systemd journal (`JOURNAL_STREAM` names stderr's device and
+    /// inode): diagnostics and errors are written as `<N>`-prefixed text lines.
+    pub journal: bool,
 }
 
 impl Context {
@@ -204,6 +207,7 @@ impl Context {
             tool_agent: env.tool_agent,
             explore_requested,
             no_color: env.no_color || color_flag == Some(ColorChoice::Never),
+            journal: env.journal,
         }
     }
 
@@ -225,6 +229,7 @@ struct Env {
     no_color: bool,
     clicolor_zero: bool,
     dumb_term: bool,
+    journal: bool,
 }
 
 impl Env {
@@ -250,8 +255,34 @@ impl Env {
             no_color: set_non_empty("NO_COLOR"),
             clicolor_zero: std::env::var("CLICOLOR").as_deref() == Ok("0"),
             dumb_term: std::env::var("TERM").as_deref() == Ok("dumb"),
+            journal: std::env::var("JOURNAL_STREAM")
+                .ok()
+                .is_some_and(|value| stderr_is(&value)),
         }
     }
+}
+
+/// Whether stderr is the stream `JOURNAL_STREAM` (`<device>:<inode>`) names.
+///
+/// systemd sets the variable for a unit whose stdout or stderr is connected to
+/// the journal; a child that redirected stderr elsewhere inherits the variable
+/// but not the stream, so the identity is checked rather than trusted.
+fn stderr_is(journal_stream: &str) -> bool {
+    use std::os::fd::AsFd as _;
+    use std::os::unix::fs::MetadataExt as _;
+
+    let Some((device, inode)) = journal_stream.split_once(':') else {
+        return false;
+    };
+    let (Ok(device), Ok(inode)) = (device.parse::<u64>(), inode.parse::<u64>()) else {
+        return false;
+    };
+    std::io::stderr()
+        .as_fd()
+        .try_clone_to_owned()
+        .map(std::fs::File::from)
+        .and_then(|file| file.metadata())
+        .is_ok_and(|meta| meta.dev() == device && meta.ino() == inode)
 }
 
 #[cfg(test)]
@@ -373,6 +404,14 @@ mod tests {
             Context::compute(None, None, false, true, &env()).floor,
             Severity::Info
         );
+    }
+
+    #[test]
+    fn journal_stream_must_name_stderr_itself() {
+        assert!(!stderr_is(""));
+        assert!(!stderr_is("1:2:3"));
+        assert!(!stderr_is("x:y"));
+        assert!(!stderr_is("0:0"), "no real stream has device 0 inode 0");
     }
 
     #[test]
