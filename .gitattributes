@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Steelbore Standard §6.5: every text file is stored LF-terminated.
+* text=auto eol=lf

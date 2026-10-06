@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Steelbore Standard §24.2: the toolchain is pinned so a build is reproducible
+# from the baseline. Bump deliberately, in its own commit, with CHANGELOG entry.
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

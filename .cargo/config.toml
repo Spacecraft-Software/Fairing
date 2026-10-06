@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# `cargo xtask <verb>` runs the in-tree task runner (xtask/). `--quiet` keeps
+# cargo's own "Compiling"/"Running" lines off the terminal so the tool's
+# stdout (for example the §17.1 progress block) is clean.
+[alias]
+xtask = "run --quiet --package xtask --"
