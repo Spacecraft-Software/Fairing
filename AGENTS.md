@@ -115,9 +115,12 @@ will not be green there.
   the D-Bus client is the only other thread and talks to the loop over an mpsc channel.
   `NOTIFY_SOCKET` is read in `splash/mod.rs`, `/proc/cmdline` once per run.
 - The splash reaches greetd by ordering, not conflict: `fairing.service` is
-  `Before=greetd.service`, and greetd's `ExecStartPre` writes `/run/fairing/handoff`
-  and then stops it. Only a SIGTERM with that marker is the handoff (100 % frame,
-  durations cached); any other stage-2 SIGTERM is reason `stopped`. Never add
+  `Before=greetd.service`, and `fairing-handoff.service` (a oneshot greetd wants and
+  waits for) writes `/run/fairing/handoff` and then stops it. Never put the stop in
+  greetd's own `ExecStartPre`: greetd is `Type=idle` and systemd holds it 5 s. Only a
+  SIGTERM with the marker is the handoff (100 % frame, durations cached); any other
+  stage-2 SIGTERM is reason `stopped`, and a boot that finishes without greetd ends
+  the splash with reason `boot-finished`. Never add
   `Conflicts=greetd.service` (systemd drops greetd's start from the boot transaction).
   `fairing.service` only starts while `/run/fairing` exists (the initrd unit leaves it,
   the stage-2 unit removes it), so `nixos-rebuild switch` never restarts the splash.

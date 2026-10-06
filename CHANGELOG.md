@@ -32,9 +32,11 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
   `steelbore.fairing` (`nixosModules.fairing`) with `fairing-initrd.service` and
   `fairing.service`, the theme compiled at build time, simpledrm and the configured KMS
   drivers in the initrd, `quiet splash`, a Plymouth assertion, least-privilege hardening, a
-  boot-only start condition, and the handoff: greetd's start writes `/run/fairing/handoff`
-  and stops the splash, and only that stop fills the bar and records the durations; a
-  module evaluation check and two VM tests in `nix flake check`, runnable without KVM. CI: the feature matrix, a size
+  boot-only start condition, and the handoff: `fairing-handoff.service`, which greetd's
+  start pulls in, writes `/run/fairing/handoff` and stops the splash, and only that stop
+  fills the bar and records the durations; a boot that finishes without greetd ends the
+  splash too. A module evaluation check and two VM tests in `nix flake check`, runnable
+  without KVM. CI: the feature matrix, a size
   gate for the initrd binary, and a `nix` job.
 
 - M1 rendering. `fairing-theme`: the house palette file vendored byte-identically and

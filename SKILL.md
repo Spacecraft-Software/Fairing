@@ -35,7 +35,8 @@ version: 0.1.0
 - `fairing splash --stage initrd|system [--theme file.fairing] [--palette slug]` — the
   boot splash; always exits 0 once its arguments are valid, with the reason in
   `data.reason` (`handoff`, `switch-root`, `shutdown`, `failed-unit`, `maintenance`,
-  `no-backend`, `render-failed`, `theme-unreadable`); `--dry-run` reports the plan
+  `no-backend`, `render-failed`, `theme-unreadable`, `stopped`, `boot-finished`);
+  `--dry-run` reports the plan
 - `fairing --version` — name, version, maintainer, website, copyright
 
 `theme check` and `theme compile` exist only in the full build (cargo feature
@@ -48,7 +49,7 @@ Under `AI_AGENT`, `AGENT`, `CI`, `CLAUDECODE`, `CURSOR_AGENT` or `GEMINI_CLI` no
 terminal is opened: `--backend auto` renders to memory and emits a `[WARN]`
 (`AGENT_MEMORY_BACKEND`); `--backend drm|fbdev` exits 2. Pair memory rendering with
 `--snapshot frame.ppm` (binary PPM, `P6`) to inspect the frame. The JSON `data` carries
-`backend`, `chain`, `device`, `width`, `height`, `format`,
+`backend`, `chain`, `device`, `width`, `height`, `format`, `theme`,
 `palette.{slug,base,source,overlay,skipped}`, `seconds`, `fps`, `frames`, `dropped`,
 `first_frame_ms`, `measured_fps`, `snapshot`, `fallbacks`, `planned`. Under `--dry-run`
 with `--backend auto` the `backend` is `auto`, `chain` lists what would be tried, and

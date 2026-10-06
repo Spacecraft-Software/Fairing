@@ -184,7 +184,8 @@ The bar never moves backwards: when a new reading is lower it holds, and a
 higher one is approached smoothly.  A splash never fails the boot.  Every way
 out exits with status 0 and the reason in the report: @code{handoff},
 @code{stopped} (stopped in stage 2 without the greetd handoff, for example by
-a password prompt), @code{switch-root}, @code{shutdown}, @code{failed-unit} (a
+a password prompt), @code{boot-finished} (the boot ended without a greeter,
+for example when booted to @code{multi-user.target}), @code{switch-root}, @code{shutdown}, @code{failed-unit} (a
 systemd unit failed), @code{maintenance} (rescue or emergency mode started),
 @code{no-backend}, @code{render-failed} or @code{theme-unreadable}.  When it
 draws nothing it still tells systemd it is ready, so the unit never delays
@@ -295,6 +296,7 @@ only in a plan, where the chain decides at run time), the @code{chain} tried
 in order, @code{device}, @code{width}, @code{height}, @code{format}, the
 resolved @code{palette}
 (@code{slug}, @code{base}, @code{source}, @code{overlay}, @code{skipped}),
+@code{theme} (its name, @code{builtin} without @code{--theme}),
 @code{seconds}, @code{fps}, @code{frames}, @code{dropped},
 @code{first_frame_ms}, @code{measured_fps}, @code{snapshot}, the
 @code{fallbacks} that were tried before the working backend, and
@@ -523,8 +525,9 @@ steelbore.fairing = @{
 Enabling it compiles the theme at build time, copies the artefact and a small
 build of Fairing into the systemd initrd, adds @code{simpledrm} and the
 listed KMS drivers to the initrd, adds @code{quiet} and @code{splash} to the
-kernel command line, and installs two units.  The module requires the systemd
-initrd and greetd, and refuses a configuration that also enables Plymouth.
+kernel command line, and installs three units.  The module requires the
+systemd initrd and greetd, and refuses a configuration that also enables
+Plymouth or names an unregistered palette.
 
 @cindex fairing-initrd.service
 @table @code
@@ -534,21 +537,28 @@ modules are loaded and udev has been triggered.  It has no default
 dependencies and is only wanted by @code{initrd.target}.  It is stopped
 before switch-root, and leaves @file{/run/fairing} behind for the next stage.
 @item fairing.service
-Runs @code{fairing splash --stage system} after switch-root, early in
-@code{sysinit.target}, and only when @file{/run/fairing} exists: a restart of
+Runs @code{fairing splash --stage system} after switch-root, as soon as the
+local file systems are mounted (its sandbox needs them), and only when
+@file{/run/fairing} exists: a restart of
 the boot targets on a running system, as @command{nixos-rebuild switch} does,
 never brings the splash back over a session.  It runs with least privilege:
 only the capabilities to hold the display and the console, the file system
 read-only except its own two directories, and no network.
+@item fairing-handoff.service
+Runs when greetd starts, before it: writes the handoff marker, stops
+@code{fairing.service} and waits for it to exit.
 @end table
 
 @cindex greetd
 @cindex handoff
 The handoff to greetd is ordering plus one stop.  @code{fairing.service} is
-ordered before @code{greetd.service}.  greetd's start first writes the
-handoff marker @file{/run/fairing/handoff}, then stops @code{fairing.service}
-and waits for it, so the splash has drawn the full bar and released the
-display before greetd opens the console.  The two units do
+ordered before @code{greetd.service}, and greetd's start pulls in
+@code{fairing-handoff.service}, which writes the handoff marker
+@file{/run/fairing/handoff}, then stops @code{fairing.service} and waits for
+it, so the splash has drawn the full bar and released the display before
+greetd opens the console.  The stop is a unit of its own because greetd is
+@code{Type=idle}: systemd would hold any command of greetd's for its idle
+wait of five seconds.  The two units do
 not conflict: in one boot transaction a conflict makes systemd drop greetd's
 start job, and the machine would come up without a login screen.
 
@@ -560,8 +570,10 @@ prompt replaces this with a later milestone.  The splash's own waits are all
 bounded: five seconds to start, one second to stop.
 
 @cindex D-Bus
-In the initrd there is no bus, and that build of Fairing carries no D-Bus
-client.  After switch-root the splash connects to the system bus; if no
+The initrd build of Fairing carries no D-Bus client, so the initrd splash
+learns of trouble only through its conflict with emergency mode.  A failed
+unit stops the stage-2 splash, counted from its first reading of systemd, so
+units that failed earlier do not.  After switch-root the splash connects to the system bus; if no
 connection is made within 2 seconds, it says so once in the journal and
 drives the bar from the previous boot's measured duration instead.
 
