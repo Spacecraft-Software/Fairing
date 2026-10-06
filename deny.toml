@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# cargo-deny policy (Steelbore Standard §3.3, §24.2; FRN-SRS-103). Advisories are
+# deny-by-default; the licence policy is the allow list below. A new licence or a
+# new dependency is a DEPENDENCIES.md change in the same commit.
+
+[graph]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+all-features = true
+
+[advisories]
+yanked = "deny"
+unmaintained = "workspace"
+
+[licenses]
+allow = [
+  "GPL-3.0-or-later",
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Unlicense",
+  "MPL-2.0",
+]
+private = { ignore = true }
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

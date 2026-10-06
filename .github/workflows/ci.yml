@@ -1,0 +1,132 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Fairing CI (Steelbore Standard §3.1, §4.3, §6.5, §21.3, §24.2; FRN-SRS-103).
+# The toolchain comes from rust-toolchain.toml via `rustup toolchain install`,
+# so the pin lives in one place. Every job here has a local equivalent in
+# AGENTS.md; a command that is red locally is red here.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    needs: fmt
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    needs: fmt
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --locked
+      - run: cargo test --workspace --locked
+
+  # Implements: FRN-SRS-103
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features --locked
+
+  # Implements: FRN-SRS-103
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+
+  reuse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: fsfe/reuse-action@v6
+
+  eol:
+    runs-on: ubuntu-latest
+    needs: fmt
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Steelbore §6.5 text-file gate (index line endings, BOM, final newline)
+        run: cargo xtask check-eol
+
+  texinfo:
+    runs-on: ubuntu-latest
+    needs: fmt
+    env:
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: generated Needs and Requirements chapters are current
+        run: cargo xtask req-texi --check
+      - name: install texinfo
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends texinfo
+      - name: makeinfo zero-warning gate
+        run: |
+          make -C doc check 2> doc/makeinfo-stderr.txt
+          if grep -E 'warning|error' doc/makeinfo-stderr.txt; then
+            echo "::error::makeinfo reported warnings"; exit 1
+          fi
+      - run: make -C doc info html text
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manual
+          path: doc/build/
+
+  trace:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: traceability matrix and gate (§21.3)
+        run: cargo xtask trace
+      - name: progress block (§17.1)
+        run: |
+          {
+            echo '```'
+            cargo xtask progress --explain
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: traceability-matrix
+          path: target/trace/

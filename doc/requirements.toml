@@ -1,0 +1,1026 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: CC-BY-SA-4.0
+#
+# Fairing requirement set — the authoring source for the Needs and Requirements
+# chapters of doc/fairing.texi (Steelbore Standard §20.1). Edit this file, then
+# run `cargo xtask req-texi` and commit the regenerated doc/needs.texi and
+# doc/requirements.texi together with it. CI fails when they are stale.
+#
+# Identifiers are permanent and never reused (§20.3). Status is `draft` until
+# the G1 gate baselines the set. Priority counts toward §17 only when
+# `mandatory` or `expected`. Category `A` marks a raised subsystem (§19.1).
+
+[meta]
+project = "Fairing"
+prefix = "FRN"
+standard = "2.12"
+category = "B"
+updated = "2026-10-06"
+needs_preamble = """
+Bravais boots to a TTY through greetd/tuigreet. Between the firmware logo and the greeter the machine shows kernel and systemd text, or a Plymouth theme --- a C daemon running as root in the initrd, whose progress bar is a guess based on the previous boot. The maintainer wants the boot path free of that C code, the bar to report what systemd is actually doing, and the whole thing themed from the same Steelbore palette and Nickel tooling as the rest of the OS.
+
+The operating environment is a NixOS flake (Bravais) with `boot.initrd.systemd`, UEFI with simpledrm, LUKS-encrypted roots, and Intel/AMD KMS drivers. The constraints the maintainer will not trade away: Rust with `unsafe` confined to qualified dependencies; the splash can never be the reason a machine fails to boot; and Steelbore Standard §18 accessibility is a shipped mode, not a later patch.
+
+The reference machine (Steelbore Standard §22.4) is the maintainer's ThinkPad T490s: Intel i915 graphics, NVMe storage, a 1920x1080 panel, running Bravais with a LUKS root. The reference workload is a cold boot from power-on to greetd with the reference theme and a 24-frame animation. Wherever a requirement says "on the reference machine" it means this machine and this workload.
+"""
+requirements_preamble = """
+Sixty-eight requirements in eleven groups, every one at status draft until the G1 requirements gate baselines the set. Each group names the need it traces to and the scoping decision of 2026-10-06 that fixed it. The Steelbore Standard §20.6 sentence pattern applies throughout: a binding obligation is carried by shall, a prohibition by shall not.
+
+Priority is mandatory, expected or optional; only the first two count toward the §17 progress figures. Verification is one of the four §21.1 methods --- test, analysis, inspection, review of design --- chosen when the requirement was written. Milestone names the plan item that discharges the requirement; Assurance appears only where a requirement belongs to a raised Category A subsystem (the password agent and the initrd lifecycle unit).
+"""
+
+# ---------------------------------------------------------------------------
+# Groups (one Texinfo section each)
+# ---------------------------------------------------------------------------
+
+[[group]]
+id = "display"
+node = "Display Requirements"
+title = "Display"
+intro = "Source: FRN-NEED-001; decision 2 (DRM/KMS with fbdev fallback). Two render backends behind one trait; fbdev is the degraded path, never the first choice."
+
+[[group]]
+id = "progress"
+node = "Progress Requirements"
+title = "Progress"
+intro = "Source: FRN-NEED-002; decision 3 (hybrid progress). A time estimate in the initrd, where no D-Bus exists, and the real systemd Manager.Progress after switch-root, mapped onto one bar."
+
+[[group]]
+id = "askpass"
+node = "Password Agent Requirements"
+title = "Password agent"
+intro = "Source: FRN-NEED-003; decision 4 (in-splash ask-password agent). Fairing implements the systemd password-agent protocol for every prompt, LUKS, TPM2 PIN and other units alike. This subsystem is assurance Category A."
+
+[[group]]
+id = "lifecycle"
+node = "Lifecycle Requirements"
+title = "Lifecycle and handoff"
+intro = "Source: FRN-NEED-001, FRN-NEED-008; decision 5 (hold until greetd, plus a shutdown splash on both reboot and power-off). The initrd unit is assurance Category A."
+
+[[group]]
+id = "theme"
+node = "Theme Requirements"
+title = "Theme"
+intro = "Source: FRN-NEED-004; decision 6 (runtime Nickel theme). A theme is authored in Nickel and evaluated at build time by the NixOS module into a validated binary artefact that the initrd loads; no Nickel evaluator runs at boot."
+
+[[group]]
+id = "visuals"
+node = "Visuals Requirements"
+title = "Visuals and animation"
+intro = "Source: FRN-NEED-001; decision 7 (logo, bar, status text and frame animations). Frame sequences are theme assets; reduced motion disables them."
+
+[[group]]
+id = "input"
+node = "Input Requirements"
+title = "Input and log overlay"
+intro = "Source: FRN-NEED-005; decision 9 (Esc opens an in-splash log view; any failure makes Fairing exit)."
+
+[[group]]
+id = "accessibility"
+node = "Accessibility Requirements"
+title = "Accessibility"
+intro = "Source: FRN-NEED-006; decision 10 (full Steelbore Standard §18). The text backend is the accessible mode; reduced motion and high contrast are honoured."
+
+[[group]]
+id = "cli"
+node = "CLI Requirements"
+title = "CLI surface"
+intro = "Source: the Spacecraft Software Dual-Mode Self-Documenting CLI Standard v1.1.0 and Steelbore Standard §15."
+
+[[group]]
+id = "platform"
+node = "Platform Requirements"
+title = "Platform integration"
+intro = "Source: FRN-NEED-001; decision 8 (Bravais only for v1). The NixOS module and initrd integration are first-class; no mkinitcpio or dracut hooks in v1."
+
+[[group]]
+id = "security"
+node = "Security Requirements"
+title = "Security and assurance"
+intro = "Source: FRN-NEED-007; Steelbore Standard §3 and §21; decision 11 (unsafe lives only in qualified dependencies)."
+
+# ---------------------------------------------------------------------------
+# Needs
+# ---------------------------------------------------------------------------
+
+[[need]]
+id = "FRN-NEED-001"
+title = "A splash from the first drawable frame until greetd owns the VT"
+text = "A graphical splash from the earliest point the initrd can draw until greetd owns the VT, with no visible console text in between on a healthy boot."
+who = "Maintainer as user"
+
+[[need]]
+id = "FRN-NEED-002"
+title = "A progress bar that reflects real boot work"
+text = "A progress bar whose value reflects real boot work rather than elapsed time."
+who = "Maintainer as user"
+
+[[need]]
+id = "FRN-NEED-003"
+title = "The LUKS passphrase prompt drawn inside the splash"
+text = "The LUKS passphrase prompt drawn inside the splash, so an encrypted boot looks no different from an unencrypted one."
+who = "Maintainer as user"
+
+[[need]]
+id = "FRN-NEED-004"
+title = "Theming expressed in Nickel"
+text = "Theming --- palette, logo, layout, animation --- expressed in Nickel so a flavour can ship its own theme without rebuilding Fairing."
+who = "Maintainer as OS integrator"
+
+[[need]]
+id = "FRN-NEED-005"
+title = "A way to see the boot, and failures never hidden"
+text = "A way to see what the boot is doing (Esc) and a guarantee that failures are never hidden behind the splash."
+who = "Maintainer as operator"
+
+[[need]]
+id = "FRN-NEED-006"
+title = "An accessible boot"
+text = "A text-only accessible mode, reduced motion, and a high-contrast palette, so the boot is usable with a screen reader attached to the console or with low vision."
+who = "Maintainer; Steelbore Standard §18"
+
+[[need]]
+id = "FRN-NEED-007"
+title = "Memory-safe implementation"
+text = "Memory-safe implementation with every unsafe site either in a qualified dependency or carrying a written safety argument."
+who = "Maintainer; Steelbore Standard §3.1"
+
+[[need]]
+id = "FRN-NEED-008"
+title = "A matching splash on shutdown and reboot"
+text = "A matching splash on shutdown and reboot."
+who = "Maintainer as user"
+
+# ---------------------------------------------------------------------------
+# Display — FRN-NEED-001, decision 2
+# ---------------------------------------------------------------------------
+
+[[requirement]]
+id = "FRN-SRS-001"
+group = "display"
+milestone = "M1"
+title = "Draws through DRM/KMS at the preferred mode"
+text = "When a DRM device exposes a connected connector with at least one mode, the renderer shall draw through DRM/KMS using a dumb buffer at that connector's preferred mode."
+rationale = "KMS is the only path that works before fbcon and with simpledrm."
+source = ["FRN-NEED-001", "decision 2"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-002"
+group = "display"
+milestone = "M1"
+title = "Falls back to fbdev within 200 ms"
+text = "When DRM initialisation fails, the renderer shall fall back to `/dev/fb0` within 200 ms of the failure."
+rationale = "Machines without a usable DRM driver in the initrd still get a splash."
+source = ["FRN-NEED-001", "decision 2"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-003"
+group = "display"
+milestone = "M1"
+title = "Exits 0 when no backend can draw"
+text = "When both DRM and fbdev initialisation fail, Fairing shall exit with status 0 and write one journal entry at notice priority naming the failing backends."
+rationale = "A splash that cannot draw must not stall or fail the boot."
+source = ["FRN-NEED-001", "decision 2"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-004"
+group = "display"
+milestone = "M1"
+title = "First frame within 150 ms of process start"
+text = "The renderer shall present the first frame within 150 ms of process start on the reference machine."
+rationale = "The firmware-to-splash gap is where console text leaks."
+source = ["FRN-NEED-001", "decision 2"]
+priority = "expected"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-005"
+group = "display"
+milestone = "M1"
+title = "Redraws at 30 frames per second while animating"
+text = "While an animation is active, the renderer shall redraw at 30 frames per second, plus or minus 1, measured over 5 s."
+rationale = "A declared rate keeps motion smooth and CPU use bounded."
+source = ["FRN-NEED-001", "decision 2"]
+priority = "expected"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-006"
+group = "display"
+milestone = "M1"
+title = "Re-acquires the output on a mode change"
+text = "When the active connector's mode changes, the renderer shall re-acquire the output and present a frame within 500 ms without presenting any console text."
+rationale = "The native KMS driver replaces simpledrm mid-boot."
+source = ["FRN-NEED-001", "decision 2"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-007"
+group = "display"
+milestone = "M1"
+title = "Scales the layout from its 1920x1080 reference frame"
+text = "The renderer shall scale the theme layout from its 1920x1080 reference frame to the active mode, preserving the layout's aspect ratio."
+rationale = "One theme serves every panel."
+source = ["FRN-NEED-001", "decision 2"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+# ---------------------------------------------------------------------------
+# Progress — FRN-NEED-002, decision 3
+# ---------------------------------------------------------------------------
+
+[[requirement]]
+id = "FRN-SRS-010"
+group = "progress"
+milestone = "M2"
+title = "Initrd bar from the cached initrd duration"
+text = "In the initrd, the bar shall display elapsed time divided by the cached initrd duration, clamped to the range 0.00 to 0.30."
+rationale = "No D-Bus exists before switch-root; the cache is the best available signal."
+source = ["FRN-NEED-002", "decision 3"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-011"
+group = "progress"
+milestone = "M2"
+title = "First-boot curve reaches 0.30 at 8 s"
+text = "When no cached duration exists, the initrd bar shall advance on a fixed curve that reaches 0.30 at 8 s."
+rationale = "First boot still shows motion."
+source = ["FRN-NEED-002", "decision 3"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-012"
+group = "progress"
+milestone = "M2"
+title = "Stage-2 bar from the systemd Progress property"
+text = "After switch-root, the bar shall display 0.30 plus 0.70 times the Progress property of `org.freedesktop.systemd1.Manager`."
+rationale = "Real job-queue progress is the point of Fairing."
+source = ["FRN-NEED-002", "decision 3"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-013"
+group = "progress"
+milestone = "M2"
+title = "The bar never decreases"
+text = "The bar value shall not decrease between two consecutive frames."
+rationale = "A bar that moves backwards reads as a fault."
+source = ["FRN-NEED-002", "decision 3"]
+priority = "mandatory"
+verification = "analysis"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-014"
+group = "progress"
+milestone = "M2"
+title = "Bar value carried across switch-root"
+text = "The initrd instance shall write its final bar value to `/run/fairing/state` before exit, and the stage-2 instance shall present that value in its first frame."
+rationale = "Switch-root must be invisible on the bar."
+source = ["FRN-NEED-002", "decision 3"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-015"
+group = "progress"
+milestone = "M2"
+title = "Measured durations cached at handoff"
+text = "At handoff to greetd, Fairing shall write the measured initrd and stage-2 durations to `/var/lib/fairing/boot-duration`."
+rationale = "Feeds the next boot's estimate."
+source = ["FRN-NEED-002", "decision 3"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-016"
+group = "progress"
+milestone = "M2"
+title = "D-Bus timeout degrades to the cached duration"
+text = "When the D-Bus connection is not established within 2 s of stage-2 start, Fairing shall drive the bar from the cached stage-2 duration and write one journal entry at notice priority."
+rationale = "Degraded progress beats a frozen bar."
+source = ["FRN-NEED-002", "decision 3"]
+priority = "expected"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-017"
+group = "progress"
+milestone = "M2"
+title = "The bar reaches 1.00 only at the greetd handoff"
+text = "The bar shall reach 1.00 only on receipt of the greetd handoff signal."
+rationale = "Progress reaches 1.0 before the greeter is up; the bar would stall at full."
+source = ["FRN-NEED-002", "decision 3"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+# ---------------------------------------------------------------------------
+# Password agent — FRN-NEED-003, decision 4 — Category A
+# ---------------------------------------------------------------------------
+
+[[requirement]]
+id = "FRN-SRS-020"
+group = "askpass"
+milestone = "M3"
+title = "Detects a new ask file within 50 ms"
+text = "The agent shall detect a new `ask.*` file in `/run/systemd/ask-password/` within 50 ms of its creation."
+rationale = "The prompt must appear before the user notices a pause."
+source = ["FRN-NEED-003", "decision 4"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+category = "A"
+
+[[requirement]]
+id = "FRN-SRS-021"
+group = "askpass"
+milestone = "M3"
+title = "Renders the prompt in the theme's prompt region"
+text = "The agent shall render the `Message=` value and a masked input field in the theme's prompt region."
+rationale = "The prompt is drawn in-theme by decision 4."
+source = ["FRN-NEED-003", "decision 4"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+category = "A"
+
+[[requirement]]
+id = "FRN-SRS-022"
+group = "askpass"
+milestone = "M3"
+title = "Replies with + on Enter and - on Escape"
+text = "On Enter, the agent shall send the entered secret, prefixed with +, as one datagram on the `Socket=` path; on Escape it shall send -."
+rationale = "This is the systemd agent wire protocol."
+source = ["FRN-NEED-003", "decision 4"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+category = "A"
+
+[[requirement]]
+id = "FRN-SRS-023"
+group = "askpass"
+milestone = "M3"
+title = "Expired prompts are removed"
+text = "When the `NotAfter=` timestamp passes, the agent shall remove the prompt and discard any partial input."
+rationale = "Expired prompts must not accept input."
+source = ["FRN-NEED-003", "decision 4"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+category = "A"
+
+[[requirement]]
+id = "FRN-SRS-024"
+group = "askpass"
+milestone = "M3"
+title = "Every secret buffer is zeroised"
+text = "The agent shall zeroise every buffer that held secret bytes on reply, cancel, expiry, error, and process exit."
+rationale = "Secrets must not survive in memory or a core dump."
+source = ["FRN-NEED-003", "decision 4"]
+priority = "mandatory"
+verification = "analysis"
+status = "draft"
+category = "A"
+
+[[requirement]]
+id = "FRN-SRS-025"
+group = "askpass"
+milestone = "M3"
+title = "Secrets never leave the reply socket"
+text = "The agent shall not write secret bytes to the journal, to any file, or to any file descriptor other than the `Socket=` reply."
+rationale = "A leaked passphrase defeats disk encryption."
+source = ["FRN-NEED-003", "decision 4"]
+priority = "mandatory"
+verification = "analysis"
+status = "draft"
+category = "A"
+
+[[requirement]]
+id = "FRN-SRS-026"
+group = "askpass"
+milestone = "M3"
+title = "Echo=1 renders the input unmasked"
+text = "When `Echo=1` is set, the agent shall render the input unmasked."
+rationale = "Non-secret questions use the same protocol."
+source = ["FRN-NEED-003", "decision 4"]
+priority = "expected"
+verification = "test"
+status = "draft"
+category = "A"
+
+[[requirement]]
+id = "FRN-SRS-027"
+group = "askpass"
+milestone = "M3"
+title = "Agent failure exits 0 within 1 s"
+text = "When the agent fails to initialise, Fairing shall exit with status 0 within 1 s so that `systemd-tty-ask-password-agent` prompts on the console."
+rationale = "Fail-open: a broken agent must never lock the user out."
+source = ["FRN-NEED-003", "decision 4"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+category = "A"
+
+[[requirement]]
+id = "FRN-SRS-028"
+group = "askpass"
+milestone = "M3"
+title = "Exclusive keyboard grab only while a prompt is active"
+text = "While a prompt is active, the agent shall take an exclusive evdev grab on keyboard devices, and shall release every grab within 50 ms of the prompt closing."
+rationale = "Keystrokes must reach only the prompt, then only the console."
+source = ["FRN-NEED-003", "decision 4"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+category = "A"
+
+[[requirement]]
+id = "FRN-SRS-029"
+group = "askpass"
+milestone = "M3"
+title = "Rejection notice on a repeated prompt"
+text = "When a prompt with the same `Id=` reappears within 1 s of a reply, the agent shall display a rejection notice beside the new prompt."
+rationale = "The user needs to know the previous entry was wrong."
+source = ["FRN-NEED-003", "decision 4"]
+priority = "expected"
+verification = "test"
+status = "draft"
+category = "A"
+
+# ---------------------------------------------------------------------------
+# Lifecycle and handoff — FRN-NEED-001, FRN-NEED-008, decision 5
+# ---------------------------------------------------------------------------
+
+[[requirement]]
+id = "FRN-SRS-030"
+group = "lifecycle"
+milestone = "M2"
+title = "fairing-initrd.service unit directives"
+text = "`fairing-initrd.service` shall declare `DefaultDependencies=no`, `After=systemd-udev-trigger.service`, and `WantedBy=initrd.target`."
+rationale = "Earliest point a device node exists; never a hard dependency."
+source = ["FRN-NEED-001", "decision 5"]
+priority = "mandatory"
+verification = "inspection"
+status = "draft"
+category = "A"
+
+[[requirement]]
+id = "FRN-SRS-031"
+group = "lifecycle"
+milestone = "M2"
+title = "No boot target hard-depends on Fairing"
+text = "No unit shipped by Fairing shall be named in a `Requires=`, `Requisite=`, or `BindsTo=` directive of any boot target."
+rationale = "Fail-open: Fairing can be absent without consequence."
+source = ["FRN-NEED-001", "decision 5"]
+priority = "mandatory"
+verification = "inspection"
+status = "draft"
+category = "A"
+
+[[requirement]]
+id = "FRN-SRS-032"
+group = "lifecycle"
+milestone = "M2"
+title = "fairing.service conflicts with greetd, holds last frame"
+text = "`fairing.service` shall declare `Conflicts=greetd.service` and `Before=greetd.service`, and shall hold DRM master and the last frame until it receives SIGTERM."
+rationale = "systemd stops the splash at the exact moment the greeter starts."
+source = ["FRN-NEED-001", "decision 5"]
+priority = "mandatory"
+verification = "inspection"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-033"
+group = "lifecycle"
+milestone = "M2"
+title = "Releases DRM master within 100 ms of SIGTERM"
+text = "Fairing shall release DRM master and exit within 100 ms of receiving SIGTERM."
+rationale = "The greeter must not wait on the splash."
+source = ["FRN-NEED-001", "decision 5"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-034"
+group = "lifecycle"
+milestone = "M2"
+title = "Exits on a failed unit or the emergency target"
+text = "When any unit enters the failed state, or `emergency.target` or `rescue.target` becomes active, Fairing shall exit within 1 s."
+rationale = "Failures must never be hidden behind the splash."
+source = ["FRN-NEED-001", "FRN-NEED-005", "decision 9"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-035"
+group = "lifecycle"
+milestone = "M4"
+title = "Shutdown splash from shutdown.target to the final kill"
+text = "`fairing-shutdown.service` shall present the theme's shutdown layout from activation of `shutdown.target` until the process is killed by the final kill."
+rationale = "Decision 5: shutdown splash, on reboot and power-off alike."
+source = ["FRN-NEED-008", "decision 5"]
+priority = "expected"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-036"
+group = "lifecycle"
+milestone = "M2"
+title = "READY=1 after the first frame"
+text = "Fairing shall send `READY=1` over `NOTIFY_SOCKET` after presenting its first frame."
+rationale = "Lets ordering and watchdogs see the splash is up."
+source = ["FRN-NEED-001", "decision 5"]
+priority = "expected"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-037"
+group = "lifecycle"
+milestone = "M2"
+title = "Every external wait carries a timeout of at most 5 s"
+text = "Every wait on an external resource --- device, socket, D-Bus, journal --- shall carry a timeout of at most 5 s."
+rationale = "Bounded waits are what make the fail-open design hold."
+source = ["FRN-NEED-001", "decision 5"]
+priority = "mandatory"
+verification = "analysis"
+status = "draft"
+
+# ---------------------------------------------------------------------------
+# Theme — FRN-NEED-004, decision 6
+# ---------------------------------------------------------------------------
+
+[[requirement]]
+id = "FRN-SRS-040"
+group = "theme"
+milestone = "M2"
+title = "A theme is a Nickel file satisfying the contract"
+text = "A theme shall be a Nickel file that satisfies the contract `contracts/fairing-theme.ncl`."
+rationale = "Decision 6; contracts give validation without a hand-written checker."
+source = ["FRN-NEED-004", "decision 6"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-041"
+group = "theme"
+milestone = "M2"
+title = "theme check exits 2 on a contract violation"
+text = "When a theme violates the contract, `fairing theme check` shall exit with status 2 and print the Nickel contract diagnostic."
+rationale = "Theme authors get the error at authoring time, not at boot."
+source = ["FRN-NEED-004", "decision 6"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-042"
+group = "theme"
+milestone = "M2"
+title = "The compiled theme loads in under 5 ms"
+text = "`fairing theme compile` shall produce one artefact that Fairing loads in under 5 ms on the reference machine."
+rationale = "No evaluator in the initrd (decision 6, confirmed 2026-10-06)."
+source = ["FRN-NEED-004", "decision 6"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-043"
+group = "theme"
+milestone = "M2"
+title = "Exactly one registered palette per theme"
+text = "A theme shall name exactly one registered Steelbore Standard §11 palette by slug, and `theme compile` shall reject a theme that references a token of any other palette."
+rationale = "§11: one palette per project, never a mix."
+source = ["FRN-NEED-004", "decision 6", "Steelbore Standard §11"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-044"
+group = "theme"
+milestone = "M2"
+title = "Colour values are read from steelbore.toml, never retyped"
+text = "`theme compile` shall read colour values from the steelbore-color-palette skill's `steelbore.toml` and shall reject any literal colour in the theme."
+rationale = "§11.4: values are read, never retyped."
+source = ["FRN-NEED-004", "decision 6", "Steelbore Standard §11.4"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-045"
+group = "theme"
+milestone = "M2"
+title = "Theme variant selection order"
+text = "Fairing shall select the theme variant in this order: kernel parameter `fairing.theme=`, then `SPACECRAFT_THEME`, then the theme's declared default; then overlay `NO_COLOR` to mono and accessible mode to high-contrast."
+rationale = "§11.6 two-stage resolution, adapted to a process with no in-app selector."
+source = ["FRN-NEED-004", "decision 6", "Steelbore Standard §11.6"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-046"
+group = "theme"
+milestone = "M2"
+title = "A theme declares the complete layout set"
+text = "A theme shall declare the logo image, bar geometry, status-text position, prompt region, and shutdown layout, and may declare one frame sequence per layout."
+rationale = "The complete set a flavour needs to brand its boot."
+source = ["FRN-NEED-004", "decision 6"]
+priority = "mandatory"
+verification = "inspection"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-047"
+group = "theme"
+milestone = "M2"
+title = "The compiled artefact is no larger than 4 MiB"
+text = "The compiled theme artefact, assets included, shall not exceed 4 MiB."
+rationale = "Every byte ships in the initrd."
+source = ["FRN-NEED-004", "decision 6"]
+priority = "expected"
+verification = "test"
+status = "draft"
+
+# ---------------------------------------------------------------------------
+# Visuals and animation — FRN-NEED-001, decision 7
+# ---------------------------------------------------------------------------
+
+[[requirement]]
+id = "FRN-SRS-050"
+group = "visuals"
+milestone = "M2"
+title = "The status line shows the latest job's description"
+text = "When the theme sets `status.show = true`, Fairing shall render the description of the most recently started systemd job as the status line."
+rationale = "Users see what the boot is doing; unit descriptions, not unit names, confirmed 2026-10-06."
+source = ["FRN-NEED-001", "decision 7"]
+priority = "expected"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-051"
+group = "visuals"
+milestone = "M4"
+title = "Frame sequences loop at the declared rate"
+text = "Fairing shall play a declared frame sequence in a loop at the theme's declared rate, which shall not exceed 30 frames per second."
+rationale = "Decision 7 within the FRN-SRS-005 bound."
+source = ["FRN-NEED-001", "decision 7"]
+priority = "expected"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-052"
+group = "visuals"
+milestone = "M4"
+title = "Reduced motion disables animation and easing"
+text = "When reduced motion is active, Fairing shall render only the first frame of any sequence and shall move the bar without easing."
+rationale = "§18: no animation in accessible or reduced-motion mode."
+source = ["FRN-NEED-001", "FRN-NEED-006", "decision 7", "Steelbore Standard §18"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-053"
+group = "visuals"
+milestone = "M1"
+title = "The percentage is rendered as text beside the bar"
+text = "Fairing shall render the bar's percentage as text beside the bar in every theme and backend."
+rationale = "§18: status is never colour-only."
+source = ["FRN-NEED-001", "FRN-NEED-006", "decision 7", "Steelbore Standard §18"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+# ---------------------------------------------------------------------------
+# Input and log overlay — FRN-NEED-005, decision 9
+# ---------------------------------------------------------------------------
+
+[[requirement]]
+id = "FRN-SRS-060"
+group = "input"
+milestone = "M4"
+title = "Escape toggles the journal overlay"
+text = "On Escape with no prompt active, Fairing shall toggle an overlay showing the last 40 journal entries at priority notice or higher, newest at the bottom."
+rationale = "The log is the operator's view of the boot."
+source = ["FRN-NEED-005", "decision 9"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-061"
+group = "input"
+milestone = "M4"
+title = "The overlay scrolls with CUA and Vim keys"
+text = "The overlay shall scroll on Up/Down, PgUp/PgDn, and j/k."
+rationale = "§10: CUA and Vim bindings."
+source = ["FRN-NEED-005", "decision 9", "Steelbore Standard §10"]
+priority = "expected"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-062"
+group = "input"
+milestone = "M4"
+title = "New journal entries appear within 250 ms"
+text = "The overlay shall show a new journal entry within 250 ms of its arrival."
+rationale = "A log that lags is not a log."
+source = ["FRN-NEED-005", "decision 9"]
+priority = "expected"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-063"
+group = "input"
+milestone = "M4"
+title = "No keyboard grab while no prompt is active"
+text = "Fairing shall not grab keyboard devices while no prompt is active, so that VT-switch chords and assistive-technology chords reach the kernel."
+rationale = "§10 reserved chords; §18."
+source = ["FRN-NEED-005", "FRN-NEED-006", "decision 9", "Steelbore Standard §10", "Steelbore Standard §18"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+# ---------------------------------------------------------------------------
+# Accessibility — FRN-NEED-006, decision 10, §18
+# ---------------------------------------------------------------------------
+
+[[requirement]]
+id = "FRN-SRS-070"
+group = "accessibility"
+milestone = "M4"
+title = "Accessible-mode triggers select the text backend"
+text = "When `--accessible` is given, or `SPACECRAFT_A11Y=1` is set, or the kernel parameter `fairing.accessible=1` is present, Fairing shall use the text backend."
+rationale = "§18.1 toggle."
+source = ["FRN-NEED-006", "decision 10", "Steelbore Standard §18.1"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-071"
+group = "accessibility"
+milestone = "M4"
+title = "The text backend writes one console line per second"
+text = "The text backend shall write one console line of the form `Fairing <NN>% <status>` at most once per second, and shall write prompts as plain text on the same console."
+rationale = "Works with a serial console, brltty, or a screen reader on the TTY."
+source = ["FRN-NEED-006", "decision 10", "Steelbore Standard §18"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-072"
+group = "accessibility"
+milestone = "M4"
+title = "Accessible mode is off unless a trigger is present"
+text = "Accessible mode shall be off unless one of the FRN-SRS-070 triggers is present."
+rationale = "§18: opt-in layer."
+source = ["FRN-NEED-006", "decision 10", "Steelbore Standard §18"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-073"
+group = "accessibility"
+milestone = "M4"
+title = "The text backend emits no ANSI sequences"
+text = "The text backend shall emit no ANSI colour or cursor-movement sequences."
+rationale = "Linear output is what assistive technology can read."
+source = ["FRN-NEED-006", "decision 10", "Steelbore Standard §18"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+# ---------------------------------------------------------------------------
+# CLI surface — Spacecraft CLI Standard v1.1.0
+# ---------------------------------------------------------------------------
+
+[[requirement]]
+id = "FRN-SRS-080"
+group = "cli"
+milestone = "M1"
+title = "--version carries the attribution block"
+text = "`fairing --version` shall print the program name, version, maintainer name, contact address, and project URL."
+rationale = "§15 attribution."
+source = ["FRN-NEED-001", "Spacecraft CLI Standard v1.1.0", "Steelbore Standard §15"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-081"
+group = "cli"
+milestone = "M1"
+title = "--json envelope on every subcommand"
+text = "Every subcommand shall accept `--json` and emit the CLI Standard output envelope with ISO 8601 UTC timestamps."
+rationale = "Agent-readable output."
+source = ["FRN-NEED-001", "Spacecraft CLI Standard v1.1.0"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-082"
+group = "cli"
+milestone = "M1"
+title = "CLI Standard exit codes and structured diagnostics"
+text = "Fairing shall exit with the CLI Standard exit codes and shall write structured diagnostics with severity tags to stderr."
+rationale = "Machine-parsable failures."
+source = ["FRN-NEED-001", "Spacecraft CLI Standard v1.1.0"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-083"
+group = "cli"
+milestone = "M1"
+title = "preview renders a theme on the current VT"
+text = "`fairing preview --theme <path> --seconds <n>` shall render the theme on the current VT for n seconds with a simulated bar, then restore the VT."
+rationale = "Theme authors iterate without rebooting."
+source = ["FRN-NEED-004", "Spacecraft CLI Standard v1.1.0"]
+priority = "expected"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-084"
+group = "cli"
+milestone = "M1"
+title = "Agent environments get plain, non-interactive output"
+text = "When `AI_AGENT`, `CI`, or `CLAUDECODE` is set, Fairing shall write plain, non-interactive output and shall not open a VT."
+rationale = "Agent-friendly posture."
+source = ["FRN-NEED-001", "Spacecraft CLI Standard v1.1.0"]
+priority = "expected"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-085"
+group = "cli"
+milestone = "M1"
+title = "NO_COLOR and FORCE_COLOR are honoured"
+text = "`fairing` shall honour `NO_COLOR` and `FORCE_COLOR` in its terminal output."
+rationale = "CLI Standard colour precedence."
+source = ["FRN-NEED-001", "Spacecraft CLI Standard v1.1.0"]
+priority = "expected"
+verification = "test"
+status = "draft"
+
+# ---------------------------------------------------------------------------
+# Platform integration — FRN-NEED-001, decision 8
+# ---------------------------------------------------------------------------
+
+[[requirement]]
+id = "FRN-SRS-090"
+group = "platform"
+milestone = "M2"
+title = "The NixOS module enables the whole feature"
+text = "The NixOS module `steelbore.fairing` shall, when enabled, install the three units, compile the configured theme into the initrd, add the KMS and simpledrm modules to `boot.initrd.kernelModules`, and set the `quiet` and `splash` kernel parameters."
+rationale = "One switch enables the whole feature."
+source = ["FRN-NEED-001", "decision 8"]
+priority = "mandatory"
+verification = "inspection"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-091"
+group = "platform"
+milestone = "M2"
+title = "Configuration assertion against Plymouth"
+text = "The module shall assert a configuration error when `boot.plymouth.enable` is also true."
+rationale = "Two splashes contending for DRM master."
+source = ["FRN-NEED-001", "decision 8"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-092"
+group = "platform"
+milestone = "M3"
+title = "A LUKS VM test gates CI"
+text = "A NixOS VM test shall boot a LUKS-encrypted image, answer the in-splash prompt, and reach greetd, and shall gate CI."
+rationale = "The only honest end-to-end check."
+source = ["FRN-NEED-001", "FRN-NEED-003", "decision 8"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-093"
+group = "platform"
+milestone = "M2"
+title = "fairing.service runs with least privilege"
+text = "`fairing.service` shall run with `CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_TTY_CONFIG`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `ReadWritePaths=/var/lib/fairing /run/fairing`."
+rationale = "§3.3 least privilege; DRM master needs no more."
+source = ["FRN-NEED-001", "FRN-NEED-007", "decision 8", "Steelbore Standard §3.3"]
+priority = "mandatory"
+verification = "inspection"
+status = "draft"
+
+# ---------------------------------------------------------------------------
+# Security and assurance — FRN-NEED-007, §3, §21
+# ---------------------------------------------------------------------------
+
+[[requirement]]
+id = "FRN-SRS-100"
+group = "security"
+milestone = "M0"
+title = "Every crate forbids unsafe code"
+text = "Every crate in the workspace shall carry `#![forbid(unsafe_code)]`."
+rationale = "Decision 11: unsafe lives only in qualified dependencies."
+source = ["FRN-NEED-007", "decision 11", "Steelbore Standard §3.1"]
+priority = "mandatory"
+verification = "inspection"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-101"
+group = "security"
+milestone = "M3"
+title = "Fuzz targets for both parsers run in CI"
+text = "The compiled-theme parser and the `ask.*` file parser shall each have a cargo-fuzz target that runs in CI for at least 10 minutes per release."
+rationale = "§21.2 Category B floor; the ask.* parser is on the A path."
+source = ["FRN-NEED-007", "Steelbore Standard §21.2"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-102"
+group = "security"
+milestone = "M3"
+title = "The ask file parser rejects oversized or non-UTF-8 input"
+text = "The `ask.*` parser shall reject any file larger than 64 KiB or containing a non-UTF-8 byte before parsing fields."
+rationale = "Bounded input on a Category A path."
+source = ["FRN-NEED-007", "FRN-NEED-003", "Steelbore Standard §21.2"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+category = "A"
+
+[[requirement]]
+id = "FRN-SRS-103"
+group = "security"
+milestone = "M0"
+title = "cargo audit and cargo deny gate every CI run"
+text = "`cargo audit` and `cargo deny` shall gate every CI run."
+rationale = "§3.3, §24."
+source = ["FRN-NEED-007", "Steelbore Standard §3.3", "Steelbore Standard §24"]
+priority = "mandatory"
+verification = "inspection"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-104"
+group = "security"
+milestone = "M3"
+title = "No content-dependent allocation in the agent"
+text = "The `fairing-askpass` crate shall contain no allocation whose size depends on prompt content beyond the FRN-SRS-102 bound."
+rationale = "A documented worst-case bound per §21.2 A."
+source = ["FRN-NEED-007", "FRN-NEED-003", "Steelbore Standard §21.2"]
+priority = "mandatory"
+verification = "analysis"
+status = "draft"
+category = "A"

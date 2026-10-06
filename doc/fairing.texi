@@ -1,0 +1,127 @@
+\input texinfo   @c -*- texinfo -*-
+@c SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+@c SPDX-License-Identifier: CC-BY-SA-4.0
+@c
+@c Fairing manual. The Needs and Requirements chapters are generated from
+@c doc/requirements.toml by `cargo xtask req-texi`; edit the TOML, not them.
+@c Build:  make -C doc check info html
+@c %**start of header
+@setfilename fairing.info
+@documentencoding UTF-8
+@documentlanguage en
+@settitle Fairing Manual 0.1.0
+@c %**end of header
+
+@set PROJECT Fairing
+@set VERSION 0.1.0
+@set UPDATED 2026-10-06
+@set SUBDOMAIN https://Fairing.SpacecraftSoftware.org/
+
+@copying
+This manual is for @value{PROJECT} (version @value{VERSION}, updated
+@value{UPDATED}), the boot splash for Steelbore OS Bravais.
+
+Copyright @copyright{} 2026 Mohamed Hammad & Spacecraft Software.
+
+@quotation
+This document is licensed under the Creative Commons Attribution-ShareAlike
+4.0 International License (CC-BY-SA-4.0).  To view a copy of this licence,
+visit @url{https://creativecommons.org/licenses/by-sa/4.0/}.
+@end quotation
+@end copying
+
+@dircategory Spacecraft Software
+@direntry
+* Fairing: (fairing).           Boot splash for Steelbore OS Bravais.
+@end direntry
+
+@titlepage
+@title @value{PROJECT} Manual
+@subtitle For version @value{VERSION}
+@author Mohamed Hammad
+@page
+@vskip 0pt plus 1filll
+@insertcopying
+
+Maintained by Mohamed Hammad
+@email{Mohamed.Hammad@@SpacecraftSoftware.org}.
+@*
+@uref{@value{SUBDOMAIN}}
+@end titlepage
+
+@contents
+
+@ifnottex
+@node Top
+@top @value{PROJECT}
+
+@insertcopying
+@end ifnottex
+
+@menu
+* Introduction::        What Fairing is and how this manual is organised.
+* Needs::               Why the software exists and the constraints it serves.
+* Requirements::        What the software shall do, one verifiable statement at a time.
+* Index::               Concept and identifier index.
+@end menu
+
+@node Introduction
+@chapter Introduction
+
+@cindex purpose
+@value{PROJECT} is a Rust boot splash for Steelbore OS Bravais.  It shows real
+boot progress read from systemd, prompts for disk passphrases inside the splash
+through the systemd password-agent protocol, and holds the screen until greetd
+takes over the virtual terminal.  It is one process started twice: once in the
+initrd, where it draws from the first frame simpledrm can give and prompts for
+LUKS, and once after switch-root, where it switches to the real
+@code{Manager.Progress} figure and holds the last frame until the greeter
+claims the VT.  On shutdown it runs a third time.
+
+@cindex fail-open
+Fairing is designed to be fail-open.  No boot target requires it, every wait
+on an external resource carries a timeout, and a crash leaves the console and
+the stock @command{systemd-tty-ask-password-agent} to finish the boot.  The
+residual risk is silent wrongness --- a bar that looks right while lying, or a
+passphrase mis-forwarded --- which is why the project is assurance Category B
+with two subsystems raised to Category A: the password agent
+(@code{fairing-askpass}) and the initrd lifecycle unit.
+
+@cindex crates
+@cindex workspace
+The source is one Cargo workspace of four product crates:
+
+@multitable @columnfractions .25 .55 .2
+@headitem Crate @tab Role @tab Category
+@item @code{fairing}
+@tab Binary: CLI, lifecycle state machine, systemd notify
+@tab B
+@item @code{fairing-render}
+@tab Backend trait with DRM, fbdev and text implementations; frame compositor
+@tab B
+@item @code{fairing-theme}
+@tab Compiled theme format, Nickel contract, @code{theme check} / @code{theme compile}
+@tab B
+@item @code{fairing-askpass}
+@tab systemd ask-password agent: inotify watcher, bounded parser, socket reply, zeroisation
+@tab A
+@end multitable
+
+@cindex conformance
+The project conforms to The Steelbore Standard v2.12 as a Category B project,
+tailored; the tailoring register is @file{COMPLIANCE.md} at the repository
+root.  This manual carries the two artefacts the Standard places in Texinfo:
+the Needs (@pxref{Needs}) and the Requirements (@pxref{Requirements}).  The
+Interfaces (ICD, Standard §23) and Dependencies chapters are added at
+the G2 design gate.
+
+@include needs.texi
+
+@include requirements.texi
+
+@node Index
+@unnumbered Index
+
+@printindex cp
+
+@bye

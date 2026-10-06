@@ -1,0 +1,12 @@
+version = 1
+SPDX-PackageName = "Fairing"
+SPDX-PackageSupplier = "Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
+SPDX-PackageDownloadLocation = "https://github.com/Spacecraft-Software/Fairing"
+
+# Files that cannot carry an inline two-tag header (Steelbore Standard §4.3):
+# generated lockfiles, and SKILL.md whose YAML frontmatter must stay first.
+[[annotations]]
+path = ["Cargo.lock", "flake.lock", "SKILL.md"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
+SPDX-License-Identifier = "GPL-3.0-or-later"

@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Test fixture: a two-requirement set.
+
+[meta]
+project = "Fixture"
+prefix = "FRN"
+standard = "2.12"
+category = "B"
+updated = "2026-10-06"
+needs_preamble = "Why the fixture exists."
+requirements_preamble = "What the fixture does."
+
+[[group]]
+id = "core"
+node = "Core Requirements"
+title = "Core"
+intro = "Source FRN-NEED-001."
+
+[[need]]
+id = "FRN-NEED-001"
+title = "A splash"
+text = "A graphical splash from the earliest point the initrd can draw."
+who = "Maintainer as user"
+
+[[requirement]]
+id = "FRN-SRS-001"
+group = "core"
+milestone = "M1"
+title = "Draws through KMS"
+text = "When a DRM device exposes a connected connector, the renderer shall draw through DRM/KMS."
+rationale = "KMS is the only path that works before fbcon."
+source = ["FRN-NEED-001", "decision 2"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-002"
+group = "core"
+milestone = "M1"
+title = "Falls back to fbdev"
+text = "When DRM initialisation fails, the renderer shall fall back to `/dev/fb0` within 200 ms."
+rationale = "Machines without a usable DRM driver still get a splash."
+source = ["FRN-NEED-001"]
+priority = "mandatory"
+verification = "test"
+status = "draft"
+category = "A"
