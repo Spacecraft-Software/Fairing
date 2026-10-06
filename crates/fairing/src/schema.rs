@@ -7,9 +7,10 @@
 //! Parameters come straight from the same `clap::Command` that parses argv, so
 //! the schema cannot drift from runtime behaviour (CLI Standard
 //! `schema-introspection.md` §5). The metadata clap does not model —
-//! idempotency, destructiveness, examples, output shape — lives in [`SPECS`].
-//! The schema document itself is emitted (no envelope) so it drops directly
-//! into Anthropic / MCP `input_schema` fields.
+//! idempotency, destructiveness, examples, output shape, and the JSON type and
+//! bounds of a value parser — lives in [`SPECS`]. The schema document itself
+//! is emitted (no envelope) so it drops directly into Anthropic / MCP
+//! `input_schema` fields.
 
 use clap::{ArgAction, CommandFactory as _};
 use serde_json::{Map, Value, json};
@@ -17,9 +18,48 @@ use serde_json::{Map, Value, json};
 use crate::cli::{Cli, GlobalFlags};
 use crate::error::AppError;
 use crate::output::mode::Context;
+use crate::output::write_line;
 
 /// JSON Schema dialect every emitted document declares.
 pub const DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
+
+/// The JSON type a parameter is reported as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamKind {
+    /// A finite real number.
+    Number,
+    /// A whole number.
+    Integer,
+    /// Text, optionally constrained by a pattern.
+    String,
+}
+
+impl ParamKind {
+    const fn json_type(self) -> &'static str {
+        match self {
+            Self::Number => "number",
+            Self::Integer => "integer",
+            Self::String => "string",
+        }
+    }
+}
+
+/// Typing clap does not carry for one parameter: the JSON type a value parser
+/// accepts, its bounds and its pattern. Every row names a visible argument of
+/// its command (a unit test enforces it).
+#[derive(Debug, Clone, Copy)]
+pub struct ParamSpec {
+    /// The clap argument id.
+    pub name: &'static str,
+    /// The JSON type.
+    pub kind: ParamKind,
+    /// Inclusive lower bound, for numeric kinds.
+    pub minimum: Option<i64>,
+    /// Inclusive upper bound, for numeric kinds.
+    pub maximum: Option<i64>,
+    /// An ECMA-262 pattern the string must match.
+    pub pattern: Option<&'static str>,
+}
 
 /// Metadata about one verb that clap does not carry.
 #[derive(Debug, Clone, Copy)]
@@ -34,6 +74,8 @@ pub struct CommandSpec {
     pub supports_dry_run: bool,
     /// `(command, description)` pairs; at least one shows `--json`.
     pub examples: &'static [(&'static str, &'static str)],
+    /// Parameters whose value parser is stricter than "a string".
+    pub params: &'static [ParamSpec],
 }
 
 /// Every shipped verb. Add a row here when a verb lands, in the same commit as the clap variant.
@@ -51,6 +93,7 @@ pub const SPECS: &[CommandSpec] = &[
                 "Only the named fields",
             ),
         ],
+        params: &[],
     },
     CommandSpec {
         name: "schema",
@@ -63,6 +106,53 @@ pub const SPECS: &[CommandSpec] = &[
                 "fairing schema describe --json",
                 "JSON Schema for the describe command",
             ),
+        ],
+        params: &[],
+    },
+    CommandSpec {
+        name: "preview",
+        idempotent: true,
+        destructive: false,
+        supports_dry_run: true,
+        examples: &[
+            (
+                "fairing preview --seconds 3",
+                "Draw the splash on the current VT for three seconds",
+            ),
+            (
+                "fairing preview --backend memory --snapshot frame.ppm --json",
+                "Render off-screen, write a PPM, report as JSON",
+            ),
+            (
+                "fairing preview --dry-run --json",
+                "Report what would be drawn without touching a device",
+            ),
+        ],
+        params: &[
+            ParamSpec {
+                name: "seconds",
+                kind: ParamKind::Number,
+                minimum: Some(0),
+                maximum: Some(3600),
+                pattern: None,
+            },
+            ParamSpec {
+                name: "fps",
+                kind: ParamKind::Integer,
+                minimum: Some(1),
+                maximum: Some(240),
+                pattern: None,
+            },
+            ParamSpec {
+                name: "size",
+                kind: ParamKind::String,
+                minimum: None,
+                maximum: None,
+                // Each side is 1..=16384, exactly as `cli::parse_size` enforces.
+                pattern: Some(
+                    "^([1-9][0-9]{0,3}|1[0-5][0-9]{3}|16[0-2][0-9]{2}|163[0-7][0-9]|1638[0-4])x([1-9][0-9]{0,3}|1[0-5][0-9]{3}|16[0-2][0-9]{2}|163[0-7][0-9]|1638[0-4])$",
+                ),
+            },
         ],
     },
 ];
@@ -109,17 +199,23 @@ pub fn tool_schema() -> Value {
         "global_flags": global_flags(),
         "commands": commands,
         "exit_codes": exit_codes(),
-        "error_codes": ["NOT_FOUND", "INVALID_ARGUMENT", "MISSING_ARGUMENT", "FEATURE_UNAVAILABLE", "INTERNAL_ERROR"],
-        "diagnostic_codes": ["OUTPUT_MODE", "TUI_FALLBACK"],
+        "error_codes": ["NOT_FOUND", "PERMISSION_DENIED", "CONFLICT", "INVALID_ARGUMENT", "MISSING_ARGUMENT", "FEATURE_UNAVAILABLE", "INTERNAL_ERROR"],
+        "diagnostic_codes": ["OUTPUT_MODE", "TUI_FALLBACK", "AGENT_MEMORY_BACKEND", "BACKEND_FALLBACK", "PALETTE_RESOLVED", "SNAPSHOT_WRITTEN", "FIRST_FRAME"],
     })
 }
 
 /// The schema document for one verb.
+///
+/// Hidden arguments are not advertised: an agent reading the schema sees the
+/// same surface `--help` shows.
 #[must_use]
 pub fn command_schema(cmd: &clap::Command, spec: &CommandSpec) -> Value {
     let mut properties = Map::new();
     let mut required = Vec::new();
-    for arg in cmd.get_arguments().filter(|a| !a.is_global_set()) {
+    for arg in cmd
+        .get_arguments()
+        .filter(|a| !a.is_global_set() && !a.is_hide_set())
+    {
         let name = arg.get_id().to_string();
         if name == "help" {
             continue;
@@ -154,6 +250,11 @@ pub fn command_schema(cmd: &clap::Command, spec: &CommandSpec) -> Value {
         {
             object.insert("default".to_owned(), json!(default));
         }
+        if let Some(param) = spec.params.iter().find(|p| p.name == name)
+            && let Some(object) = property.as_object_mut()
+        {
+            apply_param(object, param);
+        }
         if arg.is_required_set() {
             required.push(name.clone());
         }
@@ -184,6 +285,32 @@ pub fn command_schema(cmd: &clap::Command, spec: &CommandSpec) -> Value {
     })
 }
 
+/// Overlays a parameter's declared type, bounds and pattern on its property.
+///
+/// The default clap reports is text; for a numeric kind it is re-read as the
+/// number it parses to, so `"default": 30` is an integer, not `"30"`.
+fn apply_param(object: &mut Map<String, Value>, param: &ParamSpec) {
+    object.insert("type".to_owned(), json!(param.kind.json_type()));
+    let default = object.get("default").and_then(Value::as_str);
+    let typed_default = match (param.kind, default) {
+        (ParamKind::Integer, Some(text)) => text.parse::<i64>().ok().map(Value::from),
+        (ParamKind::Number, Some(text)) => text.parse::<f64>().ok().map(Value::from),
+        (ParamKind::String, _) | (_, None) => None,
+    };
+    if let Some(value) = typed_default {
+        object.insert("default".to_owned(), value);
+    }
+    if let Some(minimum) = param.minimum {
+        object.insert("minimum".to_owned(), json!(minimum));
+    }
+    if let Some(maximum) = param.maximum {
+        object.insert("maximum".to_owned(), json!(maximum));
+    }
+    if let Some(pattern) = param.pattern {
+        object.insert("pattern".to_owned(), json!(pattern));
+    }
+}
+
 fn output_schema(name: &str) -> Value {
     let data = match name {
         "describe" => json!({
@@ -205,6 +332,45 @@ fn output_schema(name: &str) -> Value {
                 "schema_command": { "type": "string" },
                 "context_files": { "type": "array", "items": { "type": "string" } },
                 "profile": { "type": "object" }
+            }
+        }),
+        "preview" => json!({
+            "type": "object",
+            "required": ["backend", "chain", "width", "height", "format", "palette", "seconds", "frames", "fps", "planned"],
+            "properties": {
+                "backend": {
+                    "type": "string",
+                    "enum": ["auto", "drm", "fbdev", "memory"],
+                    "description": "The backend that drew; `auto` only in a plan, where the chain decides at run time"
+                },
+                "chain": {
+                    "type": "array",
+                    "items": { "type": "string", "enum": ["drm", "fbdev", "memory"] },
+                    "description": "The backends tried, in order"
+                },
+                "device": { "type": ["string", "null"] },
+                "width": { "type": ["integer", "null"], "description": "Null in a plan for a device backend: the mode is read from the device" },
+                "height": { "type": ["integer", "null"] },
+                "format": { "type": ["string", "null"] },
+                "palette": {
+                    "type": "object",
+                    "properties": {
+                        "slug": { "type": "string" },
+                        "base": { "type": "string" },
+                        "source": { "type": "string" },
+                        "overlay": { "type": "string" },
+                        "skipped": { "type": "array", "items": { "type": "object" } }
+                    }
+                },
+                "seconds": { "type": "number" },
+                "fps": { "type": "integer" },
+                "frames": { "type": "integer" },
+                "dropped": { "type": "integer" },
+                "first_frame_ms": { "type": ["number", "null"] },
+                "measured_fps": { "type": ["number", "null"] },
+                "snapshot": { "type": ["string", "null"] },
+                "fallbacks": { "type": "array", "items": { "type": "object" } },
+                "planned": { "type": "boolean" }
             }
         }),
         _ => json!({ "type": "object", "description": "A JSON Schema Draft 2020-12 document" }),
@@ -277,8 +443,7 @@ pub fn run(
         serde_json::to_string_pretty(&document)
     }
     .map_err(|e| AppError::internal(e.to_string(), invocation))?;
-    println!("{rendered}");
-    Ok(())
+    write_line(&rendered, invocation)
 }
 
 #[cfg(test)]
@@ -314,6 +479,25 @@ mod tests {
     }
 
     #[test]
+    fn every_param_spec_names_a_visible_argument() {
+        let cli = Cli::command();
+        for spec in SPECS {
+            let sub = cli
+                .find_subcommand(spec.name)
+                .unwrap_or_else(|| panic!("{} missing", spec.name));
+            for param in spec.params {
+                assert!(
+                    sub.get_arguments()
+                        .any(|a| a.get_id() == param.name && !a.is_hide_set()),
+                    "{}: `{}` is not a visible argument",
+                    spec.name,
+                    param.name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn schema_parameters_follow_the_clap_tree() {
         let document = tool_schema();
         assert_eq!(document["$schema"], DIALECT);
@@ -326,5 +510,74 @@ mod tests {
             "array"
         );
         assert!(global_flags().iter().any(|f| f == "--json"));
+        assert!(
+            document["error_codes"]
+                .as_array()
+                .is_some_and(|codes| codes.iter().any(|c| c == "CONFLICT"))
+        );
+    }
+
+    #[test]
+    fn preview_parameters_are_typed_and_hidden_flags_are_omitted() {
+        let cli = Cli::command();
+        let sub = cli
+            .find_subcommand("preview")
+            .unwrap_or_else(|| panic!("preview missing"));
+        let spec = SPECS
+            .iter()
+            .find(|s| s.name == "preview")
+            .unwrap_or_else(|| panic!("preview spec missing"));
+        let document = command_schema(sub, spec);
+        let properties = &document["parameters"]["properties"];
+        assert_eq!(properties["seconds"]["type"], "number");
+        assert_eq!(properties["seconds"]["minimum"], 0);
+        assert_eq!(properties["seconds"]["maximum"], 3600);
+        assert_eq!(properties["seconds"]["default"], 5.0);
+        assert_eq!(properties["fps"]["type"], "integer");
+        assert_eq!(properties["fps"]["default"], 30);
+        assert_eq!(properties["fps"]["minimum"], 1);
+        assert_eq!(properties["fps"]["maximum"], 240);
+        assert_eq!(properties["size"]["type"], "string");
+        let pattern = properties["size"]["pattern"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let side = regex::Regex::new(&format!(
+            "^{}$",
+            pattern
+                .trim_start_matches('^')
+                .trim_end_matches('$')
+                .split_once('x')
+                .map(|(w, _)| w)
+                .unwrap_or_default()
+        ))
+        .unwrap_or_else(|e| panic!("{e}"));
+        // The pattern accepts exactly the sides `parse_size` accepts.
+        for n in [
+            0_u32, 1, 9, 10, 9999, 10_000, 15_999, 16_000, 16_299, 16_383, 16_384, 16_385, 20_000,
+            99_999,
+        ] {
+            assert_eq!(
+                side.is_match(&n.to_string()),
+                (1..=16_384).contains(&n),
+                "{n}"
+            );
+        }
+        assert!(!side.is_match("+8") && !side.is_match("08") && !side.is_match(" 8"));
+        assert_eq!(properties["size"]["default"], "1920x1080");
+        assert_eq!(
+            properties["backend"]["enum"],
+            json!(["auto", "drm", "fbdev", "memory"])
+        );
+        assert!(
+            properties.get("theme").is_none(),
+            "hidden flags stay hidden"
+        );
+        assert_eq!(document["exit_codes"]["5"], "CONFLICT");
+        let required = document["output_schema"]["properties"]["data"]["required"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(required.iter().any(|r| r == "chain"));
     }
 }

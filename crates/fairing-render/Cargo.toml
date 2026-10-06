@@ -3,7 +3,7 @@
 
 [package]
 name = "fairing-render"
-description = "Fairing rendering backends (DRM/KMS, fbdev, text) and frame compositor"
+description = "Fairing rendering: frame compositor, DRM/KMS and fbdev backends, memory backend for tests"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,3 +17,12 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+fairing-theme = { version = "0.1.0", path = "../fairing-theme" }
+# Every dependency below is qualified in DEPENDENCIES.md (§24.1).
+tiny-skia = { workspace = true }
+fontdue = { workspace = true }
+drm = { workspace = true }
+rustix = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

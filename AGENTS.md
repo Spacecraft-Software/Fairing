@@ -13,9 +13,11 @@ acts as the systemd password agent, and hands the screen to greetd. Part of Spac
 Software. Assurance **Category B**, with `crates/fairing-askpass` and the initrd
 lifecycle unit raised to **Category A** (Steelbore Standard §19). Licence GPL-3.0-or-later.
 
-Milestone state: M0 (repository and posture) and R-014 (CLI skeleton) are done; rendering
-(M1), progress and lifecycle (M2), the password agent (M3) and accessibility (M4) are not
-started. Do not advertise verbs, flags or files that do not exist yet.
+Milestone state: M0 (repository and posture) is done and M1 (draws a frame: palette
+tokens, compositor, DRM/KMS and fbdev backends, `fairing preview`) is implemented, pending
+G1 baselining for its requirements to be ticked. Progress and lifecycle (M2), the password
+agent (M3) and accessibility (M4) are not started. Do not advertise verbs, flags or files
+that do not exist yet.
 
 ## Build, test, lint
 
@@ -86,9 +88,28 @@ will not be green there.
 - Release profile is `panic = "abort"`: `Drop` does not run on panic. Anything that must
   zeroise a secret does so eagerly, never through drop glue alone (design input for
   `fairing-askpass`).
-- Human-mode colour is deferred to `fairing-theme` (M2), which carries the §11.1 role
-  tokens read from the house `steelbore.toml`. Until then diagnostics are `[TAG]`-only; no
-  bare hex or ANSI colour constants anywhere in the code.
+- Colour values come from one place: `crates/fairing-theme/assets/steelbore.toml`, a
+  byte-identical copy of the house palette file, read by `fairing-theme`'s build script into
+  generated role tables. No bare hex or ANSI colour constants anywhere else. The single
+  documented exception is the Linux console's default 16-colour palette in
+  `fairing-render/src/palette.rs`, kernel data that stands in for ANSI slots when the mono
+  theme is drawn on a framebuffer. Human-mode terminal colour for diagnostics is still
+  deferred to M2; tags stay `[TAG]`-only.
+- `fairing-render` renders into a heap `Frame` in the output's byte order and copies rows to
+  the device. The XRGB8888 red/blue swap lives only in `Frame::paint`/`PixelFormat::encode`
+  and is pinned by a test. tiny-skia, fontdue, drm and rustix types never appear in a `pub`
+  signature; backends are the closed `Surface` enum, never `Box<dyn Backend>`.
+- `fairing preview` under `AI_AGENT`, `CI`, `CLAUDECODE`, `CURSOR_AGENT` or `GEMINI_CLI`
+  never opens a VT (`Context::is_agent_environment`): `--backend auto` becomes memory with a
+  `[WARN]`, an explicit device backend is exit 2. The theme resolver takes `no_color` from
+  the `Context`; `SPACECRAFT_THEME` is read once, in `preview.rs`.
+- Tests that need a DRM device or `/dev/fb0` are `#[ignore]`d and carry no `Verifies:`
+  marker (`cargo test --workspace -- --ignored` on a free text console; they fail without a
+  device, as they should). Everything else runs against the memory backend, fake sysfs
+  trees in temporary directories, and `MemoryBackend::fail_next` (test-only) for the
+  lost-output path. The presenter re-opens through an injectable `Reopen` function.
+- Prose, comments and documentation use British spelling (colour, serialise); identifiers
+  follow the ecosystem's American spelling (`color`, `Selection::Color`, `NO_COLOR`).
 - `xtask` is internal tooling, not a shipped CLI: it honours `--json` and the error
   envelope but not the full CLI Standard flag set.
 
@@ -97,8 +118,9 @@ will not be green there.
 - Editing generated files (`doc/needs.texi`, `doc/requirements.texi`, `target/trace/*`).
 - `unwrap()` / `expect()` outside `#[cfg(test)]` (clippy `unwrap_used`/`expect_used`
   warn, CI denies warnings). Use `?` with `AppError` or `Failure`.
-- `println!` / `eprintln!` for data or diagnostics outside `src/output/`,
-  `src/diagnostic.rs`, `src/error.rs` and the verb renderers.
+- `println!` anywhere in `crates/fairing`: stdout goes through `output::write_line`, which
+  ends quietly on a closed pipe and reports any other write failure. `eprintln!` outside
+  `src/diagnostic.rs` and `src/error.rs`.
 - Hand-written argument parsing, hand-maintained schema JSON, hand-maintained
   traceability tables.
 - `chrono::Local`, `jiff::Zoned` with a non-UTC zone, or any `%H:%M` without `T…Z`.
@@ -108,6 +130,9 @@ will not be green there.
   crates.io, or opening an upstream PR (§6.4). Commits are signed (§6.3); never disable
   signing or touch key material.
 - A bare `Verifies:` on a requirement that is not actually tested by that code.
+- `as` casts between numeric types in rendering code; use the `geometry` helpers
+  (`as_f32`, `round_i32`, `round_u32`) or `try_from`, and `#[expect(..., reason)]` where a
+  cast is unavoidable.
 
 ## Environment expectations
 
@@ -128,9 +153,17 @@ will not be green there.
 | Global flags and verb tree | `crates/fairing/src/cli.rs` |
 | Output-mode cascade, colour precedence | `crates/fairing/src/output/mode.rs` |
 | JSON envelope, `--fields` | `crates/fairing/src/output/envelope.rs` |
+| stdout writer, closed-pipe handling | `crates/fairing/src/output/mod.rs` |
 | Structured errors and exit codes | `crates/fairing/src/error.rs` |
 | Diagnostics and severity floor | `crates/fairing/src/diagnostic.rs` |
 | `schema` / `describe` | `crates/fairing/src/schema.rs`, `describe.rs` |
+| `preview` | `crates/fairing/src/preview.rs` |
+| Palette tokens, theme resolution (§11.6) | `crates/fairing-theme/src/{theme,resolve}.rs`, generated by `build.rs` |
+| Frame, byte order, PPM snapshot | `crates/fairing-render/src/frame.rs` |
+| Layout and scaling | `crates/fairing-render/src/{layout,geometry}.rs` |
+| Compositor, logo, text | `crates/fairing-render/src/{compositor,logo,text,shapes}.rs` |
+| Backends and fallback chain | `crates/fairing-render/src/backend/` |
+| Frame pacing, re-acquire, first-frame timing | `crates/fairing-render/src/{cadence,presenter}.rs` |
 | CLI integration tests | `crates/fairing/tests/cli.rs` |
 | Requirement model, validation, Texinfo generator | `xtask/src/requirements/` |
 | Marker scanner, matrix, verdicts | `xtask/src/trace/` |
@@ -138,6 +171,7 @@ will not be green there.
 | §6.5 text-file gate | `xtask/src/eol.rs` |
 | Tailoring register | `COMPLIANCE.md` |
 | Dependency qualification | `DEPENDENCIES.md` |
+| Third-party credits (§15.3) | `CREDITS.md` |
 | Plan and task list | `PLAN.md`, `TODO.md` |
 
 ## Standards compliance

@@ -4,12 +4,13 @@
 
 //! Fairing: the boot splash for Steelbore OS Bravais.
 //!
-//! This binary is the single entry point for every mode Fairing runs in. In
-//! milestone M0/M1 it carries the CLI skeleton of the Spacecraft Software CLI
-//! Standard (R-014): global flags, the output-mode cascade, the `metadata` +
-//! `data` envelope, structured errors and diagnostics, `schema` and `describe`.
-//! The splash, shutdown, theme and preview verbs arrive with their milestones
-//! and are not advertised until they exist.
+//! This binary is the single entry point for every mode Fairing runs in. It
+//! carries the CLI skeleton of the Spacecraft Software CLI Standard (R-014):
+//! global flags, the output-mode cascade, the `metadata` + `data` envelope,
+//! structured errors and diagnostics, `schema` and `describe`; and, from
+//! milestone M1, `preview`, which draws the splash with a simulated bar. The
+//! splash, shutdown and theme verbs arrive with their milestones and are not
+//! advertised until they exist.
 
 #![forbid(unsafe_code)]
 
@@ -18,10 +19,12 @@ mod describe;
 mod diagnostic;
 mod error;
 mod output;
+mod preview;
 mod schema;
 mod time;
 
 use std::process::ExitCode;
+use std::time::Instant;
 
 use clap::Parser as _;
 
@@ -31,6 +34,8 @@ use crate::error::AppError;
 use crate::output::mode::Context;
 
 fn main() -> ExitCode {
+    // First-frame latency is measured from here (FRN-SRS-004).
+    let origin = Instant::now();
     let argv: Vec<String> = std::env::args().collect();
     let invocation = cli::invocation(&argv);
     let cli = match Cli::try_parse_from(&argv) {
@@ -38,14 +43,14 @@ fn main() -> ExitCode {
         Err(error) => return handle_parse_error(&error, &argv, &invocation),
     };
     let context = Context::resolve(&cli.global);
-    let result = run(&cli, &context, &invocation);
+    let result = run(&cli, &context, &invocation, origin);
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => ExitCode::from(error.report(&context)),
     }
 }
 
-fn run(cli: &Cli, context: &Context, invocation: &str) -> Result<(), AppError> {
+fn run(cli: &Cli, context: &Context, invocation: &str, origin: Instant) -> Result<(), AppError> {
     Diagnostic::new(
         Severity::Info,
         "OUTPUT_MODE",
@@ -70,11 +75,14 @@ fn run(cli: &Cli, context: &Context, invocation: &str) -> Result<(), AppError> {
     }
 
     if cli.global.version {
-        return cli::print_version(context, invocation);
+        return cli::print_version(context, invocation, &cli.global.fields);
     }
     match &cli.command {
         Some(Command::Describe) => describe::run(context, invocation, &cli.global),
         Some(Command::Schema { command }) => schema::run(command, context, invocation, &cli.global),
+        Some(Command::Preview(args)) => {
+            preview::run(args, context, invocation, &cli.global, origin)
+        }
         None => Err(AppError::missing_argument(
             "no subcommand given",
             "fairing describe --json",

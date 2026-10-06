@@ -11,6 +11,7 @@ use crate::cli::{Cli, GlobalFlags};
 use crate::error::AppError;
 use crate::output::envelope::Response;
 use crate::output::mode::Context;
+use crate::output::write_line;
 use crate::schema;
 
 #[derive(Debug, Serialize)]
@@ -108,37 +109,46 @@ pub fn run(context: &Context, invocation: &str, flags: &GlobalFlags) -> Result<(
             .with_context(context, flags.dry_run)
             .emit(context, &flags.fields);
     }
-    println!(
-        "{} {} — {}",
-        manifest.tool, manifest.version, manifest.description
-    );
-    println!(
-        "profile: {}\tmode: {}\tcolor: {}\tinteractive: {}",
-        manifest.profile.reader,
-        manifest.profile.mode,
-        if manifest.profile.color { "on" } else { "off" },
-        if manifest.profile.interactive {
-            "yes"
-        } else {
-            "no"
-        }
-    );
-    println!("assurance: {}", manifest.assurance_category);
-    println!("command\tdescription\tjson\tdry_run\tidempotent\tdestructive");
-    for command in &manifest.commands {
-        println!(
-            "{}\t{}\t{}\t{}\t{}\t{}",
-            command.name,
-            command.description,
-            yes_no(command.supports_json),
-            yes_no(command.supports_dry_run),
-            yes_no(command.idempotent),
-            yes_no(command.destructive)
-        );
+    let header = [
+        format!(
+            "{} {} — {}",
+            manifest.tool, manifest.version, manifest.description
+        ),
+        format!(
+            "profile: {}\tmode: {}\tcolor: {}\tinteractive: {}",
+            manifest.profile.reader,
+            manifest.profile.mode,
+            if manifest.profile.color { "on" } else { "off" },
+            yes_no(manifest.profile.interactive)
+        ),
+        format!("assurance: {}", manifest.assurance_category),
+        "command\tdescription\tjson\tdry_run\tidempotent\tdestructive".to_owned(),
+    ];
+    for line in &header {
+        write_line(line, invocation)?;
     }
-    println!("global_flags\t{}", manifest.global_flags.join(" "));
-    println!("output_formats\t{}", manifest.output_formats.join(" "));
-    println!("schema_command\t{}", manifest.schema_command);
+    for command in &manifest.commands {
+        write_line(
+            &format!(
+                "{}\t{}\t{}\t{}\t{}\t{}",
+                command.name,
+                command.description,
+                yes_no(command.supports_json),
+                yes_no(command.supports_dry_run),
+                yes_no(command.idempotent),
+                yes_no(command.destructive)
+            ),
+            invocation,
+        )?;
+    }
+    let footer = [
+        format!("global_flags\t{}", manifest.global_flags.join(" ")),
+        format!("output_formats\t{}", manifest.output_formats.join(" ")),
+        format!("schema_command\t{}", manifest.schema_command),
+    ];
+    for line in &footer {
+        write_line(line, invocation)?;
+    }
     Ok(())
 }
 
