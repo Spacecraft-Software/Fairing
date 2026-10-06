@@ -18,6 +18,20 @@ build = "build.rs"
 workspace = true
 
 [dependencies]
+# Every dependency below is qualified in DEPENDENCIES.md (§24.1).
+serde = { workspace = true }
+postcard = { workspace = true }
+
+# Build-time only: `theme check` / `theme compile`. Loading a compiled theme
+# (the boot path) needs neither; the initrd build leaves the feature off.
+serde_json = { workspace = true, optional = true }
+png = { workspace = true, optional = true }
+nickel-lang-core = { workspace = true, optional = true }
+
+[features]
+# Theme compilation: Nickel evaluation against the embedded contract, PNG
+# assets, and the compiled artefact.
+compile = ["dep:serde_json", "dep:png", "dep:nickel-lang-core"]
 
 [build-dependencies]
 # Parses the vendored house palette at build time; nothing of it reaches the binary.
@@ -25,3 +39,4 @@ toml = { workspace = true }
 
 [dev-dependencies]
 toml = { workspace = true }
+tempfile = { workspace = true }

@@ -18,6 +18,24 @@ pub enum ThemeErrorKind {
     InvalidHex,
     /// Not a registered theme slug.
     UnknownTheme,
+    /// Not a token of any palette in the palette file.
+    UnknownToken,
+    /// A token of another palette than the one the theme declared (§11.4).
+    ForeignToken,
+    /// A token of the theme's own palette that no role binds.
+    UnboundToken,
+    /// A theme whose layout or images break a rule of the contract.
+    InvalidLayout,
+    /// Bytes that are not a readable compiled theme.
+    InvalidArtefact,
+    /// A theme source that is not valid Nickel or breaks the contract; the
+    /// input is Nickel's own diagnostic (FRN-SRS-041).
+    Contract,
+    /// An evaluated theme or asset the compiler cannot use.
+    InvalidSource,
+    /// A literal colour in a theme, or an image pixel outside the palette
+    /// (FRN-SRS-044).
+    LiteralColor,
 }
 
 /// A theme-contract violation, carrying the offending input.
@@ -50,11 +68,33 @@ impl ThemeError {
 
 impl fmt::Display for ThemeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // These carry a sentence, not a name to quote.
+        match self.kind {
+            ThemeErrorKind::InvalidLayout | ThemeErrorKind::InvalidSource => {
+                return write!(f, "invalid theme: {}", self.input);
+            }
+            ThemeErrorKind::InvalidArtefact => {
+                return write!(f, "unreadable compiled theme: {}", self.input);
+            }
+            ThemeErrorKind::LiteralColor => return write!(f, "{}", self.input),
+            ThemeErrorKind::Contract => {
+                return write!(f, "the theme breaks the Fairing theme contract");
+            }
+            _ => {}
+        }
         let what = match self.kind {
             ThemeErrorKind::UnknownRole => "unknown role",
             ThemeErrorKind::UnknownAnsi => "unknown ANSI slot",
             ThemeErrorKind::InvalidHex => "invalid `#RRGGBB` colour",
             ThemeErrorKind::UnknownTheme => "unknown theme",
+            ThemeErrorKind::UnknownToken => "unknown palette token",
+            ThemeErrorKind::ForeignToken => "token of another palette",
+            ThemeErrorKind::UnboundToken => "token that binds no role",
+            ThemeErrorKind::InvalidLayout
+            | ThemeErrorKind::InvalidArtefact
+            | ThemeErrorKind::Contract
+            | ThemeErrorKind::InvalidSource
+            | ThemeErrorKind::LiteralColor => "invalid",
         };
         write!(f, "{what} `{}`", self.input)
     }

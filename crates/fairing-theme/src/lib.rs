@@ -24,14 +24,29 @@
 #![forbid(unsafe_code)]
 
 mod ansi;
+mod artefact;
+#[cfg(feature = "compile")]
+pub mod compile;
 mod fault;
+#[cfg(feature = "compile")]
+pub mod nickel;
+#[cfg(feature = "compile")]
+mod png_asset;
 mod resolve;
 mod rgb;
 mod role;
 mod theme;
+mod tokens;
 
 #[doc(inline)]
 pub use ansi::{Ansi, MonoRoles};
+#[doc(inline)]
+pub use artefact::{
+    BarSpec, BootLayout, CompiledTheme, Encoding, FORMAT_VERSION, ImageMeta, ImageView, LogoImage,
+    LogoSpec, MAGIC, MAX_ARTEFACT_BYTES, MAX_IMAGE_SIDE, MAX_IMAGES, MAX_SEQUENCE_FPS, Meta,
+    PercentSpec, PromptSpec, REFERENCE_HEIGHT, REFERENCE_WIDTH, RectSpec, SequenceSpec,
+    ShutdownLayout, StatusSpec,
+};
 #[doc(inline)]
 pub use fault::{ThemeError, ThemeErrorKind};
 #[doc(inline)]
@@ -49,3 +64,5 @@ pub use theme::generated::{
 };
 #[doc(inline)]
 pub use theme::{Polarity, Roles, Theme, Variant};
+#[doc(inline)]
+pub use tokens::{PaletteTokens, Token, role_of_token};
