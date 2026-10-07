@@ -10,7 +10,12 @@
 //! connector's preferred mode is set on the CRTC its encoder already drives.
 //! Two `XRGB8888` dumb buffers alternate: the frame is copied row by row,
 //! honouring the driver's pitch, then the buffer is flipped at vblank and the
-//! flip-complete event is awaited with a bounded `poll`. `ENODEV` from any
+//! flip-complete event is awaited with a bounded `poll`. A flip still pending
+//! when the wait ends is late, not lost: the kernel will scan that buffer out,
+//! so it stays in flight and the next present collects its event first. Until
+//! it lands, presents report [`RenderErrorKind::Timeout`] and drop their frame
+//! without touching either buffer, so no frame is drawn into the buffer being
+//! scanned out and no late event is taken for a newer flip. `ENODEV` from any
 //! ioctl means the device was unplugged under us — the simpledrm → native
 //! driver handover — and surfaces as [`RenderErrorKind::Lost`] so the presenter
 //! re-acquires (FRN-SRS-006). On close the CRTC is returned to whatever it
@@ -42,7 +47,8 @@ const CARD_RANGE: std::ops::Range<u32> = 0..16;
 const BPP: u32 = 32;
 /// Colour depth passed to `ADDFB`; with 32 bpp the kernel infers `XRGB8888`.
 const DEPTH: u32 = 24;
-/// How long to wait for a flip-complete event before probing the device (FRN-SRS-006).
+/// How long to wait for a flip-complete event before leaving the flip in
+/// flight and probing the device (FRN-SRS-006).
 const FLIP_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// The opened primary node; both DRM traits are default-method only.
@@ -108,6 +114,8 @@ pub struct DrmBackend {
     front: usize,
     saved: Saved,
     presented: u64,
+    /// A flip was queued and its completion event has not been seen yet.
+    in_flight: bool,
 }
 
 impl DrmBackend {
@@ -224,6 +232,7 @@ impl DrmBackend {
             front: 0,
             saved,
             presented: 0,
+            in_flight: false,
         })
     }
 
@@ -272,33 +281,29 @@ impl DrmBackend {
         Ok(())
     }
 
-    /// Blocks until this CRTC's flip completes, bounded by [`FLIP_TIMEOUT`].
-    fn wait_flip(&self) -> Result<(), RenderError> {
-        let deadline = Instant::now() + FLIP_TIMEOUT;
+    /// Waits up to `timeout` for this CRTC's flip-complete event; a zero
+    /// timeout only collects an event that is already there. `Ok(false)` when
+    /// it has not arrived, once the device has answered a probe: a slow vblank
+    /// and a device that vanished look alike until then (FRN-SRS-006).
+    fn wait_flip(&self, timeout: Duration) -> Result<bool, RenderError> {
+        let deadline = Instant::now() + timeout;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                // Distinguish a slow vblank from a device that vanished (FRN-SRS-006).
-                return match self
-                    .card
-                    .get_driver_capability(DriverCapability::DumbBuffer)
-                {
-                    Ok(_) => Err(RenderError::new(
-                        RenderErrorKind::Timeout,
-                        format!("no flip event within {FLIP_TIMEOUT:?}"),
-                    )),
-                    Err(e) => Err(RenderError::from_io(
-                        "probe the device after a flip timeout",
-                        e,
-                    )),
-                };
-            }
-            let timeout = Timespec {
+            let spec = Timespec {
                 tv_sec: i64::try_from(remaining.as_secs()).unwrap_or(i64::MAX),
                 tv_nsec: i64::from(remaining.subsec_nanos()),
             };
             let mut fds = [PollFd::new(&self.card, PollFlags::IN)];
-            match poll(&mut fds, Some(&timeout)) {
+            match poll(&mut fds, Some(&spec)) {
+                Ok(0) if remaining.is_zero() => {
+                    return self
+                        .card
+                        .get_driver_capability(DriverCapability::DumbBuffer)
+                        .map(|_| false)
+                        .map_err(|e| {
+                            RenderError::from_io("probe the device after a flip timeout", e)
+                        });
+                }
                 Ok(0) => continue,
                 Ok(_) => {}
                 Err(errno) if errno == rustix::io::Errno::INTR => continue,
@@ -317,7 +322,7 @@ impl DrmBackend {
                 if let Event::PageFlip(flip) = event
                     && flip.crtc == self.output.crtc
                 {
-                    return Ok(());
+                    return Ok(true);
                 }
             }
         }
@@ -364,6 +369,21 @@ impl Backend for DrmBackend {
                     .on(BackendKind::Drm),
             );
         };
+        // A late flip is collected before anything else is drawn: until it
+        // lands, its buffer may be on screen and the frame is dropped.
+        if self.in_flight {
+            match self.wait_flip(Duration::ZERO) {
+                Ok(true) => self.in_flight = false,
+                Ok(false) => {
+                    return Err(RenderError::new(
+                        RenderErrorKind::Timeout,
+                        format!("the previous flip is still pending after {FLIP_TIMEOUT:?}"),
+                    )
+                    .on(BackendKind::Drm));
+                }
+                Err(error) => return Err(error.on(BackendKind::Drm)),
+            }
+        }
         let back = 1 - self.front;
         let result = (|| {
             self.upload(&mut scanouts[back], frame)?;
@@ -391,14 +411,16 @@ impl Backend for DrmBackend {
                             if RenderErrorKind::classify(&e) == RenderErrorKind::Busy
                                 && attempts < 3 =>
                         {
-                            // A previous flip is still pending; let it land first.
+                            // A flip we do not know of is pending; let it land first.
                             attempts += 1;
-                            self.wait_flip()?;
+                            self.wait_flip(FLIP_TIMEOUT)?;
                         }
                         Err(e) => return Err(RenderError::from_io("queue the page flip", e)),
                     }
                 }
-                self.wait_flip()?;
+                // Queued is presented: a flip that misses the wait still lands,
+                // so it stays in flight for the next present to collect.
+                self.in_flight = !self.wait_flip(FLIP_TIMEOUT)?;
             }
             Ok(())
         })();

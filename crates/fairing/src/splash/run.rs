@@ -46,12 +46,12 @@ pub const CACHE_RETRY: Duration = Duration::from_secs(1);
 /// Frames per second while booting (FRN-SRS-005).
 pub const SPLASH_HZ: u32 = 30;
 
-/// How long flips may stay late before the splash gives up on the output.
+/// How long the display may stay mid-flip before the splash gives up on it.
 ///
-/// A flip whose completion misses the backend's wait is a dropped frame, not
-/// a failed output: a busy boot can hold the kernel's commit work that long.
-/// A display that has not flipped for this long has failed. The bound sits
-/// inside the 5 s of FRN-SRS-037.
+/// A flip that misses the backend's wait stays in flight, and the frames
+/// presented until it lands are dropped: a busy boot can hold the kernel's
+/// commit work that long. A display that has not completed a flip for this
+/// long has failed. The bound sits inside the 5 s of FRN-SRS-037.
 pub const FLIP_STALL_LIMIT: Duration = Duration::from_secs(2);
 
 /// Where the splash reads and writes its files.
@@ -362,20 +362,21 @@ fn finish(
     outcome
 }
 
-/// Late flips in a row, timed on the boot clock from the first of them.
+/// Frames dropped in a row because the display had not completed its last
+/// flip, timed on the boot clock from the first of them.
 #[derive(Debug, Default)]
 struct Stall {
     since: Option<Duration>,
 }
 
 impl Stall {
-    /// A frame was presented: any stall is over.
+    /// A frame was presented, so the last flip landed: any stall is over.
     fn clear(&mut self) {
         self.since = None;
     }
 
-    /// A frame was late at `now`. `true` once flips have been late for longer
-    /// than [`FLIP_STALL_LIMIT`].
+    /// A frame was dropped at `now`. `true` once frames have been dropped for
+    /// longer than [`FLIP_STALL_LIMIT`].
     fn late(&mut self, now: Duration) -> bool {
         let since = *self.since.get_or_insert(now);
         now.saturating_sub(since) > FLIP_STALL_LIMIT
@@ -526,8 +527,9 @@ impl Session {
     }
 
     /// Presents one frame. A lost output is retried next tick with the last
-    /// frame left up, and a late flip drops the frame until flips have been
-    /// late for [`FLIP_STALL_LIMIT`]; any other failure ends the run.
+    /// frame left up, and a frame dropped while the last flip is still in
+    /// flight is skipped until the display has been stuck for
+    /// [`FLIP_STALL_LIMIT`]; any other failure ends the run.
     fn present(
         &mut self,
         env: &Environment<'_>,
