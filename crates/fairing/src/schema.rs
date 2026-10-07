@@ -558,7 +558,7 @@ fn splash_data() -> Value {
             "carried_bar": { "type": ["number", "null"], "description": "The bar value the initrd handed over" },
             "dbus": { "type": "boolean" },
             "last_status": { "type": ["string", "null"] },
-            "release_ms": { "type": ["number", "null"], "description": "From seeing SIGTERM to the output released" },
+            "release_ms": { "type": ["number", "null"], "description": "From the tick that first saw SIGTERM to the output released; the signal can arrive up to one frame period (33 ms) earlier" },
             "planned": { "type": "boolean" }
         }
     })

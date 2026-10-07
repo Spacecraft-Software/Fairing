@@ -48,10 +48,10 @@ pub const SPLASH_HZ: u32 = 30;
 
 /// How long the display may stay mid-flip before the splash gives up on it.
 ///
-/// A flip that misses the backend's wait stays in flight, and the frames
-/// presented until it lands are dropped: a busy boot can hold the kernel's
-/// commit work that long. A display that has not completed a flip for this
-/// long has failed. The bound sits inside the 5 s of FRN-SRS-037.
+/// A flip that has not completed by the next frame stays in flight, and the
+/// frames presented until it lands are dropped: a busy boot can hold the
+/// kernel's commit work that long. A display that has not completed a flip for
+/// this long has failed. The bound sits inside the 5 s of FRN-SRS-037.
 pub const FLIP_STALL_LIMIT: Duration = Duration::from_secs(2);
 
 /// Where the splash reads and writes its files.
@@ -157,8 +157,9 @@ pub struct Outcome {
     pub first_bar: Option<f32>,
     /// The last status line drawn (FRN-SRS-050).
     pub last_status: Option<String>,
-    /// From seeing SIGTERM to the output released, as this process measured
-    /// it (FRN-SRS-033); `None` when the run did not end on SIGTERM.
+    /// From the tick that first saw SIGTERM to the output released
+    /// (FRN-SRS-033); `None` when the run did not end on SIGTERM. The signal
+    /// can arrive up to one frame period before a tick sees it.
     pub release_ms: Option<f64>,
 }
 

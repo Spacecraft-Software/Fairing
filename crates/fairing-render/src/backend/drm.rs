@@ -9,13 +9,15 @@
 //! master, so no privilege dance is needed in the initrd. The connected
 //! connector's preferred mode is set on the CRTC its encoder already drives.
 //! Two `XRGB8888` dumb buffers alternate: the frame is copied row by row,
-//! honouring the driver's pitch, then the buffer is flipped at vblank and the
-//! flip-complete event is awaited with a bounded `poll`. A flip still pending
-//! when the wait ends is late, not lost: the kernel will scan that buffer out,
-//! so it stays in flight and the next present collects its event first. Until
-//! it lands, presents report [`RenderErrorKind::Timeout`] and drop their frame
-//! without touching either buffer, so no frame is drawn into the buffer being
-//! scanned out and no late event is taken for a newer flip. `ENODEV` from any
+//! honouring the driver's pitch, then the buffer is queued to flip at the next
+//! vblank and `present` returns: the loop never waits on the display. The next
+//! present first collects the flip-complete event without blocking. Until it
+//! has arrived, presents report [`RenderErrorKind::Timeout`] and drop their
+//! frame without touching either buffer, so no frame is drawn into the buffer
+//! being scanned out and no late event is taken for a newer flip. Closing lets
+//! a flip in flight land for at most [`FLIP_SETTLE`]; past that the console's
+//! restore is left to the kernel when the device is released, so a stalled
+//! display cannot hold up the release (FRN-SRS-033). `ENODEV` from any
 //! ioctl means the device was unplugged under us — the simpledrm → native
 //! driver handover — and surfaces as [`RenderErrorKind::Lost`] so the presenter
 //! re-acquires (FRN-SRS-006). On close the CRTC is returned to whatever it
@@ -47,9 +49,9 @@ const CARD_RANGE: std::ops::Range<u32> = 0..16;
 const BPP: u32 = 32;
 /// Colour depth passed to `ADDFB`; with 32 bpp the kernel infers `XRGB8888`.
 const DEPTH: u32 = 24;
-/// How long to wait for a flip-complete event before leaving the flip in
-/// flight and probing the device (FRN-SRS-006).
-const FLIP_TIMEOUT: Duration = Duration::from_millis(250);
+/// How long `close` lets a flip in flight land before it restores the CRTC:
+/// more than one refresh at 24 Hz, well inside the 100 ms of FRN-SRS-033.
+const FLIP_SETTLE: Duration = Duration::from_millis(50);
 
 /// The opened primary node; both DRM traits are default-method only.
 #[derive(Debug)]
@@ -91,7 +93,8 @@ struct Saved {
     fb: Option<framebuffer::Handle>,
     mode: Option<Mode>,
     position: (u32, u32),
-    /// Set once the CRTC has been restored (or was never touched).
+    /// Set once the CRTC has been restored (or was never touched, or its
+    /// restore was left to the kernel).
     restored: bool,
 }
 
@@ -369,15 +372,15 @@ impl Backend for DrmBackend {
                     .on(BackendKind::Drm),
             );
         };
-        // A late flip is collected before anything else is drawn: until it
-        // lands, its buffer may be on screen and the frame is dropped.
+        // The last flip is collected before anything else is drawn: until it
+        // lands, its buffer may be the one on screen and the frame is dropped.
         if self.in_flight {
             match self.wait_flip(Duration::ZERO) {
                 Ok(true) => self.in_flight = false,
                 Ok(false) => {
                     return Err(RenderError::new(
                         RenderErrorKind::Timeout,
-                        format!("the previous flip is still pending after {FLIP_TIMEOUT:?}"),
+                        "the previous flip has not completed",
                     )
                     .on(BackendKind::Drm));
                 }
@@ -398,29 +401,26 @@ impl Backend for DrmBackend {
                     )
                     .map_err(|e| RenderError::from_io("set the CRTC mode", e))?;
             } else {
-                let mut attempts = 0;
-                loop {
-                    match self.card.page_flip(
-                        self.output.crtc,
-                        scanouts[back].fb,
-                        PageFlipFlags::EVENT,
-                        None,
-                    ) {
-                        Ok(()) => break,
-                        Err(e)
-                            if RenderErrorKind::classify(&e) == RenderErrorKind::Busy
-                                && attempts < 3 =>
-                        {
-                            // A flip we do not know of is pending; let it land first.
-                            attempts += 1;
-                            self.wait_flip(FLIP_TIMEOUT)?;
-                        }
-                        Err(e) => return Err(RenderError::from_io("queue the page flip", e)),
+                match self.card.page_flip(
+                    self.output.crtc,
+                    scanouts[back].fb,
+                    PageFlipFlags::EVENT,
+                    None,
+                ) {
+                    // Queued is presented: the kernel scans this buffer out at
+                    // the next vblank, and the next present collects the event.
+                    Ok(()) => self.in_flight = true,
+                    Err(e) if RenderErrorKind::classify(&e) == RenderErrorKind::Busy => {
+                        // A flip we did not queue is pending: drop this frame
+                        // and collect its event first next time.
+                        self.in_flight = true;
+                        return Err(RenderError::new(
+                            RenderErrorKind::Timeout,
+                            "a flip is already pending",
+                        ));
                     }
+                    Err(e) => return Err(RenderError::from_io("queue the page flip", e)),
                 }
-                // Queued is presented: a flip that misses the wait still lands,
-                // so it stays in flight for the next present to collect.
-                self.in_flight = !self.wait_flip(FLIP_TIMEOUT)?;
             }
             Ok(())
         })();
@@ -432,6 +432,7 @@ impl Backend for DrmBackend {
     }
 
     fn close(mut self) -> Result<(), RenderError> {
+        self.settle();
         let restored = self.restore_crtc();
         self.release();
         restored.map_err(|e| RenderError::from_io("restore the CRTC", e).on(BackendKind::Drm))
@@ -439,6 +440,17 @@ impl Backend for DrmBackend {
 }
 
 impl DrmBackend {
+    /// Lets a flip in flight land for at most [`FLIP_SETTLE`] before the CRTC
+    /// is restored: the restoring mode-set would wait for it in the kernel.
+    /// Past that the restore is left to the kernel, which brings the console
+    /// back when the device is released.
+    fn settle(&mut self) {
+        if self.in_flight && !matches!(self.wait_flip(FLIP_SETTLE), Ok(true)) {
+            self.saved.restored = true;
+        }
+        self.in_flight = false;
+    }
+
     /// Puts the CRTC back as it was before us, once: on its previous framebuffer,
     /// or disabled again if it was scanning nothing. A CRTC we never mode-set is
     /// left alone.
@@ -479,6 +491,7 @@ impl Drop for DrmBackend {
     /// `close` is the orderly path; on an error path this still restores the
     /// console and frees the kernel objects, best effort.
     fn drop(&mut self) {
+        self.settle();
         let _ = self.restore_crtc();
         self.release();
     }
