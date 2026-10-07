@@ -37,6 +37,7 @@ mod palette;
 mod presenter;
 mod scene;
 mod shapes;
+mod sprite;
 mod text;
 
 #[doc(inline)]

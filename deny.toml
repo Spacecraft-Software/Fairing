@@ -12,6 +12,16 @@ all-features = true
 [advisories]
 yanked = "deny"
 unmaintained = "workspace"
+# Accepted advisories, each recorded with its argument in DEPENDENCIES.md and
+# mirrored in .cargo/audit.toml for `cargo audit`.
+ignore = [
+  # imbl-sized-chunks 0.1.3 under nickel-lang-vector: double free when an
+  # element's Drop panics. Reached only by `fairing theme check|compile` (the
+  # `theme-tool` feature), never by a splash binary; release builds abort on
+  # the panic before a second drop. No fixed version is reachable until
+  # nickel-lang-vector moves to 0.2.
+  { id = "RUSTSEC-2026-0292", reason = "theme-tool only; panic = abort; no fix reachable (DEPENDENCIES.md)" },
+]
 
 [licenses]
 allow = [
@@ -28,6 +38,31 @@ allow = [
   "Zlib",
 ]
 private = { ignore = true }
+
+# malachite (arbitrary-precision numbers under nickel-lang-core) is
+# LGPL-3.0-only. It is linked only into the full `fairing` build (the
+# `theme-tool` feature), which is therefore conveyed under GPL-3.0; the splash
+# binaries the NixOS module runs contain none of it. DEPENDENCIES.md records
+# the decision.
+[[licenses.exceptions]]
+crate = "malachite"
+allow = ["LGPL-3.0-only"]
+
+[[licenses.exceptions]]
+crate = "malachite-base"
+allow = ["LGPL-3.0-only"]
+
+[[licenses.exceptions]]
+crate = "malachite-float"
+allow = ["LGPL-3.0-only"]
+
+[[licenses.exceptions]]
+crate = "malachite-nz"
+allow = ["LGPL-3.0-only"]
+
+[[licenses.exceptions]]
+crate = "malachite-q"
+allow = ["LGPL-3.0-only"]
 
 [bans]
 multiple-versions = "warn"

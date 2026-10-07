@@ -37,6 +37,10 @@ jobs:
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      # The splash builds the NixOS module runs: no Nickel, and in the initrd
+      # no D-Bus either.
+      - run: cargo clippy -p fairing --all-targets --no-default-features --features dbus --locked -- -D warnings
+      - run: cargo clippy -p fairing --all-targets --no-default-features --locked -- -D warnings
 
   test:
     runs-on: ubuntu-latest
@@ -47,6 +51,58 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --locked
       - run: cargo test --workspace --locked
+      - run: cargo test -p fairing --no-default-features --features dbus --locked
+      - run: cargo test -p fairing --no-default-features --locked
+
+  # PRD budget: the stripped release binary the initrd carries is at most
+  # 2.5 MiB. The other two builds are measured and reported, not gated.
+  size:
+    runs-on: ubuntu-latest
+    needs: fmt
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: measure the three builds
+        run: |
+          measure() {
+            name="$1"; shift
+            cargo build --release --locked -p fairing "$@" --target-dir "target/size-$name"
+            bytes=$(stat -c %s "target/size-$name/release/fairing")
+            echo "| $name | $bytes |" >> "$GITHUB_STEP_SUMMARY"
+            echo "$bytes" > "target/size-$name.bytes"
+          }
+          {
+            echo '| Build | Bytes |'
+            echo '|---|---|'
+          } >> "$GITHUB_STEP_SUMMARY"
+          measure initrd --no-default-features
+          measure splash --no-default-features --features dbus
+          measure full
+      - name: the initrd binary is within 2.5 MiB
+        run: |
+          bytes=$(cat target/size-initrd.bytes)
+          limit=2621440
+          echo "initrd binary: $bytes of $limit bytes"
+          test "$bytes" -le "$limit"
+
+  # The NixOS module: evaluation checks everywhere, VM tests on KVM. Until
+  # flake.lock is committed (P-101) the inputs resolve at run time.
+  nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: enable KVM for the NixOS VM tests
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            system-features = nixos-test benchmark big-parallel kvm
+      - run: nix flake check -L --no-write-lock-file
 
   # Implements: FRN-SRS-103
   deny:

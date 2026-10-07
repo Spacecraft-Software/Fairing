@@ -64,6 +64,11 @@ pub struct AppError {
     pub timestamp: String,
     /// The invocation that failed.
     pub command: String,
+    /// Supporting text a tool produced verbatim, such as Nickel's contract
+    /// diagnostic (FRN-SRS-041); may span lines. Boxed so `AppError` stays
+    /// small enough to return by value (clippy `result_large_err`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<Box<str>>,
 }
 
 impl AppError {
@@ -80,7 +85,16 @@ impl AppError {
             hint: hint.into(),
             timestamp: now_iso8601(),
             command: command.to_owned(),
+            detail: None,
         }
+    }
+
+    /// Attaches supporting text, printed after the message.
+    #[must_use]
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        let detail = detail.into();
+        self.detail = (!detail.trim().is_empty()).then(|| detail.into_boxed_str());
+        self
     }
 
     /// `NOT_FOUND` (exit 3).
@@ -181,7 +195,13 @@ impl AppError {
     /// Writes the error to stderr in the context's rendering and returns the exit code.
     #[must_use]
     pub fn report(&self, context: &Context) -> u8 {
-        if context.mode.is_machine() {
+        if context.journal {
+            eprintln!(
+                "<3>[ERROR] {} (hint: {})",
+                crate::diagnostic::single_line(&self.message),
+                self.hint
+            );
+        } else if context.mode.is_machine() {
             #[derive(Serialize)]
             struct Wrapper<'a> {
                 error: &'a AppError,
@@ -192,6 +212,11 @@ impl AppError {
             }
         } else {
             eprintln!("[ERROR] {}", self.message);
+            if let Some(detail) = &self.detail {
+                for line in detail.trim_end().lines() {
+                    eprintln!("  {line}");
+                }
+            }
             eprintln!("  hint: {}", self.hint);
         }
         self.exit_code

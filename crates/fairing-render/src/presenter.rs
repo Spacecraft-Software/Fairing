@@ -17,9 +17,11 @@ use crate::scene::Scene;
 
 /// Default time to keep trying to re-acquire a lost output (FRN-SRS-006).
 ///
-/// The splash raises this: between the firmware device vanishing and the
-/// native driver registering its node there is commonly a gap of hundreds of
-/// milliseconds to seconds, during which the last frame stays on screen.
+/// `fairing preview` keeps it. `fairing splash` sets the budget to zero and
+/// re-opens once per frame instead, so a lost output never delays its reaction
+/// to SIGTERM; between the firmware device vanishing and the native driver
+/// registering its node there is commonly a gap of hundreds of milliseconds to
+/// seconds, during which the last frame stays on screen.
 pub const DEFAULT_REACQUIRE_BUDGET: Duration = Duration::from_millis(500);
 /// Pause between re-acquire attempts.
 const REACQUIRE_PAUSE: Duration = Duration::from_millis(25);

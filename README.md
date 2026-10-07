@@ -7,7 +7,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 a Rust boot splash for Steelbore OS Bravais that shows real boot progress, prompts for disk passphrases in-theme, and holds the screen until greetd takes over.
 
-**Status:** pre-release. Milestone M0 (repository and posture) is in place and milestone M1 (draws a frame) is implemented: `fairing preview` renders the splash with a simulated bar through DRM/KMS, `/dev/fb0` or an off-screen buffer. Boot integration (M2), the password agent (M3) and accessibility (M4) are not started.
+**Status:** pre-release. Milestones M0 (repository and posture) and M1 (draws a frame) are merged. Milestone M2 (boots on Bravais) is implemented: Nickel themes compiled into a compact artefact, the hybrid progress model, `fairing splash` for the initrd and stage 2, and the NixOS module `steelbore.fairing` with its units. Its NixOS VM tests pass under QEMU's emulator (TCG), and its figures on the reference machine are the maintainer's to take. The password agent (M3) and accessibility (M4) are not started.
 
 Conforms to The Steelbore Standard v2.12 — Category B (password agent and initrd unit raised to A), tailored (§6.1, §10, §13, §18.3, §20.1; see [COMPLIANCE.md](COMPLIANCE.md)).
 
@@ -25,13 +25,14 @@ The full requirement set lives in the manual: `doc/fairing.texi` (Needs and Requ
 
 | Path | What it is |
 |---|---|
-| `crates/fairing` | The binary: the CLI (`preview`, `describe`, `schema`); the lifecycle state machine and systemd notify arrive at M2 (Category B) |
+| `crates/fairing` | The binary: `splash` (the boot splash, systemd notify, the D-Bus progress client), `theme`, `preview`, `describe`, `schema` (Category B) |
 | `crates/fairing-render` | Frame compositor, DRM/KMS and fbdev backends, memory backend for tests; the text backend arrives at M4 (B) |
-| `crates/fairing-theme` | Steelbore palette tokens and §11.6 variant resolution; the compiled theme format, Nickel contract and `theme check` / `theme compile` arrive at M2 (B) |
+| `crates/fairing-theme` | Steelbore palette tokens and §11.6 variant resolution; the compiled theme artefact and the theme compiler (B) |
+| `contracts/`, `themes/` | The Nickel theme contract and the reference theme |
 | `crates/fairing-askpass` | systemd ask-password agent (**Category A**) |
 | `xtask/` | In-tree task runner: requirements generation, traceability, progress, text-format gate |
 | `doc/` | Texinfo manual, requirement set, Makefile |
-| `packaging/` | Nix derivation used by `flake.nix` (Guix and PKGBUILD arrive at M5) |
+| `packaging/` | Nix derivation used by `flake.nix`; the NixOS module, its theme build and VM tests under `packaging/nixos/` (Guix and PKGBUILD arrive at M5) |
 
 ## Building and verifying
 
@@ -49,7 +50,22 @@ cargo deny check && cargo audit
 reuse lint
 ```
 
-`nix develop` provides every tool above. The `fairing` binary currently offers `fairing preview`, `fairing describe`, `fairing schema [<command>]`, `--version` and the global flags of the Spacecraft Software CLI Standard; run `fairing describe --json` for the live capability manifest.
+`nix develop` provides every tool above, and `nix flake check` evaluates the NixOS module and, on x86_64 with KVM, boots it in two VM tests. The `fairing` binary offers `fairing splash`, `fairing theme check|compile|inspect`, `fairing preview`, `fairing describe`, `fairing schema [<command>]`, `--version` and the global flags of the Spacecraft Software CLI Standard; run `fairing describe --json` for the live capability manifest.
+
+Two cargo features shape the builds. `theme-tool` carries the Nickel evaluator for `fairing theme check|compile`; `dbus` carries the systemd D-Bus client of the stage-2 splash. Both are on by default. The NixOS module runs the splash without `theme-tool` after switch-root, and without either in the initrd, where the binary must stay within its 2.5 MiB budget.
+
+### Booting with it on Bravais
+
+```nix
+# flake inputs: fairing.url = "github:Spacecraft-Software/Fairing";
+imports = [ fairing.nixosModules.fairing ];
+steelbore.fairing = {
+  enable = true;
+  kmsModules = [ "i915" ];   # the machine's KMS driver, loaded in the initrd
+};
+```
+
+The module needs the systemd initrd and greetd, and refuses Plymouth. It compiles the theme at build time, runs the splash in the initrd and after switch-root, and hands the screen to greetd: greetd's start stops the splash and waits for it. No boot target requires either unit. The manual's "Running under systemd" chapter has the details.
 
 ### Previewing the splash
 
@@ -57,12 +73,16 @@ reuse lint
 fairing preview --seconds 3                                   # on a text console: DRM/KMS, then /dev/fb0
 fairing preview --backend memory --snapshot frame.ppm --json  # off-screen, for agents and CI
 fairing preview --palette steelbore-high-contrast --status "Mounting /home"
+fairing theme compile themes/steelbore.ncl --output steelbore.fairing
+fairing preview --theme steelbore.fairing --seconds 3
 ```
 
 The layout is authored at 1920×1080 and scaled uniformly into any mode, letterboxed in the
 canvas colour. Colours are the §11.1 role tokens of a registered Steelbore theme, chosen by
-`--palette`, then `SPACECRAFT_THEME`, then the family default; `NO_COLOR` selects the mono
-theme. The theme is resolved once at start-up and held (§11.6.2): a splash cannot switch
+`--palette`, then the `fairing.theme=` kernel parameter (splash only), then
+`SPACECRAFT_THEME`, then the theme's declared palette, then the family default; `NO_COLOR`
+selects the mono theme. A theme names roles, never colours, so one compiled theme draws
+every variant of its palette. The theme is resolved once at start-up and held (§11.6.2): a splash cannot switch
 palettes atomically mid-boot, and a text console has no light/dark preference to follow.
 Under `AI_AGENT`, `CI` or `CLAUDECODE` no virtual terminal is opened: the automatic chain
 renders to memory and says so. Hardware tests are `#[ignore]`d and run only on request:

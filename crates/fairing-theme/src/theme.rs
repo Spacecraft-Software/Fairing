@@ -17,6 +17,7 @@ pub(crate) mod generated {
     use super::{Polarity, Roles, Theme, Variant};
     use crate::ansi::{Ansi, MonoRoles};
     use crate::rgb::Rgb;
+    use crate::tokens::{PaletteTokens, Token};
 
     include!(concat!(env!("OUT_DIR"), "/palette.rs"));
 }

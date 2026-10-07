@@ -184,9 +184,62 @@ pub struct PreviewArgs {
     /// Frames per second.
     #[arg(long, default_value_t = 30, value_name = "hz", value_parser = clap::value_parser!(u32).range(1..=240))]
     pub fps: u32,
-    /// Compiled theme to preview; arrives with the theme format (M2) and is hidden until then.
-    #[arg(long, value_name = "path", hide = true)]
+    /// Theme to preview: a compiled `.fairing` file, or a `.ncl` source compiled on the fly.
+    #[arg(long, value_name = "path")]
     pub theme: Option<PathBuf>,
+}
+
+/// Which boot stage a splash instance serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StageArg {
+    /// `fairing-initrd.service`: from early boot until switch-root.
+    Initrd,
+    /// `fairing.service`: from switch-root until greetd takes the screen.
+    System,
+}
+
+/// Arguments of `fairing splash`.
+#[derive(Debug, Args)]
+pub struct SplashArgs {
+    /// Which instance this is: `initrd` before switch-root, `system` after it.
+    #[arg(long, value_enum, value_name = "stage")]
+    pub stage: StageArg,
+    /// Compiled theme (`fairing theme compile`); the built-in theme without it.
+    #[arg(long, value_name = "file.fairing")]
+    pub theme: Option<PathBuf>,
+    /// Registered palette slug; default is the §11.6 resolution.
+    #[arg(long, value_name = "slug")]
+    pub palette: Option<String>,
+    /// Which backend draws (test seam; the units use `auto`).
+    #[arg(long, value_enum, default_value_t = BackendChoice::Auto, value_name = "backend", hide = true)]
+    pub backend: BackendChoice,
+    /// Frame size for the memory backend, `WxH` (test seam).
+    #[arg(long, value_name = "WxH", default_value = "1920x1080", value_parser = parse_size, hide = true)]
+    pub size: (u32, u32),
+    /// Directory of the switch-root handoff file (test seam).
+    #[arg(long, value_name = "dir", default_value = crate::splash::state::RUNTIME_DIR, hide = true)]
+    pub runtime_dir: PathBuf,
+    /// Directory of the duration cache in stage 2 (test seam).
+    #[arg(long, value_name = "dir", default_value = crate::splash::state::STATE_DIR, hide = true)]
+    pub state_dir: PathBuf,
+    /// Directory of the duration cache as the initrd sees it (test seam).
+    #[arg(
+        long,
+        value_name = "dir",
+        default_value = crate::splash::state::SYSROOT_STATE_DIR,
+        hide = true
+    )]
+    pub sysroot_state_dir: PathBuf,
+    /// Kernel command line to read instead of `/proc/cmdline` (test seam).
+    #[arg(long, value_name = "text", hide = true)]
+    pub cmdline: Option<String>,
+    /// D-Bus to read progress from: `system`, `none`, or a bus address (test seam).
+    #[arg(long, value_name = "bus", default_value = "system", hide = true)]
+    pub bus: String,
+    /// Stop as if the greetd handoff arrived after this many seconds (test seam).
+    #[arg(long, value_name = "n", value_parser = parse_seconds, hide = true)]
+    pub exit_after: Option<f64>,
 }
 
 /// Seconds as a finite number in `0.0..=3600.0`.
@@ -219,7 +272,7 @@ fn parse_size(text: &str) -> Result<(u32, u32), String> {
     Ok((width, height))
 }
 
-/// The verb tree. Splash, shutdown and theme arrive with M2–M4.
+/// The verb tree. The shutdown splash arrives with M4.
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Emit the capability manifest (safe, no side effects).
@@ -241,6 +294,67 @@ pub enum Command {
         after_help = "Examples:\n  fairing preview --seconds 3\n  fairing preview --backend memory --snapshot frame.ppm --json\n  fairing preview --palette steelbore-high-contrast --status \"Mounting /home\""
     )]
     Preview(PreviewArgs),
+    /// Check, compile and inspect themes (FRN-SRS-040 to FRN-SRS-047).
+    #[command(
+        after_help = "Examples:\n  fairing theme check themes/steelbore.ncl\n  fairing theme compile themes/steelbore.ncl --output steelbore.fairing\n  fairing theme inspect steelbore.fairing --json"
+    )]
+    Theme {
+        /// The theme verb.
+        #[command(subcommand)]
+        command: ThemeCommand,
+    },
+    /// Run the boot splash until greetd takes over (the systemd units run this).
+    #[command(
+        after_help = "Examples:\n  fairing splash --stage initrd --theme steelbore.fairing\n  fairing splash --stage system --theme steelbore.fairing\n  fairing splash --stage system --dry-run --json"
+    )]
+    Splash(SplashArgs),
+}
+
+/// The `theme` verbs.
+#[derive(Debug, Subcommand)]
+pub enum ThemeCommand {
+    /// Check a theme against the contract and every compile rule, writing nothing.
+    #[command(
+        after_help = "Examples:\n  fairing theme check themes/steelbore.ncl\n  fairing theme check my-theme.ncl --json"
+    )]
+    Check(ThemeSourceArgs),
+    /// Compile a theme into the artefact the splash loads.
+    #[command(
+        after_help = "Examples:\n  fairing theme compile themes/steelbore.ncl\n  fairing theme compile my-theme.ncl --output steelbore.fairing --json"
+    )]
+    Compile(ThemeCompileArgs),
+    /// Show what a compiled theme contains.
+    #[command(
+        after_help = "Examples:\n  fairing theme inspect steelbore.fairing\n  fairing theme inspect steelbore.fairing --json"
+    )]
+    Inspect(ThemeArtefactArgs),
+}
+
+/// A theme source file.
+#[derive(Debug, Args)]
+pub struct ThemeSourceArgs {
+    /// The Nickel theme file.
+    #[arg(value_name = "theme.ncl")]
+    pub path: PathBuf,
+}
+
+/// Arguments of `fairing theme compile`.
+#[derive(Debug, Args)]
+pub struct ThemeCompileArgs {
+    /// The Nickel theme file.
+    #[arg(value_name = "theme.ncl")]
+    pub path: PathBuf,
+    /// Where to write the artefact; default is the source with `.fairing` in place of `.ncl`.
+    #[arg(long, short = 'o', value_name = "file.fairing")]
+    pub output: Option<PathBuf>,
+}
+
+/// A compiled theme file.
+#[derive(Debug, Args)]
+pub struct ThemeArtefactArgs {
+    /// The compiled theme.
+    #[arg(value_name = "file.fairing")]
+    pub path: PathBuf,
 }
 
 /// Reconstructs the invocation as the envelope reports it: `fairing <args…>`.

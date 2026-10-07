@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use fairing_theme::{Role, Selection};
+use fairing_theme::{CompiledTheme, LogoImage, Role, Selection};
 
 use crate::fault::RenderError;
 use crate::frame::Frame;
@@ -16,6 +16,7 @@ use crate::logo;
 use crate::palette::Palette;
 use crate::scene::Scene;
 use crate::shapes;
+use crate::sprite::Sprite;
 use crate::text::{MIN_PX, TextRenderer};
 
 /// Marks a status line that had to be shortened to fit.
@@ -26,6 +27,8 @@ pub struct Compositor {
     palette: Palette,
     layout: Layout,
     text: TextRenderer,
+    /// The theme's logo image; `None` draws the built-in vector mark.
+    logo: Option<Sprite>,
 }
 
 impl Compositor {
@@ -48,7 +51,26 @@ impl Compositor {
             palette: Palette::from_selection(selection),
             layout,
             text: TextRenderer::new()?,
+            logo: None,
         })
+    }
+
+    /// A compositor for `selection` drawing a compiled theme's boot layout.
+    ///
+    /// The theme's images are copied out, so the theme need not outlive the
+    /// compositor.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a bundled-font parse failure.
+    pub fn with_theme(selection: Selection, theme: &CompiledTheme) -> Result<Self, RenderError> {
+        let boot = &theme.meta().boot;
+        let mut compositor = Self::with_layout(selection, Layout::from_spec(boot))?;
+        compositor.logo = match boot.logo.image {
+            LogoImage::Builtin => None,
+            LogoImage::Image(index) => theme.image(index).map(Sprite::new),
+        };
+        Ok(compositor)
     }
 
     /// The palette in use.
@@ -78,7 +100,12 @@ impl Compositor {
             false,
         );
 
-        logo::draw(frame, &self.palette, viewport.rect(self.layout.logo));
+        let logo_box = viewport.rect(self.layout.logo);
+        match &mut self.logo {
+            Some(sprite) => sprite.draw(frame, &self.palette, logo_box),
+            // The mark is square: fitted uniformly, centred, like an image.
+            None => logo::draw(frame, &self.palette, square_in(logo_box)),
+        }
         let bar = self.draw_bar(frame, &viewport, scene);
         self.draw_percent(frame, &viewport, scene, bar);
         self.draw_status(frame, &viewport, scene);
@@ -90,14 +117,14 @@ impl Compositor {
         let radius = viewport.length(self.layout.bar_radius);
         let track = shapes::rounded_rect(bar, radius);
         if let Some(track) = &track {
-            shapes::fill(frame, track, self.palette.color(Role::Surface));
+            shapes::fill(frame, track, self.palette.color(self.layout.bar_track));
         }
         // The fill is never narrower than a full pill, so its caps coincide with the
         // track's and nothing spills past the rounded corners at low percentages.
-        if scene.percent() > 0 {
+        if scene.is_started() {
             let fill_width = (bar.width * scene.fraction()).max(2.0 * radius);
             if let Some(fill) = shapes::rounded_rect(bar.with_width(fill_width), radius) {
-                shapes::fill(frame, &fill, self.palette.color(Role::Accent));
+                shapes::fill(frame, &fill, self.palette.color(self.layout.bar_fill));
             }
         }
         // The outline goes on last so the fill never thins it.
@@ -105,7 +132,7 @@ impl Compositor {
             shapes::stroke(
                 frame,
                 track,
-                self.palette.color(Role::Border),
+                self.palette.color(self.layout.bar_border),
                 viewport.length(self.layout.bar_outline),
             );
         }
@@ -125,12 +152,15 @@ impl Compositor {
             x,
             baseline,
             px,
-            self.palette.color(Role::Foreground),
+            self.palette.color(self.layout.percent_color),
         );
     }
 
     /// The status line, centred under the bar and shortened to the content width.
     fn draw_status(&mut self, frame: &mut Frame, viewport: &Viewport, scene: &Scene) {
+        if !self.layout.show_status {
+            return;
+        }
         let Some(status) = scene.status() else { return };
         let px = round_u32(viewport.length(self.layout.status_size)).max(MIN_PX);
         let content = viewport.rect(Rect::new(
@@ -151,7 +181,7 @@ impl Compositor {
             x,
             baseline,
             px,
-            self.palette.color(Role::Foreground),
+            self.palette.color(self.layout.status_color),
         );
     }
 
@@ -182,8 +212,20 @@ impl fmt::Debug for Compositor {
             .field("palette", &self.palette)
             .field("layout", &self.layout)
             .field("text", &self.text)
+            .field("logo", &self.logo)
             .finish()
     }
+}
+
+/// The largest square centred in `rect`.
+fn square_in(rect: Rect) -> Rect {
+    let side = rect.width.min(rect.height);
+    Rect::new(
+        rect.x + (rect.width - side) / 2.0,
+        rect.y + (rect.height - side) / 2.0,
+        side,
+        side,
+    )
 }
 
 #[cfg(test)]
@@ -357,5 +399,13 @@ mod tests {
             round_u32(bar.center_y()),
         );
         assert_eq!(filled, Some(compositor.palette().color(Role::Accent)));
+    }
+
+    #[test]
+    fn the_builtin_mark_is_fitted_into_a_centred_square() {
+        let wide = square_in(Rect::new(360.0, 300.0, 1200.0, 240.0));
+        assert_eq!(wide, Rect::new(840.0, 300.0, 240.0, 240.0));
+        let tall = square_in(Rect::new(0.0, 0.0, 100.0, 300.0));
+        assert_eq!(tall, Rect::new(0.0, 100.0, 100.0, 100.0));
     }
 }

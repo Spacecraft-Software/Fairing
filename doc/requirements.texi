@@ -178,9 +178,9 @@ Source: FRN-NEED-002; decision 3 (hybrid progress). A time estimate in the initr
 @cindex FRN-SRS-010
 @table @asis
 @item Requirement
-In the initrd, the bar shall display elapsed time divided by the cached initrd duration, clamped to the range 0.00 to 0.30.
+In the initrd, the bar shall display 0.30 times the elapsed time divided by the cached initrd duration, clamped to the range 0.00 to 0.30.
 @item Rationale
-No D-Bus exists before switch-root; the cache is the best available signal.
+No D-Bus exists before switch-root; the cache is the best available signal. Scaled rather than clamped, so the initrd's share of the bar fills over the whole initrd instead of stalling at 30 % of it; the wording was amended in draft to the formula the design and the code use, for confirmation at G1. The cache is read from /sysroot/var/lib/fairing once the root is mounted; until then the first-boot curve applies.
 @item Source
 @ref{FRN-NEED-002}, decision 3.
 @item Priority
@@ -608,13 +608,13 @@ Category A (raised subsystem)
 @end table
 
 @anchor{FRN-SRS-032}
-@subheading FRN-SRS-032 --- fairing.service conflicts with greetd, holds last frame
+@subheading FRN-SRS-032 --- fairing.service hands the screen to greetd, holds last frame
 @cindex FRN-SRS-032
 @table @asis
 @item Requirement
-@code{fairing.service} shall declare @code{Conflicts=greetd.service} and @code{Before=greetd.service}, and shall hold DRM master and the last frame until it receives SIGTERM.
+@code{fairing.service} shall be ordered @code{Before=greetd.service}, greetd's start shall stop @code{fairing.service} and wait for it to exit before greetd runs, and @code{fairing.service} shall hold DRM master and the last frame until it receives SIGTERM.
 @item Rationale
-systemd stops the splash at the exact moment the greeter starts.
+systemd stops the splash at the exact moment the greeter starts. A @code{Conflicts=greetd.service} on the splash cannot do this: both units are wanted by the boot transaction, and systemd 255 resolves the conflicting jobs by deleting greetd's start (@code{systemd --test} on the unit pair, 2026-10-06), so greetd would never run. Amended in draft; for confirmation at G1.
 @item Source
 @ref{FRN-NEED-001}, decision 5.
 @item Priority

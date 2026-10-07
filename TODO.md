@@ -9,6 +9,31 @@ Fine-grained tasks for the milestone in progress. `PLAN.md` holds the milestone 
 this file holds the steps behind them and is rewritten as milestones open. Ticked means
 done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 
+## M2 — Boots on Bravais
+
+- [x] T-031 Theme contract `contracts/fairing-theme.ncl` and the reference theme `themes/steelbore.ncl` (the built-in layout written out)
+- [x] T-032 fairing-theme: artefact format (magic, version, postcard metadata, role-indexed pixel blob, 4 MiB bound checked before allocation), token lookup across every palette, compile rules for literal colours, foreign tokens, surface-coloured text, bar contrast and geometry; PNG decoding with size caps
+- [x] T-033 Nickel evaluation in memory against the embedded contract with plain-text diagnostics, a 64 MiB worker stack and a 30 s deadline (`theme-tool` feature)
+- [x] T-034 `fairing theme check|compile|inspect`; `preview --theme` for artefacts and sources; schema and describe rows; CLI tests in both feature sets
+- [x] T-035 Compositor from a compiled theme: layout from the spec, role-indexed sprites, status visibility
+- [x] T-036 Progress model: initrd estimate and first-boot curve, stage-2 `Manager.Progress` mapping, monotonic eased bar held below 1.00 until the handoff
+- [x] T-037 Handoff and duration-cache files: bounded parsing, atomic writes, a stale handoff ignored
+- [x] T-038 `fairing splash`: single-threaded loop, SIGTERM through signal-hook, READY=1 and STOPPING=1, journal lines with syslog priority, step-aside paths, failed-unit and maintenance exits
+- [x] T-039 zbus client on its own thread (`dbus` feature): property caching off, method timeout, explicit system-bus socket, systemd's private socket refused, p2p fake manager in tests
+- [x] T-040 NixOS module `steelbore.fairing`, build-time theme compile, three package variants (full, splash, initrd), flake outputs
+- [x] T-041 module-eval check (unit directives, the FRN-SRS-031 negative property, Plymouth assertion), green under `nix flake check --no-build`
+- [x] T-042 VM tests `boot.nix` and `failed-unit.nix` green (KVM in CI, or `tcg = true` locally); then their requirement markers
+- [x] T-043 CI: feature-matrix lint and tests, size gate for the initrd binary, `nix` job
+- [x] T-044 DEPENDENCIES.md rows for the M2 crates; accepted advisory RUSTSEC-2026-0292 and the malachite licence exception, both for the maintainer to confirm
+- [x] T-045 Manual: splash and theme sections, Themes and Running under systemd chapters; README, AGENTS, SKILL, CHANGELOG
+- [x] T-049 Adversarial review and research critique folded in: explicit handoff marker, READY=1 on every path, stage 2 timed from its own start, one re-open per frame, bounded D-Bus handshake, job start order for the status line, failed-unit baseline, emergency and rescue conflicts, private socket refused by identity, palette skipped not fatal in the splash, tint and image limits checked early, Nickel nesting bound, `fairing-handoff.service` (greetd is `Type=idle`), `boot-finished` exit, `release_ms` in the report, named missing arguments; from the TCG VM runs, the handoff held until logins are allowed (`After=systemd-user-sessions.service`) and a late page flip left in flight, its frames dropped until it lands (2 s stall bound); from the Codex review, flips queued without waiting so SIGTERM never waits on the display
+- [ ] T-050 Evaluate Nickel in a child process under memory and stack limits, so any runaway theme (unbounded recursion, a deep import) exits 2 instead of aborting; M2's mitigation is the 5 s deadline and the 256-level nesting bound on the theme file
+- [ ] T-051 A stage-2 splash with no D-Bus connection on a boot without greetd has nothing to end it but shutdown; decide a module-side stop (a oneshot after `multi-user.target`) or a time bound
+- [ ] T-052 Event-driven failure detection (systemd's `JobRemoved` and `PropertiesChanged` signals) so FRN-SRS-034's 1 s holds when PID 1 is slow: polled, a failure shows within 250 ms plus five property reads, inside 1 s only while each read takes under about 140 ms
+- [ ] T-046 G1 decisions: the FRN-SRS-032 amendment (handoff by stop, not `Conflicts=`); the FRN-SRS-010 wording and carrier; FRN-SRS-034 as a transition (failures already present at the first reading do not count); `PrivateTmp=disconnected` for FRN-SRS-093 (`yes` orders the splash after tmpfiles setup); the third unit of FRN-SRS-090 at M4; nickel-lang-core's licence and advisory; the stage-2 binary over 2.5 MiB (maintainer)
+- [ ] T-047 Hardware run on the T490s with the module enabled: first frame, 30 Hz, added boot time (maintainer)
+- [ ] T-048 M2 pull request reviewed and merged
+
 ## M1 — Draws a frame
 
 - [x] T-021 Vendor steelbore.toml byte-identically; build.rs generates the registered set and mono bindings with provenance, sibling and inventory checks
@@ -20,7 +45,7 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-027 Font assets with REUSE sidecars and LICENSES/OFL-1.1.txt; .gitattributes binary declarations; deny.toml Zlib
 - [x] T-028 DEPENDENCIES.md rows for every M1 crate, accepted advisory RUSTSEC-2026-0192, bundled-asset table; README, AGENTS, SKILL, CHANGELOG, NOTICE, manual chapter
 - [ ] T-029 Hardware run on the reference machine (ThinkPad T490s): `cargo test --workspace -- --ignored` on a free VT; record first-frame and 30 Hz figures (maintainer)
-- [ ] T-030 M1 pull request reviewed and merged
+- [x] T-030 M1 pull request reviewed and merged
 
 ## M0 — Repository and posture
 
