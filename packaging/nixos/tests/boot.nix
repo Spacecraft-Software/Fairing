@@ -83,8 +83,13 @@ pkgs.testers.runNixOSTest {
     def monotonic(unit, prop):
         return int(machine.succeed(f"systemctl show {unit} -p {prop} --value"))
 
-    # Both instances became active, which for Type=notify means READY=1 arrived.
-    assert monotonic("fairing.service", "ActiveEnterTimestampMonotonic") > 0
+    # Both instances reached "Started", which for Type=notify means READY=1
+    # arrived; stage 2 sent it only after its first frame was on screen.
+    initrd_log = machine.succeed("journalctl -b -u fairing-initrd.service -o cat --no-pager")
+    assert "Started Fairing boot splash (initrd)." in initrd_log, initrd_log
+    ready = monotonic("fairing.service", "ActiveEnterTimestampMonotonic")
+    forked = monotonic("fairing.service", "ExecMainStartTimestampMonotonic")
+    assert 0 < forked and ready - forked >= system["first_frame_ms"] * 1000, (forked, ready, system)
     # The splash held the screen until logins were allowed, and stopped
     # before greetd ran.
     allowed = monotonic("systemd-user-sessions.service", "ActiveEnterTimestampMonotonic")

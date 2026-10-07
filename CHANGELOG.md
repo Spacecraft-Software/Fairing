@@ -19,25 +19,26 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
   evaluate a theme in memory against the embedded contract and print Nickel's own
   diagnostic on a violation, refuse literal colours, tokens of another palette,
   surface-coloured text and a bar below 3:1, and write a versioned artefact of at most
-  4 MiB (postcard metadata and role-indexed images, so one artefact draws every variant
-  of its palette); `preview --theme` for artefacts and sources. Progress: the initrd
-  estimate against the previous boot's duration with an 8 s first-boot curve, stage 2 from
+  4 MiB (postcard metadata and role-indexed images, so one artefact draws every variant of
+  its palette); `preview --theme` for artefacts and sources. Progress: the initrd estimate
+  against the previous boot's duration with an 8 s first-boot curve, stage 2 from
   `Manager.Progress`, a monotonic eased bar that reaches 100 % only at the greetd handoff,
-  the bar carried across switch-root in `/run/fairing/state`, and measured durations cached
-  in `/var/lib/fairing/boot-duration`. Lifecycle: `fairing splash --stage initrd|system`,
-  one thread and one frame per tick, `READY=1` after the first frame, exit within 100 ms of
-  `SIGTERM`, exit within a second of a failed unit or rescue/emergency mode, always exit 0,
-  a late page flip dropped as one frame (two seconds without a flip end the splash),
-  journal lines with a syslog priority; a systemd D-Bus client on its own thread (cargo
-  feature `dbus`) with property caching off and every call bounded. NixOS: the module
+  the bar carried across switch-root in `/run/fairing/state`, and measured durations
+  cached in `/var/lib/fairing/boot-duration`. Lifecycle:
+  `fairing splash --stage initrd|system`, one thread and one frame per tick, `READY=1`
+  after the first frame, exit within 100 ms of `SIGTERM`, exit within a second of a failed
+  unit or rescue/emergency mode, always exit 0, a late page flip costing only the frames
+  drawn while it is pending (two seconds without a completed flip end the splash), journal
+  lines with a syslog priority; a systemd D-Bus client on its own thread (cargo feature
+  `dbus`) with property caching off and every call bounded. NixOS: the module
   `steelbore.fairing` (`nixosModules.fairing`) with `fairing-initrd.service` and
   `fairing.service`, the theme compiled at build time, simpledrm and the configured KMS
-  drivers in the initrd, `quiet splash`, a Plymouth assertion, least-privilege hardening, a
-  boot-only start condition, and the handoff: `fairing-handoff.service`, which greetd's
+  drivers in the initrd, `quiet splash`, a Plymouth assertion, least-privilege hardening,
+  a boot-only start condition, and the handoff: `fairing-handoff.service`, which greetd's
   start pulls in once logins are allowed, writes `/run/fairing/handoff` and stops the
-  splash, and only that stop fills the bar and records the durations; a boot that
-  finishes without greetd ends the splash too. A module evaluation check and two VM tests
-  in `nix flake check`, runnable without KVM. CI: the feature matrix, a size gate for the
+  splash, and only that stop fills the bar and records the durations; a boot that finishes
+  without greetd ends the splash too. A module evaluation check and two VM tests in
+  `nix flake check`, runnable without KVM. CI: the feature matrix, a size gate for the
   initrd binary, and a `nix` job.
 
 - M1 rendering. `fairing-theme`: the house palette file vendored byte-identically and

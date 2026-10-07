@@ -189,9 +189,9 @@ for example when booted to @code{multi-user.target}), @code{switch-root}, @code{
 systemd unit failed), @code{maintenance} (rescue or emergency mode started),
 @code{no-backend}, @code{render-failed} or @code{theme-unreadable}.  When it
 draws nothing it still tells systemd it is ready, so the unit never delays
-the boot.  A page flip that completes late costs one frame, not the splash:
-only a display that has not flipped for two seconds ends it with
-@code{render-failed}.
+the boot.  A page flip that completes late costs the frames drawn while it is
+pending, not the splash: only a display that has not completed a flip for two
+seconds ends it with @code{render-failed}.
 
 @cindex journal
 Under systemd, diagnostics go to the journal as one line each, with a syslog
