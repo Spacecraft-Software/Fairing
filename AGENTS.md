@@ -103,7 +103,10 @@ will not be green there.
 - `fairing-render` renders into a heap `Frame` in the output's byte order and copies rows to
   the device. The XRGB8888 red/blue swap lives only in `Frame::paint`/`PixelFormat::encode`
   and is pinned by a test. tiny-skia, fontdue, drm and rustix types never appear in a `pub`
-  signature; backends are the closed `Surface` enum, never `Box<dyn Backend>`.
+  signature; backends are the closed `Surface` enum, never `Box<dyn Backend>`. The DRM
+  backend never waits for a page flip in `present`: it queues the flip and collects the
+  event, without blocking, on the next present (a frame drawn while it is pending is
+  dropped as `Timeout`); `close` gives a flip in flight at most 50 ms.
 - Cargo features of `crates/fairing`: `theme-tool` (Nickel evaluation for `theme
   check|compile`) and `dbus` (the zbus client of `--stage system`), both default. The
   initrd binary is built with neither and must stay within 2.5 MiB (CI `size` job); code
