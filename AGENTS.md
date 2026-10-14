@@ -13,10 +13,11 @@ acts as the systemd password agent, and hands the screen to greetd. Part of Spac
 Software. Assurance **Category B**, with `crates/fairing-askpass` and the initrd
 lifecycle unit raised to **Category A** (Steelbore Standard §19). Licence GPL-3.0-or-later.
 
-Milestone state: M0 (repository and posture) and M1 (draws a frame) are merged. M2 (boots
-on Bravais: themes, progress, `fairing splash`, the NixOS module) is implemented; its VM
-tests pass under TCG, and every requirement waits on G1 baselining. The password
-agent (M3) and accessibility, the shutdown splash and frame-sequence playback (M4) are not
+Milestone state: M0 (repository and posture), M1 (draws a frame) and M2 (boots on
+Bravais: themes, progress, `fairing splash`, the NixOS module) are merged; every
+requirement waits on G1 baselining. The password agent (M3) is in progress:
+`fairing-askpass` has the bounded `ask.*` parser and nothing else yet, and no verb uses
+it. Accessibility, the shutdown splash and frame-sequence playback (M4) are not
 started. Do not advertise verbs, flags or files that do not exist yet.
 
 ## Build, test, lint
@@ -138,6 +139,10 @@ will not be green there.
   `[WARN]`, an explicit device backend is exit 2. The theme resolver takes `no_color` from
   the `Context`; `SPACECRAFT_THEME` is read once, in `selection.rs` (`resolve_palette`),
   for both `preview` and `splash`.
+- `ask.*` files are parsed by `fairing_askpass::parse` only. It refuses a repeated key in
+  `[Ask]`: systemd writes `Message=` raw, after `Socket=` and `Echo=`, so a newline in a
+  device label could otherwise smuggle in a second `Socket=` and redirect the passphrase.
+  Never relax that to "last value wins". Errors name the key and line, never the value.
 - Tests that need a DRM device or `/dev/fb0` are `#[ignore]`d and carry no `Verifies:`
   marker (`cargo test --workspace -- --ignored` on a free text console; they fail without a
   device, as they should). Everything else runs against the memory backend, fake sysfs

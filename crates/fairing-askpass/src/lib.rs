@@ -7,7 +7,9 @@
 //! This crate will watch `/run/systemd/ask-password/` with inotify, parse the
 //! bounded `ask.*` files, reply on the `Socket=` path and zeroise every buffer
 //! that held secret bytes (milestone M3, FRN-SRS-020 to FRN-SRS-029,
-//! FRN-SRS-102, FRN-SRS-104). In M0 it is a compile-only stub.
+//! FRN-SRS-102, FRN-SRS-104). M3 builds it in steps; this one is the
+//! bounded `ask.*` parser ([`parse`], [`read_request`]). The watcher, the
+//! socket reply and zeroisation follow.
 //!
 //! **Assurance Category A** (raised subsystem): every parser is fuzzed, every
 //! allocation on the prompt path has a documented worst-case bound, and
@@ -16,3 +18,9 @@
 //! never relies on drop glue alone.
 
 #![forbid(unsafe_code)]
+
+mod error;
+mod request;
+
+pub use error::{ParseError, ParseErrorKind};
+pub use request::{MAX_REQUEST_BYTES, Request, parse, read_request};

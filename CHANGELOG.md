@@ -14,6 +14,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 
 ### Added
 
+- M3 start: `fairing-askpass` parses systemd's `ask.*` request files with the 64 KiB and
+  UTF-8 checks first and one fixed-size read buffer. It refuses a key repeated in `[Ask]`,
+  because systemd writes `Message=` raw and a multi-line message could otherwise override
+  `Socket=` or `Echo=`. Errors name the key and line, never the value.
 - `flake.lock`, pinning nixpkgs (nixos-unstable) at `7fd4004` from 2026-10-11. CI's `nix`
   job now runs against it with `--no-update-lock-file`.
 - M1 figures from the reference machine (ThinkPad T490s, 1920x1080, 2026-10-14): the DRM

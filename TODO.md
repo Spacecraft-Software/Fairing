@@ -9,6 +9,18 @@ Fine-grained tasks for the milestone in progress. `PLAN.md` holds the milestone 
 this file holds the steps behind them and is rewritten as milestones open. Ticked means
 done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 
+## M3 — Unlocks a LUKS root
+
+- [x] T-053 fairing-askpass: `ask.*` parser checked against the file systemd 260 writes; 64 KiB and UTF-8 checks before any field, one fixed-capacity read buffer, a repeated `[Ask]` key refused (a raw multi-line `Message=` could smuggle a second `Socket=`), errors that never echo a value
+- [ ] T-054 cargo-fuzz targets for the `ask.*` parser and the compiled-theme parser; DEPENDENCIES.md row for libfuzzer-sys; CI job
+- [ ] T-055 Watcher on the ask-password directory (rustix inotify, 50 ms detection) and the `+`/`-` datagram reply on `Socket=`; tests against `systemd-ask-password --user`
+- [ ] T-056 Secret buffer with eager zeroisation on reply, cancel, expiry, error and exit; DEPENDENCIES.md row for zeroize; written no-leak argument
+- [ ] T-057 evdev keyboard grab and release within 50 ms; DEPENDENCIES.md row for the evdev crate
+- [ ] T-058 Prompt in the splash: message, masked or echoed field, expiry, rejection notice on a repeated `Id=`
+- [ ] T-059 Fail-open: an agent that cannot start exits 0 within 1 s and the tty agent prompts
+- [ ] T-060 VM test with a LUKS root on a loopback image, answered through the splash, reaching greetd
+- [ ] T-061 Decide whether the agent answers only a `Socket=` inside the ask-password directory, as systemd always creates it (maintainer)
+
 ## M2 — Boots on Bravais
 
 - [x] T-031 Theme contract `contracts/fairing-theme.ncl` and the reference theme `themes/steelbore.ncl` (the built-in layout written out)
