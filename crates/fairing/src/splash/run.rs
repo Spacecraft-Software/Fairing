@@ -1133,9 +1133,14 @@ mod tests {
         let paths = harness.agent_paths();
         std::fs::create_dir_all(&paths.ask_dir).unwrap_or_else(|e| panic!("{e}"));
         std::fs::create_dir_all(&paths.input_sysfs).unwrap_or_else(|e| panic!("{e}"));
+        // The socket sits in the question directory, as systemd puts it (T-061);
+        // nobody listens on it.
         std::fs::write(
             paths.ask_dir.join("ask.1"),
-            "[Ask]\nSocket=/run/nobody/sck.1\nMessage=Passphrase\nId=cryptsetup:x\n",
+            format!(
+                "[Ask]\nSocket={}/sck.1\nMessage=Passphrase\nId=cryptsetup:x\n",
+                paths.ask_dir.display()
+            ),
         )
         .unwrap_or_else(|e| panic!("{e}"));
         plan.agent = Some(paths);

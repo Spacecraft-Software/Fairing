@@ -14,6 +14,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 
 ### Added
 
+- The password agent refuses an `ask.*` file that repeats a key it reads, and answers
+  only a socket directly inside the question directory, never through a link. systemd
+  writes `Message=` raw after `Socket=`, so a device label with a newline could otherwise
+  redirect the passphrase.
 - M3 password agent (`fairing-askpass`, Category A), run inside the splash. It watches
   `/run/systemd/ask-password` with inotify and never blocks, so a question is seen within
   a frame. Parsing is bounded: an `ask.*` file over 64 KiB or not UTF-8 is refused before

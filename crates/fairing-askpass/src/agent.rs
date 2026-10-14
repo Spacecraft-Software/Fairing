@@ -419,13 +419,14 @@ mod tests {
 
     fn fixture() -> Fixture {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let socket_path = dir.path().join("sck.1");
+        let ask_dir = dir.path().join("ask-password");
+        let watcher = Watcher::open(&ask_dir).unwrap_or_else(|e| panic!("{e}"));
+        // systemd creates the reply socket in the question directory (T-061).
+        let socket_path = ask_dir.join("sck.1");
         let socket = UnixDatagram::bind(&socket_path).unwrap_or_else(|e| panic!("{e}"));
         socket
             .set_nonblocking(true)
             .unwrap_or_else(|e| panic!("{e}"));
-        let ask_dir = dir.path().join("ask-password");
-        let watcher = Watcher::open(&ask_dir).unwrap_or_else(|e| panic!("{e}"));
         Fixture {
             dir,
             socket,

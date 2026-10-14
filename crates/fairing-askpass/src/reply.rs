@@ -52,7 +52,18 @@ pub fn cancel(socket: &Path, secret: &mut Secret) -> io::Result<()> {
 }
 
 /// One datagram from an unbound socket, the way systemd's agents reply.
+///
+/// The path must name a socket itself, not a link to one: `sendto(2)`
+/// follows symbolic links, and the agent answers only a socket inside the
+/// question directory (maintainer decision T-061).
 fn send(socket: &Path, datagram: &[u8]) -> io::Result<()> {
+    let stat = rustix::fs::lstat(socket)?;
+    if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::Socket {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the reply path is not a socket",
+        ));
+    }
     let sender = UnixDatagram::unbound()?;
     let sent = sender.send_to(datagram, socket)?;
     if sent == datagram.len() {
@@ -121,6 +132,25 @@ mod tests {
         let mut secret = typed("lost");
         assert!(answer(&dir.path().join("nobody-listens"), &mut secret).is_err());
         assert!(secret.is_empty());
+    }
+
+    #[test]
+    fn a_link_to_a_socket_gets_nothing_and_the_secret_is_cleared() {
+        // Maintainer decision T-061: sendto(2) would follow the link.
+        let (dir, path, socket) = listener();
+        let link = dir.path().join("sck.link");
+        std::os::unix::fs::symlink(&path, &link).unwrap_or_else(|e| panic!("{e}"));
+        socket
+            .set_nonblocking(true)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let mut secret = typed("not for you");
+        let error = answer(&link, &mut secret)
+            .err()
+            .unwrap_or_else(|| panic!("a link must be refused"));
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(secret.is_empty());
+        let mut buf = [0u8; 64];
+        assert!(socket.recv(&mut buf).is_err(), "nothing was sent");
     }
 
     #[test]

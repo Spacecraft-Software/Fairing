@@ -18,6 +18,11 @@
 //! links and without blocking, must be a regular file, and is read into one
 //! buffer of `MAX_FILE + 1` bytes allocated when the watcher opens: what a
 //! file contains never decides how much memory is allocated (FRN-SRS-104).
+//!
+//! A question whose `Socket=` is not directly inside the watched directory is
+//! passed over: systemd always creates the socket there, so any other path,
+//! one through `..` included, means a forged or garbled file, and the secret
+//! must never be sent to it (maintainer decision T-061).
 
 use std::fmt;
 use std::fs;
@@ -177,7 +182,10 @@ impl Watcher {
             let Some(ask) = self.read(&entry.path()) else {
                 continue;
             };
-            if ask.expired(now_us) || asker_gone(ask.pid) {
+            if !socket_inside(&self.dir, ask.socket.as_str())
+                || ask.expired(now_us)
+                || asker_gone(ask.pid)
+            {
                 continue;
             }
             if kept {
@@ -216,6 +224,13 @@ impl Watcher {
     }
 }
 
+/// Whether `socket` names an entry directly inside `dir` (T-061). A last
+/// component of `..` has no file name; one earlier makes the parent differ.
+fn socket_inside(dir: &Path, socket: &str) -> bool {
+    let socket = Path::new(socket);
+    socket.file_name().is_some() && socket.parent() == Some(dir)
+}
+
 /// Whether the process that asked has exited: a stale file systemd has
 /// not yet removed. Only "no such process" counts; a process Fairing may
 /// not signal is still alive.
@@ -248,12 +263,14 @@ mod tests {
 
     fn question(socket: &str, extra: &str) -> String {
         format!(
-            "[Ask]\nPID=1\nSocket={socket}\nMessage=Passphrase for root\nId=cryptsetup:/dev/vda2\n{extra}"
+            "[Ask]\nSocket={socket}\nMessage=Passphrase for root\nId=cryptsetup:/dev/vda2\n{extra}"
         )
     }
 
     /// Writes `body` the way systemd does: a temporary name, then a rename.
+    /// A `Socket=/run/` path is moved into `dir`, where systemd puts sockets.
     fn ask(dir: &Path, name: &str, body: &str) {
+        let body = body.replace("Socket=/run/", &format!("Socket={}/", dir.display()));
         let tmp = dir.join(format!(".tmp-{name}"));
         fs::write(&tmp, body).unwrap_or_else(|e| panic!("{e}"));
         fs::rename(&tmp, dir.join(name)).unwrap_or_else(|e| panic!("{e}"));
@@ -407,7 +424,30 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"))
             .unwrap_or_else(|| panic!("no question"));
         assert_eq!(found.name.as_str(), "ask.b");
-        assert_eq!(found.ask.socket.as_str(), "/run/sck.b");
+        assert!(found.ask.socket.as_str().ends_with("/sck.b"));
+    }
+
+    #[test]
+    fn a_socket_outside_the_directory_is_passed_over() {
+        // Maintainer decision T-061: reply only inside the question directory.
+        let (dir, mut watcher) = open();
+        let outside = format!("{}/../sck.a", dir.path().display());
+        ask(dir.path(), "ask.a", &question(&outside, ""));
+        ask(dir.path(), "ask.b", &question("/tmp/elsewhere/sck.b", ""));
+        let parent = format!("{}/..", dir.path().display());
+        ask(dir.path(), "ask.c", &question(&parent, ""));
+        assert!(
+            watcher
+                .first(0, None, None)
+                .unwrap_or_else(|e| panic!("{e}"))
+                .is_none()
+        );
+        ask(dir.path(), "ask.d", &question("/run/sck.d", ""));
+        let found = watcher
+            .first(0, None, None)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .unwrap_or_else(|| panic!("no question"));
+        assert_eq!(found.name.as_str(), "ask.d");
     }
 
     #[test]

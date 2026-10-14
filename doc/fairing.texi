@@ -714,6 +714,17 @@ when the agent starts.  The crate's @file{clippy.toml} refuses
 @code{String}, @code{format!}, whole-file reads and growth by content, and
 CI denies warnings, so no allocation sized by what a question contains can
 come back unnoticed.  The parser runs under libFuzzer in CI.
+
+@item Only systemd's own socket
+systemd writes @code{Message=} raw, after @code{Socket=} and @code{Echo=}, so
+a newline in a device label starts a new line of the file.  Read the usual
+way, with the last value winning, a label holding a second @code{Socket=}
+would send the passphrase elsewhere.  A key the parser reads that appears
+twice refuses the whole question instead.  The agent also answers only a
+socket directly inside the question directory, where systemd always creates
+it, and sends nothing when that path is a link rather than a socket.  A
+refused question is not handed to the console agent, which reads the file
+the usual way; it stays unanswered, which fails closed.
 @end table
 
 @cindex residual risk

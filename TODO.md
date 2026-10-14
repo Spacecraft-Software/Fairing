@@ -23,6 +23,8 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-062 LUKS VM test: encrypted root, the prompt answered inside the splash, boot reaches greetd; agent-disabled variant boots through the console agent
 - [x] T-063 DEPENDENCIES.md rows for the M3 crates; manual, README, AGENTS, SKILL, CHANGELOG
 - [x] T-064 Adversarial review folded in
+- [x] T-066 A key the parser reads that appears twice in `[Ask]` refuses the file: systemd 260 writes `Message=` raw after `Socket=` and `Echo=`, so a newline in a device label could smuggle in a second `Socket=`; fixture from the file systemd 260 wrote on the T490s (folded in from PR #6)
+- [x] T-067 Reply only to a `Socket=` directly inside the question directory, never through a link (maintainer decision 2026-10-14, secure by design; folded in from PR #6)
 - [ ] T-065 M3 pull request reviewed and merged
 
 ## M2 — Boots on Bravais

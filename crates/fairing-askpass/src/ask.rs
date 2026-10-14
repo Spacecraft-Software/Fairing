@@ -14,6 +14,14 @@
 //! only shown, so it is cut at a character boundary. `Socket=` and `Id=` decide
 //! where the secret goes and which question it answers, so they are refused:
 //! a cut path would name another socket.
+//!
+//! A key that appears twice in `[Ask]` refuses the whole file. systemd 260,
+//! observed on the reference machine, writes `PID=`, `Socket=`, `AcceptCached=`,
+//! `Echo=`, `NotAfter=`, `Silent=`, `Message=`, `Icon=` and `Id=` in that order,
+//! and writes `Message=` raw: a newline in the message starts a new line of the
+//! file. Under "last value wins" a device label holding `\nSocket=/elsewhere`
+//! would redirect the passphrase, so a repeat is never resolved, only refused.
+//! Lines without `=` are skipped, so a multi-line message shows its first line.
 
 use core::fmt;
 use core::str;
@@ -57,6 +65,8 @@ pub enum AskError {
     IdTooLong,
     /// `NotAfter=`, `PID=` or `Echo=` does not parse.
     BadNumber,
+    /// A key the parser reads appears twice in `[Ask]`.
+    RepeatedKey,
 }
 
 impl fmt::Display for AskError {
@@ -68,6 +78,7 @@ impl fmt::Display for AskError {
             Self::BadSocket => "the ask file's reply socket is not a usable absolute path",
             Self::IdTooLong => "the ask file's Id= is too long",
             Self::BadNumber => "the ask file has a malformed number",
+            Self::RepeatedKey => "the ask file repeats a key",
         })
     }
 }
@@ -160,15 +171,16 @@ impl Ask {
     ///
     /// Size and encoding are checked first, over the whole file, before any
     /// field is looked at. Keys outside `[Ask]`, unknown keys and comment
-    /// lines are ignored; a repeated key keeps its last value, as systemd's
-    /// own parser does.
+    /// lines are ignored. A key this parser reads that appears twice is
+    /// refused rather than resolved, unlike systemd's own parser: see the
+    /// module documentation.
     ///
     /// Implements: FRN-SRS-102
     ///
     /// # Errors
     ///
     /// [`AskError`] when the file is too large, not UTF-8, has no usable
-    /// `Socket=`, an over-long `Id=`, or a malformed number.
+    /// `Socket=`, an over-long `Id=`, a malformed number, or a repeated key.
     pub fn parse(file: &[u8]) -> Result<Self, AskError> {
         if file.len() > MAX_FILE {
             return Err(AskError::TooLarge);
@@ -185,6 +197,7 @@ impl Ask {
             pid: None,
         };
         let mut socket = None;
+        let mut seen = Seen::default();
         let mut in_ask = false;
         for line in text.lines() {
             let line = line.trim();
@@ -202,7 +215,9 @@ impl Ask {
                 continue;
             };
             let value = value.trim();
-            match key.trim() {
+            let key = key.trim();
+            seen.first(key)?;
+            match key {
                 "Id" => ask.id = Text::exact(value).ok_or(AskError::IdTooLong)?,
                 "Message" => ask.message = Text::cut(value),
                 "Socket" => socket = Some(value),
@@ -231,6 +246,30 @@ impl Ask {
     #[must_use]
     pub fn expired(&self, now_us: u64) -> bool {
         self.not_after_us.is_some_and(|deadline| now_us >= deadline)
+    }
+}
+
+/// The keys [`Ask::parse`] reads, each allowed once.
+#[derive(Default)]
+struct Seen(u8);
+
+impl Seen {
+    const KEYS: [&'static str; 7] = [
+        "Id", "Message", "Socket", "NotAfter", "Echo", "Silent", "PID",
+    ];
+
+    /// Records `key`; a key read before is refused. Keys the parser does not
+    /// read are not tracked.
+    fn first(&mut self, key: &str) -> Result<(), AskError> {
+        let Some(index) = Self::KEYS.iter().position(|k| *k == key) else {
+            return Ok(());
+        };
+        let bit = 1_u8 << index;
+        if self.0 & bit != 0 {
+            return Err(AskError::RepeatedKey);
+        }
+        self.0 |= bit;
+        Ok(())
     }
 }
 
@@ -364,6 +403,70 @@ mod tests {
             b"Socket=/outside\n[Other]\nSocket=/other\n[Ask]\n; comment\nColour=red\nSocket=/run/s\n",
         ).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(ask.socket.as_str(), "/run/s");
+    }
+
+    /// The file systemd 260 wrote on the reference machine for
+    /// `systemd-ask-password --user --id=fairing:probe --icon=drive-harddisk`,
+    /// with a message holding a non-ASCII letter, quotes, a tab and a backslash.
+    const OBSERVED: &str = "[Ask]\nPID=529298\nSocket=/run/user/1000/systemd/ask-password/sck.5eff5758fdc10699\nAcceptCached=0\nEcho=0\nNotAfter=41203969003\nSilent=0\nMessage=Unlock \u{e9} \"disk\"\ttab\\back\nIcon=drive-harddisk\nId=fairing:probe\n";
+
+    #[test]
+    fn reads_the_file_systemd_260_wrote() {
+        let ask = Ask::parse(OBSERVED.as_bytes()).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(ask.pid, Some(529_298));
+        assert_eq!(
+            ask.socket.as_str(),
+            "/run/user/1000/systemd/ask-password/sck.5eff5758fdc10699"
+        );
+        assert_eq!(ask.message.as_str(), "Unlock \u{e9} \"disk\"\ttab\\back");
+        assert_eq!(ask.id.as_str(), "fairing:probe");
+        assert_eq!(ask.not_after_us, Some(41_203_969_003));
+        assert!(!ask.echo && !ask.silent);
+    }
+
+    #[test]
+    fn a_multi_line_message_keeps_its_first_line() {
+        // systemd 260 writes a newline in the message raw.
+        let ask = Ask::parse(b"[Ask]\nSocket=/run/s\nEcho=1\nMessage=line one\nline two\n")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(ask.message.as_str(), "line one");
+    }
+
+    #[test]
+    fn a_socket_smuggled_in_through_the_message_is_refused() {
+        // A device label "x\nSocket=/tmp/evil" would otherwise redirect the reply.
+        let file =
+            b"[Ask]\nSocket=/run/systemd/ask-password/sck.1\nEcho=0\nMessage=x\nSocket=/tmp/evil\n";
+        assert_eq!(Ask::parse(file), Err(AskError::RepeatedKey));
+    }
+
+    #[test]
+    fn every_key_read_is_refused_when_repeated() {
+        for (key, value) in [
+            ("Id", "a"),
+            ("Message", "a"),
+            ("Socket", "/run/t"),
+            ("NotAfter", "1"),
+            ("Echo", "1"),
+            ("Silent", "1"),
+            ("PID", "1"),
+        ] {
+            let file = format!("[Ask]\nSocket=/run/s\n{key}={value}\n{key}={value}\n");
+            let once = format!("[Ask]\nSocket=/run/s\n{key}={value}\n");
+            assert_eq!(
+                Ask::parse(file.as_bytes()),
+                Err(AskError::RepeatedKey),
+                "{key}"
+            );
+            if key != "Socket" {
+                assert!(Ask::parse(once.as_bytes()).is_ok(), "{key}");
+            }
+        }
+        // Keys the parser does not read may repeat.
+        assert!(
+            Ask::parse(b"[Ask]\nSocket=/run/s\nIcon=a\nIcon=b\nAcceptCached=0\nAcceptCached=1\n")
+                .is_ok()
+        );
     }
 
     #[test]

@@ -152,6 +152,14 @@ will not be green there.
   after `fairing-initrd.service`; never order the stage-2 one after
   `fairing.service`, which waits for the `/var` mount an encrypted `/var` needs
   the agent for. The agent is off by default on a non-US console keymap.
+- `ask.*` files are parsed by `fairing_askpass::ask::Ask::parse` only. A key it reads
+  that appears twice in `[Ask]` refuses the file: systemd writes `Message=` raw, after
+  `Socket=` and `Echo=`, so a newline in a device label could otherwise smuggle in a second
+  `Socket=` and redirect the passphrase. Never relax that to "last value wins".
+- The agent answers only a `Socket=` directly inside the question directory it watches,
+  and `reply::send` refuses a path that is a link rather than a socket (maintainer
+  decision, 2026-10-14, T-067). Never widen this, and never hand a refused question to
+  the console agent: it reads the file with the last value winning.
 - zbus connects to `/run/dbus/system_bus_socket` by name, never through
   `DBUS_SYSTEM_BUS_ADDRESS`, and refuses systemd's private socket: zbus 5.19 panics on
   PID 1's replies there and release builds abort on panic.
