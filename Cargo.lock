@@ -783,6 +783,7 @@ dependencies = [
  "rustix",
  "tempfile",
  "tiny-skia",
+ "zeroize",
 ]
 
 [[package]]

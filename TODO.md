@@ -22,7 +22,7 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-061 Safety argument for zeroisation and no secret leak (manual node), lint against content-sized allocation in fairing-askpass
 - [x] T-062 LUKS VM test: encrypted root, the prompt answered inside the splash, boot reaches greetd; agent-disabled variant boots through the console agent
 - [x] T-063 DEPENDENCIES.md rows for the M3 crates; manual, README, AGENTS, SKILL, CHANGELOG
-- [ ] T-064 Adversarial review folded in
+- [x] T-064 Adversarial review folded in
 - [ ] T-065 M3 pull request reviewed and merged
 
 ## M2 — Boots on Bravais

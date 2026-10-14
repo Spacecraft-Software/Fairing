@@ -140,9 +140,12 @@ impl Watcher {
         }
     }
 
-    /// The question to show: the lowest-named `ask.*` file that parses, has
-    /// not expired at `now_us` (`CLOCK_MONOTONIC`, µs) and is not `skip` (one
-    /// already answered). `None` when there is none.
+    /// The question to show. `keep`, the question already open, stays while
+    /// its file is still there and valid, so a new question never takes
+    /// over a prompt mid-typing. Otherwise it is the lowest-named `ask.*`
+    /// file that parses, has not expired at `now_us` (`CLOCK_MONOTONIC`, µs),
+    /// is not `skip` (one already answered) and whose asker is still alive,
+    /// as systemd's own agents decide. `None` when there is none.
     ///
     /// A file that cannot be read or parsed is passed over, never fatal:
     /// another agent may still answer it.
@@ -154,6 +157,7 @@ impl Watcher {
         &mut self,
         now_us: u64,
         skip: Option<&Text<NAME_CAPACITY>>,
+        keep: Option<&Text<NAME_CAPACITY>>,
     ) -> io::Result<Option<Question>> {
         let mut best: Option<Question> = None;
         for entry in fs::read_dir(&self.dir)? {
@@ -163,7 +167,8 @@ impl Watcher {
             if !name.starts_with("ask.") || skip.is_some_and(|s| s.as_str() == name) {
                 continue;
             }
-            if best.is_some_and(|b| b.name.as_str() <= name) {
+            let kept = keep.is_some_and(|k| k.as_str() == name);
+            if !kept && best.is_some_and(|b| b.name.as_str() <= name) {
                 continue;
             }
             let Some(text) = Text::exact(name) else {
@@ -172,8 +177,11 @@ impl Watcher {
             let Some(ask) = self.read(&entry.path()) else {
                 continue;
             };
-            if ask.expired(now_us) {
+            if ask.expired(now_us) || asker_gone(ask.pid) {
                 continue;
+            }
+            if kept {
+                return Ok(Some(Question { name: text, ask }));
             }
             best = Some(Question { name: text, ask });
         }
@@ -206,6 +214,15 @@ impl Watcher {
         }
         Ask::parse(&self.file[..len]).ok()
     }
+}
+
+/// Whether the process that asked has exited: a stale file systemd has
+/// not yet removed. Only "no such process" counts; a process Fairing may
+/// not signal is still alive.
+fn asker_gone(pid: Option<u32>) -> bool {
+    pid.and_then(|p| i32::try_from(p).ok())
+        .and_then(rustix::process::Pid::from_raw)
+        .is_some_and(|pid| rustix::process::test_kill_process(pid) == Err(Errno::SRCH))
 }
 
 /// `CLOCK_MONOTONIC` in microseconds, the clock of `NotAfter=`.
@@ -266,7 +283,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         let found = watcher
-            .first(monotonic_us(), None)
+            .first(monotonic_us(), None, None)
             .unwrap_or_else(|e| panic!("{e}"))
             .unwrap_or_else(|| panic!("no question"));
         assert!(
@@ -284,7 +301,7 @@ mod tests {
         assert!(!watcher.changed().unwrap_or_else(|e| panic!("{e}")));
         assert!(
             watcher
-                .first(0, None)
+                .first(0, None, None)
                 .unwrap_or_else(|e| panic!("{e}"))
                 .is_none()
         );
@@ -299,10 +316,60 @@ mod tests {
         assert!(watcher.changed().unwrap_or_else(|e| panic!("{e}")));
         assert!(
             watcher
-                .first(0, None)
+                .first(0, None, None)
                 .unwrap_or_else(|e| panic!("{e}"))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn the_open_question_stays_when_a_lower_one_arrives() {
+        let (dir, mut watcher) = open();
+        ask(dir.path(), "ask.b", &question("/run/sck.b", ""));
+        let open = Text::exact("ask.b");
+        ask(dir.path(), "ask.a", &question("/run/sck.a", ""));
+        let found = watcher
+            .first(0, None, open.as_ref())
+            .unwrap_or_else(|e| panic!("{e}"))
+            .unwrap_or_else(|| panic!("no question"));
+        assert_eq!(found.name.as_str(), "ask.b", "not taken over mid-typing");
+        let found = watcher
+            .first(0, None, None)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .unwrap_or_else(|| panic!("no question"));
+        assert_eq!(found.name.as_str(), "ask.a");
+    }
+
+    #[test]
+    fn a_question_whose_asker_has_exited_is_passed_over() {
+        let (dir, mut watcher) = open();
+        let mut child = std::process::Command::new("true")
+            .spawn()
+            .unwrap_or_else(|e| panic!("{e}"));
+        let dead = child.id();
+        child.wait().unwrap_or_else(|e| panic!("{e}"));
+        ask(
+            dir.path(),
+            "ask.a",
+            &question("/run/sck.a", &format!("PID={dead}\n")),
+        );
+        assert!(
+            watcher
+                .first(0, None, None)
+                .unwrap_or_else(|e| panic!("{e}"))
+                .is_none()
+        );
+        let alive = std::process::id();
+        ask(
+            dir.path(),
+            "ask.b",
+            &question("/run/sck.b", &format!("PID={alive}\n")),
+        );
+        let found = watcher
+            .first(0, None, None)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .unwrap_or_else(|| panic!("no question"));
+        assert_eq!(found.name.as_str(), "ask.b");
     }
 
     #[test]
@@ -312,7 +379,7 @@ mod tests {
         ask(dir.path(), "ask.b", &question("/run/sck.b", ""));
         let done = Text::exact("ask.a");
         let found = watcher
-            .first(0, done.as_ref())
+            .first(0, done.as_ref(), None)
             .unwrap_or_else(|e| panic!("{e}"))
             .unwrap_or_else(|| panic!("no question"));
         assert_eq!(found.name.as_str(), "ask.b");
@@ -336,7 +403,7 @@ mod tests {
         big.push_str(&"#".repeat(MAX_FILE));
         ask(dir.path(), "ask.00", &big);
         let found = watcher
-            .first(1_000, None)
+            .first(1_000, None, None)
             .unwrap_or_else(|e| panic!("{e}"))
             .unwrap_or_else(|| panic!("no question"));
         assert_eq!(found.name.as_str(), "ask.b");
@@ -360,7 +427,7 @@ mod tests {
         .unwrap_or_else(|e| panic!("{e}"));
         assert!(
             watcher
-                .first(0, None)
+                .first(0, None, None)
                 .unwrap_or_else(|e| panic!("{e}"))
                 .is_none()
         );

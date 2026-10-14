@@ -541,9 +541,9 @@ Category A (raised subsystem)
 @cindex FRN-SRS-029
 @table @asis
 @item Requirement
-When a prompt with the same @code{Id=} reappears within 1 s of a reply, the agent shall display a rejection notice beside the new prompt.
+When a prompt with the same @code{Id=} reappears within 30 s of a reply, the agent shall display a rejection notice beside the new prompt.
 @item Rationale
-The user needs to know the previous entry was wrong.
+The user needs to know the previous entry was wrong. systemd-cryptsetup asks again only once the key derivation has rejected the passphrase: about 2 s with LUKS2's defaults, tens of seconds for Argon2 on slow hardware with several key slots. The draft's 1 s window would never see a real rejection.
 @item Source
 @ref{FRN-NEED-003}, decision 4.
 @item Priority

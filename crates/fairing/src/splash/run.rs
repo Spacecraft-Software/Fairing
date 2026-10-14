@@ -25,7 +25,7 @@ use fairing_askpass::agent::{Activity, Agent};
 use fairing_askpass::input::Keyboards;
 use fairing_askpass::watch::monotonic_us;
 use fairing_render::{
-    Choice, Compositor, Field, NoBackend, Opened, Presenter, PresenterConfig, PromptView,
+    Choice, Compositor, EchoText, Field, NoBackend, Opened, Presenter, PresenterConfig, PromptView,
     RenderErrorKind, Scene, Size, open,
 };
 use fairing_theme::{CompiledTheme, Selection};
@@ -61,6 +61,11 @@ pub const SPLASH_HZ: u32 = 30;
 /// kernel's commit work that long. A display that has not completed a flip for
 /// this long has failed. The bound sits inside the 5 s of FRN-SRS-037.
 pub const FLIP_STALL_LIMIT: Duration = Duration::from_secs(2);
+
+/// How long a password prompt may go undrawn because the output is lost
+/// before the splash steps aside, so the question is not answered blind:
+/// longer than a simpledrm-to-native swap, short of a user typing.
+pub const BLIND_PROMPT_LIMIT: Duration = Duration::from_secs(2);
 
 /// The file in the runtime directory that exists while the password agent
 /// is up; systemd's console agent is conditioned on its absence.
@@ -477,6 +482,8 @@ struct Session {
     connected: bool,
     dbus_notice_sent: bool,
     lost_output_reported: bool,
+    /// When the output was last found lost, while it still is.
+    lost_since: Option<Duration>,
     late_flip_reported: bool,
     stall: Stall,
     ready_sent: bool,
@@ -500,6 +507,7 @@ impl Session {
             connected: false,
             dbus_notice_sent: false,
             lost_output_reported: false,
+            lost_since: None,
             late_flip_reported: false,
             stall: Stall::default(),
             ready_sent: false,
@@ -611,7 +619,8 @@ impl Session {
         let Some(agent) = self.agent.as_mut() else {
             return Ok(None);
         };
-        let activity = match agent.tick(monotonic_us()) {
+        let now_us = monotonic_us();
+        let activity = match agent.tick(now_us) {
             Ok(activity) => activity,
             Err(error) => {
                 (env.emit)(
@@ -629,10 +638,22 @@ impl Session {
             }
         };
         report(env, activity, outcome);
+        if agent.stranded(now_us) {
+            (env.emit)(
+                Diagnostic::new(
+                    Severity::Warn,
+                    "ASK_STRANDED",
+                    "no keyboard for the open password question; leaving it to the console",
+                    env.invocation,
+                )
+                .with_priority(Priority::Notice),
+            );
+            return Err(Reason::AgentFailed);
+        }
         Ok(agent.view().map(|view| PromptView {
             message: view.message.to_owned(),
             field: match view.echo {
-                Some(text) => Field::Clear(text.to_owned()),
+                Some(text) => Field::Clear(EchoText::new(text)),
                 None => Field::Masked(view.typed),
             },
             notice: view.rejected.then(|| REJECTED_NOTICE.to_owned()),
@@ -674,6 +695,7 @@ impl Session {
         match presenter.present(scene) {
             Ok(()) => {
                 self.stall.clear();
+                self.lost_since = None;
                 outcome.first_bar.get_or_insert(self.bar.shown());
                 outcome.last_status = scene.status().map(str::to_owned);
                 Ok(())
@@ -688,6 +710,21 @@ impl Session {
                         format!("{error}; retrying every frame"),
                         env.invocation,
                     ));
+                }
+                let since = *self.lost_since.get_or_insert(now);
+                // A question nobody can see is not answered blind: the
+                // console agent takes it once the splash has gone.
+                if scene.prompt().is_some() && now.saturating_sub(since) > BLIND_PROMPT_LIMIT {
+                    (env.emit)(
+                        Diagnostic::new(
+                            Severity::Warn,
+                            "ASK_BLIND",
+                            "a password question is open but the output is lost; leaving it to the console",
+                            env.invocation,
+                        )
+                        .with_priority(Priority::Notice),
+                    );
+                    return Err(Reason::AgentFailed);
                 }
                 Ok(())
             }

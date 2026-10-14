@@ -164,11 +164,11 @@ impl Compositor {
                 }
             }
             Field::Clear(text) => {
-                let tail = self.fit_tail(text, px, inner);
+                let tail = self.fit_tail(text.as_str(), px, inner);
                 let baseline =
                     field.center_y() + f32::midpoint(ascent, self.text.line_metrics(px).descent);
                 self.text
-                    .draw(frame, &tail, field.x + inset, baseline, px, foreground);
+                    .draw(frame, tail, field.x + inset, baseline, px, foreground);
             }
         }
 
@@ -196,8 +196,9 @@ impl Compositor {
     }
 
     /// The end of `text` that fits in `available` pixels: an echoed field
-    /// shows where the typing is.
-    fn fit_tail(&mut self, text: &str, px: u32, available: f32) -> String {
+    /// shows where the typing is. A slice of `text`, never a copy: the text
+    /// may be an echoed answer (FRN-SRS-024).
+    fn fit_tail<'t>(&mut self, text: &'t str, px: u32, available: f32) -> &'t str {
         let mut width = 0.0;
         let mut start = text.len();
         for (index, ch) in text.char_indices().rev() {
@@ -208,7 +209,7 @@ impl Compositor {
             width += advance;
             start = index;
         }
-        text[start..].to_owned()
+        &text[start..]
     }
 
     /// Track, outline and fill; returns the track rectangle in output pixels.
@@ -335,6 +336,7 @@ mod tests {
     use super::*;
     use crate::frame::PixelFormat;
     use crate::geometry::Size;
+    use crate::scene::EchoText;
 
     fn render(width: u32, height: u32, scene: &Scene, format: PixelFormat) -> (Frame, Viewport) {
         let size = Size::new(width, height).unwrap_or_else(|e| panic!("{e}"));
@@ -588,12 +590,12 @@ mod tests {
         let (clear, _) = render(
             1920,
             1080,
-            &prompt(Field::Clear("operator".to_owned()), None),
+            &prompt(Field::Clear(EchoText::new("operator")), None),
             PixelFormat::Rgba8888,
         );
         assert!(count(&clear, field, theme.color(Role::Foreground)) > 100);
         // Longer than the field: the tail is shown and nothing spills out.
-        let long = Field::Clear("y".repeat(500));
+        let long = Field::Clear(EchoText::new(&"y".repeat(500)));
         let (frame, _) = render(1920, 1080, &prompt(long, None), PixelFormat::Rgba8888);
         let right = Rect::new(field.right() + 1.0, field.y, 40.0, field.height);
         assert_eq!(count(&frame, right, theme.color(Role::Foreground)), 0);

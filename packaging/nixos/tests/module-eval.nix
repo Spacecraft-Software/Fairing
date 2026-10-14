@@ -156,7 +156,21 @@ let
       !(lib.elem consoleAgent (directive initrdText "Conflicts"))
       && !(lib.elem consoleAgent (directive systemText "Conflicts"));
     "the initrd agent is up before LUKS asks" =
-      lib.elem "cryptsetup-pre.target" (directive initrdText "Before");
+      lib.elem "cryptsetup-pre.target" (directive initrdText "Before")
+      && lib.elem "cryptsetup-pre.target" (directive initrdText "Wants");
+    "the initrd console agent waits for the splash agent" =
+      lib.elem "fairing-initrd.service" (directive initrdConsoleAgentText "After")
+      && lib.elem "fairing-initrd.service" (directive initrdConsoleWatchText "After");
+    "the stage-2 console agent is not ordered after the splash" =
+      !(lib.elem "fairing.service" (directive consoleWatchText "After"));
+    "on a non-US keymap the agent is off by default" =
+      !(evaluate { console.keyMap = "de"; }).config.steelbore.fairing.agent.enable;
+    "a non-US keymap with the agent forced on warns" = lib.any (lib.hasInfix "fixed US layout") (
+      (evaluate {
+        console.keyMap = "de";
+        steelbore.fairing.agent.enable = true;
+      }).config.warnings
+    );
     "with the agent off, the splash runs with --no-agent" =
       lib.hasInfix "--no-agent" noAgentInitrdText && lib.hasInfix "--no-agent" noAgentSystemText;
     "with the agent off, a question stops either splash for the console agent" =

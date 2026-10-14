@@ -148,6 +148,9 @@ pub struct Ask {
     pub not_after_us: Option<u64>,
     /// `Echo=1`: the input may be shown (FRN-SRS-026).
     pub echo: bool,
+    /// `Silent=1`: show nothing of the input, not even how much was typed,
+    /// as systemd's own agents do for crypttab `password-echo=no`.
+    pub silent: bool,
     /// `PID=`: the process that asked, `None` when absent.
     pub pid: Option<u32>,
 }
@@ -178,6 +181,7 @@ impl Ask {
             socket: Text::empty(),
             not_after_us: None,
             echo: false,
+            silent: false,
             pid: None,
         };
         let mut socket = None;
@@ -208,6 +212,7 @@ impl Ask {
                     ask.not_after_us = (us != 0).then_some(us);
                 }
                 "Echo" => ask.echo = parse_bool(value)?,
+                "Silent" => ask.silent = parse_bool(value)?,
                 "PID" => ask.pid = Some(value.parse().map_err(|_e| AskError::BadNumber)?),
                 _ => {}
             }
@@ -247,6 +252,15 @@ fn parse_bool(value: &str) -> Result<bool, AskError> {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn silent_is_read() {
+        let ask =
+            Ask::parse(b"[Ask]\nSocket=/run/s\nSilent=yes\n").unwrap_or_else(|e| panic!("{e}"));
+        assert!(ask.silent);
+        let ask = Ask::parse(b"[Ask]\nSocket=/run/s\n").unwrap_or_else(|e| panic!("{e}"));
+        assert!(!ask.silent);
+    }
 
     const CRYPTSETUP: &str = "[Ask]\n\
         PID=412\n\

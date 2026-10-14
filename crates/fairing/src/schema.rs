@@ -272,6 +272,8 @@ pub const DIAGNOSTIC_CODES: &[&str] = &[
     "ASK_NO_KEYBOARD",
     "ASK_KEYBOARDS",
     "ASK_KEYBOARD_REFUSED",
+    "ASK_STRANDED",
+    "ASK_BLIND",
     "ASK_ANSWERED",
     "ASK_CANCELLED",
     "ASK_CLOSED",

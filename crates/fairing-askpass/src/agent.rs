@@ -35,8 +35,16 @@ const RESCAN_US: u64 = 250_000;
 const KEYBOARD_RESCAN_US: u64 = 1_000_000;
 
 /// A repeated `Id=` this soon after a reply was a rejected answer, in µs
-/// (FRN-SRS-029).
-const REJECTION_WINDOW_US: u64 = 1_000_000;
+/// (FRN-SRS-029). systemd-cryptsetup asks again only once the key
+/// derivation has rejected the passphrase, two seconds with LUKS2's
+/// defaults and tens of seconds for Argon2 on slow hardware with several
+/// key slots, so the window is measured in tens of seconds.
+const REJECTION_WINDOW_US: u64 = 30_000_000;
+
+/// How long a question may stay open with no keyboard to answer it before
+/// the agent is [`Agent::stranded`], in µs: time for a slow USB keyboard to
+/// enumerate, short enough that systemd's console agent can still ask.
+pub const NO_KEYBOARD_LIMIT_US: u64 = 10_000_000;
 
 /// Where keys come from: keyboards in the splash, a script in tests.
 pub trait KeySource {
@@ -134,6 +142,8 @@ pub struct Agent<K: KeySource> {
     held: usize,
     /// The keyboard failure last reported, so it is reported once.
     refusal: Option<io::ErrorKind>,
+    /// Since when the open question has had no keyboard, in µs.
+    keyboardless_since: Option<u64>,
 }
 
 impl<K: KeySource> core::fmt::Debug for Agent<K> {
@@ -182,6 +192,7 @@ impl<K: KeySource> Agent<K> {
             next_keyboard_scan_us: 0,
             held: 0,
             refusal: None,
+            keyboardless_since: None,
         }
     }
 
@@ -200,7 +211,10 @@ impl<K: KeySource> Agent<K> {
         let mut activity = Activity::Idle;
         if self.watcher.changed()? || now_us >= self.next_scan_us {
             self.next_scan_us = now_us.saturating_add(RESCAN_US);
-            let found = self.watcher.first(now_us, self.done.as_ref())?;
+            let keep = self.current.map(|q| q.name);
+            let found = self
+                .watcher
+                .first(now_us, self.done.as_ref(), keep.as_ref())?;
             activity = self.show(found.as_ref(), now_us);
         }
         if self.current.is_some_and(|q| q.ask.expired(now_us)) {
@@ -224,6 +238,7 @@ impl<K: KeySource> Agent<K> {
                 activity = refused.map_or(Activity::Idle, Activity::KeyboardRefused);
             }
             self.refusal = refused;
+            self.track_keyboards(now_us);
         }
         let mut end = None;
         let secret = &mut self.secret;
@@ -275,11 +290,14 @@ impl<K: KeySource> Agent<K> {
             });
             self.next_keyboard_scan_us = now_us.saturating_add(KEYBOARD_RESCAN_US);
             self.held = self.keys.grab();
+            self.keyboardless_since = None;
+            self.track_keyboards(now_us);
             return Activity::Opened(self.held);
         }
         self.rejected = false;
         self.keys.release();
         self.held = 0;
+        self.keyboardless_since = None;
         if was_open {
             Activity::Closed
         } else {
@@ -287,14 +305,36 @@ impl<K: KeySource> Agent<K> {
         }
     }
 
+    /// Starts or stops the no-keyboard clock of the open question.
+    const fn track_keyboards(&mut self, now_us: u64) {
+        if self.held > 0 {
+            self.keyboardless_since = None;
+        } else if self.keyboardless_since.is_none() {
+            self.keyboardless_since = Some(now_us);
+        }
+    }
+
+    /// Whether a question has been open for [`NO_KEYBOARD_LIMIT_US`] with no
+    /// keyboard to answer it. The splash then steps aside, so systemd's
+    /// console agent asks instead (FRN-SRS-027).
+    #[must_use]
+    pub fn stranded(&self, now_us: u64) -> bool {
+        self.current.is_some()
+            && self
+                .keyboardless_since
+                .is_some_and(|since| now_us.saturating_sub(since) >= NO_KEYBOARD_LIMIT_US)
+    }
+
     /// The open question as the splash draws it.
     #[must_use]
     pub fn view(&self) -> Option<View<'_>> {
         let question = self.current.as_ref()?;
+        let silent = question.ask.silent;
         Some(View {
             message: question.ask.message.as_str(),
-            typed: self.secret.chars(),
-            echo: question.ask.echo.then(|| self.secret.as_str()),
+            // `Silent=1` hides even the length: the field stays empty.
+            typed: if silent { 0 } else { self.secret.chars() },
+            echo: (question.ask.echo && !silent).then(|| self.secret.as_str()),
             rejected: self.rejected,
         })
     }
@@ -305,6 +345,7 @@ impl<K: KeySource> Agent<K> {
         self.current = None;
         self.keys.release();
         self.held = 0;
+        self.keyboardless_since = None;
     }
 }
 
@@ -480,6 +521,36 @@ mod tests {
     }
 
     #[test]
+    fn a_question_with_no_keyboard_strands_the_agent() {
+        let mut f = fixture();
+        f.agent.keys.absent = true;
+        f.ask("ask.1", "");
+        assert_eq!(f.tick(1_000), Activity::Opened(0));
+        assert!(!f.agent.stranded(5_000_000));
+        f.tick(5_001_000);
+        assert!(f.agent.stranded(NO_KEYBOARD_LIMIT_US + 1_000));
+        // A keyboard that arrives in time clears it.
+        let mut g = fixture();
+        g.agent.keys.absent = true;
+        g.ask("ask.1", "");
+        g.tick(1_000);
+        g.agent.keys.absent = false;
+        assert_eq!(g.tick(1_001_000), Activity::Keyboards(1));
+        assert!(!g.agent.stranded(NO_KEYBOARD_LIMIT_US + 1_000));
+    }
+
+    #[test]
+    fn silent_shows_neither_the_input_nor_its_length() {
+        let mut f = fixture();
+        f.ask("ask.1", "Silent=1\nEcho=1\n");
+        f.tick(1);
+        f.agent.keys.typed("root");
+        f.tick(2);
+        let view = f.agent.view().unwrap_or_else(|| panic!("no view"));
+        assert_eq!((view.typed, view.echo), (0, None));
+    }
+
+    #[test]
     fn escape_cancels() {
         // Verifies: FRN-SRS-022
         let mut f = fixture();
@@ -534,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn a_repeated_id_within_a_second_is_a_rejection() {
+    fn a_repeated_id_after_the_key_derivation_is_a_rejection() {
         // Verifies: FRN-SRS-029
         let mut f = fixture();
         f.ask("ask.1", "");
@@ -543,17 +614,18 @@ mod tests {
         f.agent.keys.pending.push_back(Key::Enter);
         assert_eq!(f.tick(2_000), Activity::Answered);
         f.withdraw("ask.1");
+        // LUKS2's default key derivation takes about two seconds to reject.
         f.ask("ask.2", "");
-        assert_eq!(f.tick(500_000), Activity::Opened(1));
+        assert_eq!(f.tick(2_500_000), Activity::Opened(1));
         assert!(f.agent.view().is_some_and(|v| v.rejected));
         assert_eq!(f.agent.keys().grabs, 2, "grabbed again for the new prompt");
 
         // The same Id= long after the answer is a new question, not a rejection.
         f.agent.keys.pending.push_back(Key::Enter);
-        f.tick(600_000);
+        f.tick(2_600_000);
         f.withdraw("ask.2");
         f.ask("ask.3", "");
-        f.tick(5_000_000);
+        f.tick(40_000_000);
         assert!(f.agent.view().is_some_and(|v| !v.rejected));
     }
 

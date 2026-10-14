@@ -6,6 +6,8 @@
 
 use std::fmt;
 
+use zeroize::Zeroize;
+
 use crate::geometry::round_u32;
 
 /// Progress resolution: the bar moves in steps of one ten-thousandth.
@@ -29,11 +31,75 @@ pub struct Scene {
 /// A masked field carries only how many characters were typed: the secret
 /// itself never leaves the password agent (FRN-SRS-021, FRN-SRS-025).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "an echoed answer stays inline: boxing it would put the answer on the heap"
+)]
 pub enum Field {
     /// One mark per character typed.
     Masked(usize),
     /// The input as typed, for a question asked with `Echo=1` (FRN-SRS-026).
-    Clear(String),
+    Clear(EchoText),
+}
+
+/// Bytes an echoed answer may hold, as many as the agent's secret.
+pub const ECHO_CAPACITY: usize = 512;
+
+/// The text of an `Echo=1` answer, in a fixed buffer zeroised when cleared
+/// and when dropped.
+///
+/// An echoed answer is still the answer: crypttab `password-echo=yes` echoes
+/// a LUKS passphrase. So it is never copied to the heap, where freed memory
+/// would keep it, and is wiped like the agent's own secret (FRN-SRS-024).
+#[derive(Clone, PartialEq, Eq)]
+pub struct EchoText {
+    bytes: [u8; ECHO_CAPACITY],
+    len: usize,
+}
+
+impl EchoText {
+    /// Copies as much of `text` as fits, cut at a character boundary.
+    #[must_use]
+    pub fn new(text: &str) -> Self {
+        let mut end = text.len().min(ECHO_CAPACITY);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let mut echo = Self {
+            bytes: [0; ECHO_CAPACITY],
+            len: end,
+        };
+        echo.bytes[..end].copy_from_slice(&text.as_bytes()[..end]);
+        echo
+    }
+
+    /// The text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        // Only whole characters are copied in.
+        std::str::from_utf8(&self.bytes[..self.len]).unwrap_or_default()
+    }
+
+    /// Zeroises every byte and empties the text.
+    pub fn clear(&mut self) {
+        self.bytes.zeroize();
+        self.len = 0;
+    }
+}
+
+impl Drop for EchoText {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+impl fmt::Debug for EchoText {
+    /// The length only, like the agent's secret.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EchoText")
+            .field("len", &self.len)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A password prompt as the compositor draws it.
@@ -170,6 +236,17 @@ mod tests {
         assert!(!Scene::new(0).is_started());
         assert!(Scene::from_fraction(0.0002).is_started());
         assert_eq!(Scene::new(37).percent(), 37);
+    }
+
+    #[test]
+    fn echo_text_is_cut_whole_and_cleared() {
+        // Verifies: FRN-SRS-024
+        let mut echo = EchoText::new(&"é".repeat(ECHO_CAPACITY));
+        assert_eq!(echo.as_str().chars().count(), ECHO_CAPACITY / 2);
+        assert!(!format!("{echo:?}").contains('é'));
+        echo.clear();
+        assert!(echo.as_str().is_empty());
+        assert!(echo.bytes.iter().all(|&b| b == 0));
     }
 
     #[test]

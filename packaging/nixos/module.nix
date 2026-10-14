@@ -87,6 +87,28 @@ let
     unitConfig.ConditionPathExists = "!/run/fairing/agent";
   };
 
+  # In the initrd the console agent also waits for the splash to be ready,
+  # its agent up and the flag raised, so its watch never sees a question
+  # before the condition can hold it back. Not in stage 2: fairing.service
+  # is ordered after the mount of /var/lib/fairing, and an encrypted /var
+  # waits for this very agent.
+  initrdConsoleAgentDropIn = consoleAgentDropIn // {
+    after = [ "fairing-initrd.service" ];
+  };
+
+  # The agent types through a fixed US layout (FRN-SRS-028): on any other
+  # console keymap a passphrase would be sent wrong, so the default leaves
+  # those machines to systemd's console agent, which honours the keymap.
+  usLayout =
+    if config.console.useXkbConfig then
+      config.services.xserver.xkb.layout == "us"
+    else
+      lib.isString config.console.keyMap
+      && lib.elem config.console.keyMap [
+        "us"
+        "en-latin9"
+      ];
+
   # Shared by both instances. A splash has nothing to say to a core dump, and
   # every wait it makes is bounded by five seconds (FRN-SRS-037), so neither
   # start nor stop needs longer.
@@ -159,11 +181,13 @@ in
 
     agent.enable = lib.mkOption {
       type = lib.types.bool;
-      default = true;
+      default = usLayout;
+      defaultText = lib.literalMD "`true` when the console keymap is US";
       description = ''
         Answer password questions, such as a LUKS passphrase, in the splash.
         When false, systemd's console agent asks, and a question stops the
-        splash so its prompt is visible.
+        splash so its prompt is visible. The agent types through a fixed US
+        layout, so it is off by default on any other console keymap.
       '';
     };
 
@@ -179,6 +203,13 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    warnings = lib.optional (cfg.agent.enable && !usLayout) ''
+      steelbore.fairing.agent types passphrases through a fixed US layout,
+      but the console keymap is not US: passphrases will be sent wrong. Set
+      steelbore.fairing.agent.enable = false to let systemd's console agent
+      ask with the configured keymap.
+    '';
+
     assertions = [
       # Implements: FRN-SRS-091
       {
@@ -237,6 +268,9 @@ in
         "shutdown.target"
       ]
       ++ lib.optional cfg.agent.enable "cryptsetup-pre.target";
+      # cryptsetup-pre.target is passive: without a pull-in the ordering
+      # above would order against nothing (systemd.special(7)).
+      wants = lib.optional cfg.agent.enable "cryptsetup-pre.target";
       # Without the agent, a password question steps the splash aside so the
       # console agent's prompt is visible.
       # Emergency mode takes the console, and the initrd has no bus to tell
@@ -331,10 +365,10 @@ in
     };
 
     boot.initrd.systemd.services.systemd-ask-password-console =
-      lib.mkIf cfg.agent.enable consoleAgentDropIn;
+      lib.mkIf cfg.agent.enable initrdConsoleAgentDropIn;
     systemd.services.systemd-ask-password-console = lib.mkIf cfg.agent.enable consoleAgentDropIn;
     boot.initrd.systemd.paths.systemd-ask-password-console =
-      lib.mkIf cfg.agent.enable consoleAgentDropIn;
+      lib.mkIf cfg.agent.enable initrdConsoleAgentDropIn;
     systemd.paths.systemd-ask-password-console = lib.mkIf cfg.agent.enable consoleAgentDropIn;
 
     # The handoff (FRN-SRS-017, FRN-SRS-032): greetd's start pulls this in and

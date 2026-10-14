@@ -165,6 +165,15 @@ impl Keymap {
         }
     }
 
+    /// Lets go of Shift, Ctrl and Alt and keeps Caps Lock, as when a keyboard
+    /// holding them goes away: its key-up events never arrive.
+    pub const fn release_modifiers(&mut self) {
+        self.shift_left = false;
+        self.shift_right = false;
+        self.ctrl = 0;
+        self.alt = 0;
+    }
+
     /// Forgets every held modifier, as when a grab starts: keys held before
     /// it were never seen going down.
     pub const fn reset(&mut self) {
@@ -447,8 +456,14 @@ impl Keyboards {
             return;
         }
         let map = &mut self.map;
+        let before = self.open.len();
         self.open
             .retain(|keyboard| drain(keyboard.device.as_fd(), map, &mut f).unwrap_or(false));
+        if self.open.len() != before {
+            // A keyboard unplugged with Ctrl held would leave every later
+            // key typing nothing.
+            map.release_modifiers();
+        }
     }
 }
 
@@ -520,6 +535,20 @@ mod tests {
         // A held Enter does not answer twice.
         assert_eq!(map.key(KEY_ENTER, 2), None);
         assert_eq!(map.key(30, 0), None);
+    }
+
+    #[test]
+    fn released_modifiers_keep_caps_lock() {
+        let mut map = Keymap::new();
+        press(&mut map, KEY_CAPSLOCK);
+        map.key(KEY_LEFTCTRL, 1);
+        map.key(KEY_LEFTSHIFT, 1);
+        map.release_modifiers();
+        assert_eq!(
+            typed(&mut map, &[30]),
+            "A",
+            "Caps Lock kept, Ctrl and Shift gone"
+        );
     }
 
     #[test]

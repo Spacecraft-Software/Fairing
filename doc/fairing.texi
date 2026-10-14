@@ -621,7 +621,9 @@ and waits on a datagram socket named in it.  Each frame, the agent:
 @item
 drains the inotify events of that directory without blocking, and when any
 @file{ask.*} name came, went or changed (and four times a second in any
-case) takes the lowest-named valid question that has not expired.  A new
+case) takes the lowest-named valid question that has not expired and whose
+asking process is still alive.  A question already open stays open while its
+file is there, so a new one never takes over a prompt mid-typing.  A new
 question is seen within one frame of being written.
 @item
 when a question opens, grabs every keyboard exclusively, so no keystroke
@@ -631,6 +633,8 @@ input device that reports every key from Esc to D, as udev decides it.
 @item
 types into a fixed buffer of 512 bytes through a US layout: Backspace
 deletes, Enter answers, Escape cancels.  Ctrl and Alt chords type nothing.
+Because the layout is fixed, the NixOS module turns the agent off by default
+when the console keymap is not US, and warns when it is forced on there.
 @item
 on Enter, sends @samp{+} and the passphrase as one datagram to the
 question's socket, on Escape a single @samp{-}, then clears the buffer and
@@ -638,11 +642,12 @@ releases the keyboards in the same frame.
 @end enumerate
 
 The prompt shows the question's message and one dot per character typed, or
-the text itself for a question asked with @code{Echo=1}.  When a question
-with the same @code{Id=} comes back within a second of an answer (the
-passphrase was wrong), the prompt says it was not accepted.  A question
-whose @code{NotAfter=} passes, or whose file is removed, closes with nothing
-sent.
+the text itself for a question asked with @code{Echo=1}; a question asked
+with @code{Silent=1} shows neither, not even the count.  When a question
+with the same @code{Id=} comes back within 30 seconds of an answer (the key
+derivation rejected the passphrase), the prompt says it was not accepted.  A
+question whose @code{NotAfter=} passes, or whose file is removed, closes
+with nothing sent.
 
 @cindex fail-open
 While the agent is up, @file{/run/fairing/agent} exists, and the NixOS module
@@ -652,8 +657,11 @@ Once the splash is ready, its unit starts the watch again so the condition is
 checked with the agent up; a watch left running would fire the skipped service
 at every question until it hit its trigger limit and failed.  Every way out of
 the splash, a crash included, removes the file and starts the watch again, so
-a question still open is asked on the console.  An agent that cannot start ends the splash at once
-with reason @code{agent-failed}, for the same reason.
+a question still open is asked on the console.  For the same reason the
+splash ends with reason @code{agent-failed} when its agent cannot start, when
+a question has been open for 10 seconds with no keyboard to answer it, and
+when a question is open but the output has been lost for 2 seconds, rather
+than take an answer nobody can see.
 
 @node Safety argument
 @section Safety argument
@@ -669,8 +677,11 @@ The typed passphrase lives in one type, @code{Secret}: 512 bytes inline,
 never on the heap, with no @code{Clone}, @code{Copy} or @code{Display}; its
 @code{Debug} shows only the count.  Nothing outside the crate sees its bytes:
 the splash draws from a view that carries the count typed, or the text only
-for an @code{Echo=1} question, which by systemd's definition is not secret.
-The reply builds its datagram in a fixed buffer on the stack.
+for an @code{Echo=1} question.  An echoed answer may still be a passphrase
+(crypttab @code{password-echo=yes}), so the splash carries it in a fixed
+buffer of its own, zeroised when cleared and when dropped, and the
+compositor draws from a slice of it, never a copy.  The reply builds its
+datagram in a fixed buffer on the stack.
 
 @item Cleared eagerly, on every path
 Release builds abort on panic, which skips @code{Drop}, so the agent clears

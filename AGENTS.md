@@ -134,7 +134,9 @@ will not be green there.
 - The password agent (`fairing_askpass::agent::Agent`) is one more non-blocking input of
   the splash loop, ticked once per frame; `--no-agent` turns it off. The secret lives only
   in `fairing-askpass` (`Secret`, a fixed 512-byte buffer); the rest of the process sees
-  a `PromptView` with the count typed, or the text only under `Echo=1`. Keyboards are
+  a `PromptView` with the count typed (nothing under `Silent=1`), or the text only
+  under `Echo=1`, carried in `EchoText`, a fixed buffer zeroised on clear and drop;
+  never copy it into a `String`. Keyboards are
   grabbed only while a question is open and released the tick it closes. While the agent
   is up, `/run/fairing/agent` exists and systemd's console agent, its `.path` watch as
   well as its service, is conditioned on its absence (as upstream does for Plymouth).
@@ -144,7 +146,12 @@ will not be green there.
   question survives a crashed splash. With
   the agent on, never add `Conflicts=systemd-ask-password-console.service`: the conflict
   is applied when the start job is queued, before the condition is checked, and would
-  stop the splash. An agent that cannot start ends the run as `agent-failed`.
+  stop the splash. An agent that cannot start, a question with no keyboard for
+  10 s, and a prompt left undrawn by a lost output for 2 s each end the run as
+  `agent-failed`, so the console agent asks. The initrd console agent is ordered
+  after `fairing-initrd.service`; never order the stage-2 one after
+  `fairing.service`, which waits for the `/var` mount an encrypted `/var` needs
+  the agent for. The agent is off by default on a non-US console keymap.
 - zbus connects to `/run/dbus/system_bus_socket` by name, never through
   `DBUS_SYSTEM_BUS_ADDRESS`, and refuses systemd's private socket: zbus 5.19 panics on
   PID 1's replies there and release builds abort on panic.
