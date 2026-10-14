@@ -63,6 +63,7 @@ Maintained by Mohamed Hammad
 * Invoking Fairing::    The command line: splash, theme, preview, describe, schema.
 * Themes::              Writing, checking and compiling a theme.
 * Running under systemd:: The units, the NixOS module and the greetd handoff.
+* Password agent::      Answering a LUKS passphrase inside the splash.
 * Needs::               Why the software exists and the constraints it serves.
 * Requirements::        What the software shall do, one verifiable statement at a time.
 * Index::               Concept and identifier index.
@@ -148,6 +149,7 @@ with later milestones and are documented when they do.
 @cindex splash
 @example
 fairing splash --stage initrd|system [--theme @var{file.fairing}] [--palette @var{slug}]
+               [--no-agent]
 @end example
 
 The boot splash itself.  The systemd units run it, once per boot stage
@@ -177,6 +179,9 @@ measurement.
 A compiled theme (@pxref{Themes}).  Without it the built-in theme is drawn.
 @item --palette
 A registered palette slug, as for @command{fairing preview}.
+@item --no-agent
+Do not answer password questions; leave them to systemd's console agent.
+Without it the splash answers them itself (@pxref{Password agent}).
 @end table
 
 @cindex fail-open
@@ -184,10 +189,12 @@ The bar never moves backwards: when a new reading is lower it holds, and a
 higher one is approached smoothly.  A splash never fails the boot.  Every way
 out exits with status 0 and the reason in the report: @code{handoff},
 @code{stopped} (stopped in stage 2 without the greetd handoff, for example by
-a password prompt), @code{boot-finished} (the boot ended without a greeter,
+a password prompt under @option{--no-agent}), @code{boot-finished} (the boot ended without a greeter,
 for example when booted to @code{multi-user.target}), @code{switch-root}, @code{shutdown}, @code{failed-unit} (a
 systemd unit failed), @code{maintenance} (rescue or emergency mode started),
-@code{no-backend}, @code{render-failed} or @code{theme-unreadable}.  When it
+@code{no-backend}, @code{render-failed}, @code{agent-failed} (the password
+agent could not start, or lost its question directory, so systemd's console
+agent asks instead) or @code{theme-unreadable}.  When it
 draws nothing it still tells systemd it is ready, so the unit never delays
 the boot.  A page flip that completes late costs the frames drawn while it is
 pending, not the splash: only a display that has not completed a flip for two
@@ -521,6 +528,7 @@ steelbore.fairing = @{
   kmsModules = [ "i915" ];          # the machine's KMS driver
   # theme = ./my-theme/theme.ncl;   # default: the reference theme
   # palette = "steelbore-high-contrast";
+  # agent.enable = false;           # leave passwords to the console agent
 @};
 @end example
 
@@ -571,9 +579,10 @@ start job, and the machine would come up without a login screen.
 @cindex fail-open
 Neither unit is required by any target; a splash that fails, hangs or is
 absent cannot stop a boot.  A password question (for example an encrypted
-volume) stops the splash so the console prompt is visible; the in-splash
-prompt replaces this with a later milestone.  The splash's own waits are all
-bounded: five seconds to start, one second to stop.
+volume) is answered in the splash (@pxref{Password agent}); with
+@code{agent.enable = false} it stops the splash instead, so the console
+agent's prompt is visible.  The splash's own waits are all bounded: five
+seconds to start, one second to stop.
 
 @cindex D-Bus
 The initrd build of Fairing carries no D-Bus client, so the initrd splash
@@ -582,6 +591,122 @@ unit stops the stage-2 splash, counted from its first reading of systemd, so
 units that failed earlier do not.  After switch-root the splash connects to the system bus; if no
 connection is made within 2 seconds, it says so once in the journal and
 drives the bar from the previous boot's measured duration instead.
+
+@node Password agent
+@chapter Password agent
+
+@cindex password agent
+@cindex LUKS
+Fairing answers systemd's password questions, such as the passphrase of a
+LUKS root, inside the splash: the question is drawn in the theme's prompt
+region and typed on the keyboard, and the console never shows.  The agent is
+the crate @code{fairing-askpass}, assurance Category A; it runs in the
+splash's own loop, one more input read once per frame.
+
+@menu
+* Answering a question:: What the agent does, step by step.
+* Safety argument::      Why a passphrase does not leak.
+@end menu
+
+@node Answering a question
+@section Answering a question
+
+@cindex ask-password
+A program that needs a password (@command{systemd-cryptsetup}, for one)
+writes a file @file{ask.@var{random}} to @file{/run/systemd/ask-password}
+and waits on a datagram socket named in it.  Each frame, the agent:
+
+@enumerate
+@item
+drains the inotify events of that directory without blocking, and when any
+@file{ask.*} name came, went or changed (and four times a second in any
+case) takes the lowest-named valid question that has not expired.  A new
+question is seen within one frame of being written.
+@item
+when a question opens, grabs every keyboard exclusively, so no keystroke
+reaches the console, and discards anything typed before the prompt; a
+keyboard plugged in later is grabbed within a second.  A keyboard is any
+input device that reports every key from Esc to D, as udev decides it.
+@item
+types into a fixed buffer of 512 bytes through a US layout: Backspace
+deletes, Enter answers, Escape cancels.  Ctrl and Alt chords type nothing.
+@item
+on Enter, sends @samp{+} and the passphrase as one datagram to the
+question's socket, on Escape a single @samp{-}, then clears the buffer and
+releases the keyboards in the same frame.
+@end enumerate
+
+The prompt shows the question's message and one dot per character typed, or
+the text itself for a question asked with @code{Echo=1}.  When a question
+with the same @code{Id=} comes back within a second of an answer (the
+passphrase was wrong), the prompt says it was not accepted.  A question
+whose @code{NotAfter=} passes, or whose file is removed, closes with nothing
+sent.
+
+@cindex fail-open
+While the agent is up, @file{/run/fairing/agent} exists, and the NixOS module
+conditions systemd's console agent on its absence, as systemd itself does for
+Plymouth.  Every way out of the splash, a crash included, removes the file
+and starts the console agent's path unit again, so a question still open is
+asked on the console.  An agent that cannot start ends the splash at once
+with reason @code{agent-failed}, for the same reason.
+
+@node Safety argument
+@section Safety argument
+
+@cindex safety argument
+This is the analysis evidence for the agent's secrecy and resource
+requirements (FRN-SRS-024, FRN-SRS-025, FRN-SRS-102, FRN-SRS-104).  Each
+claim names the mechanism and the test or check that holds it.
+
+@table @asis
+@item One place for the secret
+The typed passphrase lives in one type, @code{Secret}: 512 bytes inline,
+never on the heap, with no @code{Clone}, @code{Copy} or @code{Display}; its
+@code{Debug} shows only the count.  Nothing outside the crate sees its bytes:
+the splash draws from a view that carries the count typed, or the text only
+for an @code{Echo=1} question, which by systemd's definition is not secret.
+The reply builds its datagram in a fixed buffer on the stack.
+
+@item Cleared eagerly, on every path
+Release builds abort on panic, which skips @code{Drop}, so the agent clears
+the buffer explicitly wherever a question ends: before the answer is sent,
+on cancel, on expiry, when the question is withdrawn or replaced, and when
+the agent closes.  The datagram buffer is zeroised as soon as it is sent or
+fails to send.  Clearing uses volatile writes (@code{zeroize}) the optimiser
+cannot remove; @code{Drop} clears again as a second line.  Unit tests check
+every path.
+
+@item Keystrokes
+Key events are read with a plain @code{read(2)} into a stack buffer that is
+zeroised after every read; the @code{evdev} crate only issues the grab.
+While a prompt is open the grab keeps keystrokes from the console's line
+discipline, so none can be read back from a tty.
+
+@item Not in the journal, not in a core
+The agent's journal lines say that a question opened, was answered,
+cancelled or closed, and nothing about what was typed, not even its length;
+the LUKS VM test searches the whole boot's journal for the passphrase.  The
+agent marks the process non-dumpable when it opens, which also keeps an
+unprivileged @code{ptrace} out, and both units set @code{LimitCORE=0}.
+
+@item Bounded input, bounded memory
+An @file{ask.*} file larger than 64 KiB, or not UTF-8, is refused before any
+field is read.  Every field is copied into a fixed buffer: the message is cut
+at a character boundary, and an over-long @code{Id=} or socket path refuses
+the question.  Files are read into one buffer of 64 KiB and a byte, allocated
+when the agent starts.  The crate's @file{clippy.toml} refuses
+@code{String}, @code{format!}, whole-file reads and growth by content, and
+CI denies warnings, so no allocation sized by what a question contains can
+come back unnoticed.  The parser runs under libFuzzer in CI.
+@end table
+
+@cindex residual risk
+What the argument does not cover: copies the compiler makes in registers and
+spilled stack slots, which no library can zeroise; the kernel's own buffers
+(the input queue, the socket); the program that receives the answer; and,
+after switch-root, swap, since locking the buffer in memory needs
+@code{unsafe}, which Fairing forbids.  The initrd has no swap.
 
 @include needs.texi
 

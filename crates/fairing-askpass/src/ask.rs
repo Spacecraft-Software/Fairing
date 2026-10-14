@@ -239,6 +239,12 @@ fn parse_bool(value: &str) -> Result<bool, AskError> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "test fixtures are built with them; the agent is not"
+)]
 mod tests {
     use super::*;
 

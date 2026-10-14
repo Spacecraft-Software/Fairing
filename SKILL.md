@@ -10,7 +10,7 @@ description: >
   themes, `fairing splash` is the boot splash the systemd units run, and `--version
   --json` returns the attribution envelope. In the repository, `cargo xtask` runs the
   requirements generator, traceability gate, progress block and text-format gate. The
-  shutdown splash and the password prompt arrive with later milestones.
+  splash also answers systemd's password questions; the shutdown splash arrives later.
 license: GPL-3.0-or-later
 project: Spacecraft Software
 component: Fairing
@@ -32,11 +32,12 @@ version: 0.1.0
 - `fairing theme compile <theme.ncl> [--output file.fairing]` — write the artefact;
   `--dry-run` compiles without writing; the report carries `bytes` and `load_ms`
 - `fairing theme inspect <file.fairing>` — layouts and images of a compiled theme
-- `fairing splash --stage initrd|system [--theme file.fairing] [--palette slug]` — the
-  boot splash; always exits 0 once its arguments are valid, with the reason in
+- `fairing splash --stage initrd|system [--theme file.fairing] [--palette slug]
+  [--no-agent]` — the boot splash, which also answers password questions unless
+  `--no-agent`; always exits 0 once its arguments are valid, with the reason in
   `data.reason` (`handoff`, `switch-root`, `shutdown`, `failed-unit`, `maintenance`,
-  `no-backend`, `render-failed`, `theme-unreadable`, `stopped`, `boot-finished`);
-  `--dry-run` reports the plan
+  `no-backend`, `render-failed`, `agent-failed`, `theme-unreadable`, `stopped`,
+  `boot-finished`) and `data.agent`/`data.answered`; `--dry-run` reports the plan
 - `fairing --version` — name, version, maintainer, website, copyright
 
 `theme check` and `theme compile` exist only in the full build (cargo feature

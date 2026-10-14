@@ -14,6 +14,23 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 
 ### Added
 
+- M3 password agent (`fairing-askpass`, Category A), run inside the splash. It watches
+  `/run/systemd/ask-password` with inotify and never blocks, so a question is seen within
+  a frame. Parsing is bounded: an `ask.*` file over 64 KiB or not UTF-8 is refused before
+  any field is read, and every field goes into a fixed buffer. While a question is open,
+  every keyboard is grabbed exclusively; keyboards are found from sysfs capabilities,
+  keys go through a US layout, and every grab is released the frame the prompt closes.
+  The passphrase lives in a fixed 512-byte buffer, zeroised eagerly on every path, and
+  the reply is one `+`/`-` datagram. The prompt appears in the theme's prompt region,
+  masked or echoed, with a notice when an answer is rejected. The process is
+  non-dumpable. `fairing splash --no-agent` turns the agent off; an agent that cannot
+  start ends the splash as `agent-failed`. In the NixOS module, `agent.enable` (default
+  on) keeps systemd's console agent aside while `/run/fairing/agent` exists. Both units
+  remove that file on any exit and re-arm the console agent, and the initrd splash is
+  ordered before `cryptsetup-pre.target`. cargo-fuzz targets for the `ask.*` parser and
+  the theme artefact run in CI, and a crate-local clippy configuration refuses
+  content-sized allocation. A LUKS VM test runs with and without the agent, and the
+  manual gains a "Password agent" chapter with the safety argument.
 - M2 boot integration. Themes: the Nickel contract `contracts/fairing-theme.ncl` and the
   reference theme `themes/steelbore.ncl`; `fairing theme check|compile|inspect`, which
   evaluate a theme in memory against the embedded contract and print Nickel's own

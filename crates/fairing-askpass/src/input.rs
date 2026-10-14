@@ -30,6 +30,8 @@ use rustix::fs::{Mode, OFlags};
 use rustix::io::Errno;
 use zeroize::Zeroize;
 
+use crate::ask::Text;
+
 /// Where the kernel lists input devices.
 pub const SYSFS_INPUT: &str = "/sys/class/input";
 
@@ -219,11 +221,33 @@ const fn held(state: u8, code: u16, down: bool) -> u8 {
 /// `long` each, most significant first.
 fn bit(mask: &str, n: usize) -> bool {
     let width = usize::try_from(usize::BITS).unwrap_or(64);
-    let words: Vec<&str> = mask.split_whitespace().collect();
-    let Some(index) = words.len().checked_sub(1 + n / width) else {
-        return false;
-    };
-    usize::from_str_radix(words[index], 16).is_ok_and(|word| word & (1 << (n % width)) != 0)
+    mask.split_whitespace()
+        .rev()
+        .nth(n / width)
+        .and_then(|word| usize::from_str_radix(word, 16).ok())
+        .is_some_and(|word| word & (1 << (n % width)) != 0)
+}
+
+/// The longest node name kept, `event` and a number.
+pub const NODE_CAPACITY: usize = 16;
+
+/// A sysfs attribute is at most a page.
+const ATTRIBUTE_BYTES: usize = 4096;
+
+/// Reads a sysfs attribute into `buf`, a page at most; `None` when it cannot
+/// be read or is not text.
+fn attribute<'b>(path: &Path, buf: &'b mut [u8; ATTRIBUTE_BYTES]) -> Option<&'b str> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut len = 0;
+    while len < buf.len() {
+        match io::Read::read(&mut file, &mut buf[len..]) {
+            Ok(0) => break,
+            Ok(n) => len += n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(_e) => return None,
+        }
+    }
+    str::from_utf8(&buf[..len]).ok()
 }
 
 /// Whether the capabilities describe a keyboard, as udev decides it: `EV_KEY`
@@ -237,24 +261,28 @@ fn is_keyboard(ev: &str, key: &str) -> bool {
 ///
 /// Implements: FRN-SRS-028
 #[must_use]
-pub fn keyboards(sysfs: &Path) -> Vec<String> {
+pub fn keyboards(sysfs: &Path) -> Vec<Text<NODE_CAPACITY>> {
     let Ok(entries) = fs::read_dir(sysfs) else {
         return Vec::new();
     };
-    let mut found: Vec<String> = entries
+    let mut ev = [0u8; ATTRIBUTE_BYTES];
+    let mut key = [0u8; ATTRIBUTE_BYTES];
+    let mut found: Vec<Text<NODE_CAPACITY>> = entries
         .filter_map(Result::ok)
         .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
+            let os_name = entry.file_name();
+            let name = os_name.to_str()?;
             if !name.starts_with("event") {
                 return None;
             }
+            let name = Text::exact(name)?;
             let caps = entry.path().join("device/capabilities");
-            let ev = fs::read_to_string(caps.join("ev")).ok()?;
-            let key = fs::read_to_string(caps.join("key")).ok()?;
-            is_keyboard(&ev, &key).then_some(name)
+            let ev = attribute(&caps.join("ev"), &mut ev)?;
+            let key = attribute(&caps.join("key"), &mut key)?;
+            is_keyboard(ev, key).then_some(name)
         })
         .collect();
-    found.sort();
+    found.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     found
 }
 
@@ -302,7 +330,7 @@ pub fn drain(fd: BorrowedFd<'_>, map: &mut Keymap, f: &mut impl FnMut(Key)) -> i
 
 /// One keyboard Fairing has open.
 struct Keyboard {
-    name: String,
+    name: Text<NODE_CAPACITY>,
     device: RawDevice,
 }
 
@@ -365,7 +393,7 @@ impl Keyboards {
                 continue;
             }
             let Ok(fd) = rustix::fs::open(
-                self.dev.join(&name),
+                self.dev.join(name.as_str()),
                 OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC | OFlags::NOCTTY,
                 Mode::empty(),
             ) else {
@@ -415,6 +443,12 @@ impl Drop for Keyboards {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "test fixtures are built with them; the agent is not"
+)]
 mod tests {
     use std::os::unix::net::UnixStream;
 
@@ -523,7 +557,9 @@ mod tests {
         // Not an event node.
         device(root.path(), "mouse0", "120013\n", "fffffffffffffffe\n");
         device(root.path(), "event1", "120013\n", "fffffffffffffffe\n");
-        assert_eq!(keyboards(root.path()), ["event1", "event3"]);
+        let found = keyboards(root.path());
+        let names: Vec<&str> = found.iter().map(Text::as_str).collect();
+        assert_eq!(names, ["event1", "event3"]);
         assert!(keyboards(&root.path().join("missing")).is_empty());
     }
 
