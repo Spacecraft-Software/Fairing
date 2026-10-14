@@ -143,6 +143,9 @@ will not be green there.
   `[Ask]`: systemd writes `Message=` raw, after `Socket=` and `Echo=`, so a newline in a
   device label could otherwise smuggle in a second `Socket=` and redirect the passphrase.
   Never relax that to "last value wins". Errors name the key and line, never the value.
+- The agent replies only to a `Socket=` whose parent is exactly the ask-password directory
+  it watches (maintainer decision T-061, 2026-10-14). A path with `..`, a symlink or any
+  other directory is refused and the request left to the tty agent. Never widen this.
 - Tests that need a DRM device or `/dev/fb0` are `#[ignore]`d and carry no `Verifies:`
   marker (`cargo test --workspace -- --ignored` on a free text console; they fail without a
   device, as they should). Everything else runs against the memory backend, fake sysfs
