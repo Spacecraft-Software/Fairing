@@ -9,6 +9,22 @@ Fine-grained tasks for the milestone in progress. `PLAN.md` holds the milestone 
 this file holds the steps behind them and is rewritten as milestones open. Ticked means
 done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 
+## M3 — Unlocks a LUKS root
+
+- [ ] T-053 `ask.*` parser in fairing-askpass: 64 KiB and UTF-8 checked before any field, fixed-capacity fields, `Id=`, `Message=`, `Socket=`, `NotAfter=`, `Echo=`, `PID=`
+- [ ] T-054 inotify watcher on `/run/systemd/ask-password/`, polled once per frame, new file seen within 50 ms
+- [ ] T-055 Secret buffer of fixed capacity, zeroised eagerly on reply, cancel, expiry, error and exit (release builds abort on panic); `PR_SET_DUMPABLE=0`, `LimitCORE=0`
+- [ ] T-056 Reply as one datagram on `Socket=`: `+` and the secret on Enter, `-` on Escape
+- [ ] T-057 Keyboard input through evdev: discovery from sysfs capabilities, exclusive grab only while a prompt is open and released within 50 ms, US keymap
+- [ ] T-058 Prompt in the theme's prompt region: message, masked field, `Echo=1` unmasked, rejection notice on a repeated `Id=`, prompt removed at `NotAfter=`
+- [ ] T-059 Splash integration and fail-open: the agent runs in the splash loop; an agent that cannot start exits 0 within 1 s so the console agent prompts; the console agent stands aside only while Fairing's agent is up
+- [ ] T-060 cargo-fuzz targets for the `ask.*` parser and the theme artefact, run in CI
+- [ ] T-061 Safety argument for zeroisation and no secret leak (manual node), lint against content-sized allocation in fairing-askpass
+- [ ] T-062 LUKS VM test: encrypted root, the prompt answered inside the splash, boot reaches greetd; agent-disabled variant boots through the console agent
+- [ ] T-063 DEPENDENCIES.md rows for the M3 crates; manual, README, AGENTS, SKILL, CHANGELOG
+- [ ] T-064 Adversarial review folded in
+- [ ] T-065 M3 pull request reviewed and merged
+
 ## M2 — Boots on Bravais
 
 - [x] T-031 Theme contract `contracts/fairing-theme.ncl` and the reference theme `themes/steelbore.ncl` (the built-in layout written out)
@@ -29,10 +45,10 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-049 Adversarial review and research critique folded in: explicit handoff marker, READY=1 on every path, stage 2 timed from its own start, one re-open per frame, bounded D-Bus handshake, job start order for the status line, failed-unit baseline, emergency and rescue conflicts, private socket refused by identity, palette skipped not fatal in the splash, tint and image limits checked early, Nickel nesting bound, `fairing-handoff.service` (greetd is `Type=idle`), `boot-finished` exit, `release_ms` in the report, named missing arguments; from the TCG VM runs, the handoff held until logins are allowed (`After=systemd-user-sessions.service`) and a late page flip left in flight, its frames dropped until it lands (2 s stall bound); from the Codex review, flips queued without waiting so SIGTERM never waits on the display
 - [ ] T-050 Evaluate Nickel in a child process under memory and stack limits, so any runaway theme (unbounded recursion, a deep import) exits 2 instead of aborting; M2's mitigation is the 5 s deadline and the 256-level nesting bound on the theme file
 - [ ] T-051 A stage-2 splash with no D-Bus connection on a boot without greetd has nothing to end it but shutdown; decide a module-side stop (a oneshot after `multi-user.target`) or a time bound
-- [ ] T-052 Event-driven failure detection (systemd's `JobRemoved` and `PropertiesChanged` signals) so FRN-SRS-034's 1 s holds when PID 1 is slow: polled, a failure shows within 250 ms plus five property reads, inside 1 s only while each read takes under about 140 ms
+- [ ] T-052 (scheduled for M4 as P-045) Event-driven failure detection (systemd's `JobRemoved` and `PropertiesChanged` signals) so FRN-SRS-034's 1 s holds when PID 1 is slow: polled, a failure shows within 250 ms plus five property reads, inside 1 s only while each read takes under about 140 ms
 - [ ] T-046 G1 decisions: the FRN-SRS-032 amendment (handoff by stop, not `Conflicts=`); the FRN-SRS-010 wording and carrier; FRN-SRS-034 as a transition (failures already present at the first reading do not count); `PrivateTmp=disconnected` for FRN-SRS-093 (`yes` orders the splash after tmpfiles setup); the third unit of FRN-SRS-090 at M4; nickel-lang-core's licence and advisory; the stage-2 binary over 2.5 MiB (maintainer)
 - [ ] T-047 Hardware run on the T490s with the module enabled: first frame, 30 Hz, added boot time (maintainer)
-- [ ] T-048 M2 pull request reviewed and merged
+- [x] T-048 M2 pull request reviewed and merged
 
 ## M1 — Draws a frame
 

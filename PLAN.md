@@ -59,6 +59,7 @@ reads this file.
 - [ ] P-042 Reduced-motion handling and frame-sequence playback (FRN-SRS-051, 052)
 - [ ] P-043 Shutdown splash (FRN-SRS-035)
 - [ ] P-044 Screen-reader verification on the console with a dated note in README.md (§18.4)
+- [ ] P-045 Event-driven failure detection from systemd's JobRemoved and PropertiesChanged signals, so a failed unit ends the splash within 1 s however slowly PID 1 answers (FRN-SRS-034; T-052)
 
 ## M5 — Release 0.1
 
