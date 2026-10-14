@@ -15,7 +15,7 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-054 inotify watcher on `/run/systemd/ask-password/`, polled once per frame, new file seen within 50 ms
 - [ ] T-055 Secret buffer of fixed capacity, zeroised eagerly on reply, cancel, expiry, error and exit (release builds abort on panic); `PR_SET_DUMPABLE=0`, `LimitCORE=0`
 - [x] T-056 Reply as one datagram on `Socket=`: `+` and the secret on Enter, `-` on Escape
-- [ ] T-057 Keyboard input through evdev: discovery from sysfs capabilities, exclusive grab only while a prompt is open and released within 50 ms, US keymap
+- [x] T-057 Keyboard input through evdev: discovery from sysfs capabilities, exclusive grab only while a prompt is open and released within 50 ms, US keymap
 - [ ] T-058 Prompt in the theme's prompt region: message, masked field, `Echo=1` unmasked, rejection notice on a repeated `Id=`, prompt removed at `NotAfter=`
 - [ ] T-059 Splash integration and fail-open: the agent runs in the splash loop; an agent that cannot start exits 0 within 1 s so the console agent prompts; the console agent stands aside only while Fairing's agent is up
 - [ ] T-060 cargo-fuzz targets for the `ask.*` parser and the theme artefact, run in CI

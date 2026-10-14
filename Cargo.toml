@@ -39,6 +39,9 @@ tiny-skia = { version = "0.12.0", default-features = false, features = ["std", "
 fontdue = { version = "0.9.4", default-features = false, features = ["simd", "hashbrown"] }
 drm = "0.15.0"
 rustix = { version = "1.1", default-features = false, features = ["event", "fs", "std", "time"] }
+# Keyboard grab in fairing-askpass (M3, FRN-SRS-028): only open-from-fd and
+# EVIOCGRAB are used; events are read into Fairing's own zeroised buffer.
+evdev = { version = "0.13.2", default-features = false }
 # Secret zeroisation in fairing-askpass (M3, FRN-SRS-024): volatile writes the
 # optimiser cannot drop. No features: no derive macro, no alloc impls needed.
 zeroize = { version = "1.8", default-features = false }

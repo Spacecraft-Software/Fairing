@@ -128,6 +128,7 @@ Facts are from the lockfile, the crate's manifest and sources, and the RustSec d
 | Crate | Version | Purpose | Provenance (repo · licence) | Maintenance | Security history | Unsafe posture | Transitive | Alternatives | Exit plan |
 |---|---|---|---|---|---|---|---|---|---|
 | `zeroize` | 1.9.1 | Zeroising the typed secret and the reply datagram with writes the optimiser cannot drop (FRN-SRS-024); default features off, so no derive macro and no `alloc` impls | RustCrypto/utils · Apache-2.0 OR MIT | RustCrypto's maintained utility crate; rust-version 1.85 | No RUSTSEC advisories | About a dozen sites: `ptr::write_volatile` over the buffer, then a compiler fence (`barrier.rs`), and `as_bytes_mut`/`as_mut_vec` impls Fairing does not use. Fairing zeroises only fixed `[u8; N]` arrays, the simplest case of `volatile_set` | 0 | A hand-written volatile loop (unsafe in Fairing, which forbids it) | An in-house volatile-write helper in a separately qualified crate |
+| `evdev` | 0.13.2 | Keyboards for the password prompt (FRN-SRS-028): wraps a descriptor Fairing opened itself (`RawDevice::from_fd`) and issues `EVIOCGRAB` (`grab`/`ungrab`). Nothing else: events are read with `rustix` into Fairing's own stack buffer, zeroised after each read, never into evdev's heap event buffer. Default features off (no tokio, serde or futures) | cmr/evdev · Apache-2.0 OR MIT | Maintained; the most used evdev crate | No RUSTSEC advisories | ioctl wrappers in `sys.rs` and `raw_stream.rs` (about 30 sites) through `nix`'s `ioctl_*!` macros; the two Fairing calls are `EVIOCGRAB` with 1 and 0. `from_fd` also issues read-only `EVIOCG*` queries (name, id, capability bits) | 9: `nix` 0.29 (unsafe at the syscall boundary), `libc`, `bitvec` 1.1 with `funty`, `radium`, `tap`, `wyz` (safe bit containers, the capability sets), `cfg-if`, `cfg_aliases` (build only) | `input-linux` (also on `nix`); `rustix::ioctl` (unsafe in Fairing, which forbids it) | A separately qualified crate exposing only a safe `EVIOCGRAB` on `rustix`'s ioctl, which removes `nix` and `bitvec` |
 
 ### Accepted advisories (M2)
 
@@ -159,9 +160,7 @@ Development-only (not shipped, not on any trust path): `assert_cmd` 2.2.2, `pred
 Seeded from the PRD's dependency table; each row is completed with the §24.1 fields
 when the crate is added, never before `cargo audit` and `cargo deny` have run on it.
 
-| Crate | Purpose | Trust path | Unsafe posture accepted | Exit plan |
-|---|---|---|---|---|
-| `evdev` | Keyboard input, exclusive grab | Yes (agent) | ioctl wrappers | `rustix` directly |
+Every crate the PRD's table names has now been adopted; nothing is planned.
 
 **Not adopted:** direct `libc` use (`rustix` covers it), `gstreamer` (a large C surface for no
 v1 feature), Plymouth compatibility shims, `crossbeam-channel` (std's `mpsc` is the same

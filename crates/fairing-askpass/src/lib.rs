@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ask;
+pub mod input;
 pub mod reply;
 pub mod secret;
 pub mod watch;
