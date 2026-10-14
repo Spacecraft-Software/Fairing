@@ -270,6 +270,7 @@ pub const DIAGNOSTIC_CODES: &[&str] = &[
     "AGENT_FLAG",
     "ASK_OPENED",
     "ASK_NO_KEYBOARD",
+    "ASK_KEYBOARDS",
     "ASK_ANSWERED",
     "ASK_CANCELLED",
     "ASK_CLOSED",

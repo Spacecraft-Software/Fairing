@@ -76,6 +76,9 @@ pub enum Activity {
     Idle,
     /// A question opened; the number of keyboards grabbed for it.
     Opened(usize),
+    /// The keyboards held for the open question changed, as when one
+    /// appears after the question opened; how many are held now.
+    Keyboards(usize),
     /// The question was answered.
     Answered,
     /// The question was cancelled with Escape.
@@ -116,6 +119,8 @@ pub struct Agent<K: KeySource> {
     last_answer: Option<(Text<ID_CAPACITY>, u64)>,
     next_scan_us: u64,
     next_keyboard_scan_us: u64,
+    /// Keyboards held for the open question.
+    held: usize,
 }
 
 impl<K: KeySource> core::fmt::Debug for Agent<K> {
@@ -162,6 +167,7 @@ impl<K: KeySource> Agent<K> {
             last_answer: None,
             next_scan_us: 0,
             next_keyboard_scan_us: 0,
+            held: 0,
         }
     }
 
@@ -193,8 +199,11 @@ impl<K: KeySource> Agent<K> {
         if now_us >= self.next_keyboard_scan_us {
             self.next_keyboard_scan_us = now_us.saturating_add(KEYBOARD_RESCAN_US);
             let held = self.keys.grab();
-            if let Activity::Opened(_) = activity {
-                activity = Activity::Opened(held);
+            if held != self.held {
+                self.held = held;
+                if activity == Activity::Idle {
+                    activity = Activity::Keyboards(held);
+                }
             }
         }
         let mut end = None;
@@ -246,10 +255,12 @@ impl<K: KeySource> Agent<K> {
                 id == question.ask.id && now_us.saturating_sub(at) <= REJECTION_WINDOW_US
             });
             self.next_keyboard_scan_us = now_us.saturating_add(KEYBOARD_RESCAN_US);
-            return Activity::Opened(self.keys.grab());
+            self.held = self.keys.grab();
+            return Activity::Opened(self.held);
         }
         self.rejected = false;
         self.keys.release();
+        self.held = 0;
         if was_open {
             Activity::Closed
         } else {
@@ -274,6 +285,7 @@ impl<K: KeySource> Agent<K> {
         self.secret.clear();
         self.current = None;
         self.keys.release();
+        self.held = 0;
     }
 }
 
@@ -297,6 +309,8 @@ mod tests {
         pending: VecDeque<Key>,
         grabbed: bool,
         grabs: usize,
+        /// No keyboard has appeared yet.
+        absent: bool,
     }
 
     impl Script {
@@ -311,7 +325,7 @@ mod tests {
                 self.grabs += 1;
             }
             self.grabbed = true;
-            1
+            usize::from(!self.absent)
         }
 
         fn release(&mut self) {
@@ -411,6 +425,18 @@ mod tests {
         // systemd has not removed the file yet: it is not asked again.
         assert_eq!(f.tick(1_000_000), Activity::Idle);
         assert!(f.agent.view().is_none());
+    }
+
+    #[test]
+    fn a_keyboard_that_appears_late_is_reported() {
+        let mut f = fixture();
+        f.agent.keys.absent = true;
+        f.ask("ask.1", "");
+        assert_eq!(f.tick(1_000), Activity::Opened(0));
+        assert_eq!(f.tick(500_000), Activity::Idle, "rescanned once a second");
+        f.agent.keys.absent = false;
+        assert_eq!(f.tick(1_001_000), Activity::Keyboards(1));
+        assert_eq!(f.tick(2_001_000), Activity::Idle, "reported once");
     }
 
     #[test]

@@ -136,9 +136,12 @@ will not be green there.
   in `fairing-askpass` (`Secret`, a fixed 512-byte buffer); the rest of the process sees
   a `PromptView` with the count typed, or the text only under `Echo=1`. Keyboards are
   grabbed only while a question is open and released the tick it closes. While the agent
-  is up, `/run/fairing/agent` exists and systemd's console agent is conditioned on its
-  absence (as upstream does for Plymouth); both units' `ExecStopPost=` remove it and
-  restart the console agent's path unit, so a question survives a crashed splash. With
+  is up, `/run/fairing/agent` exists and systemd's console agent, its `.path` watch as
+  well as its service, is conditioned on its absence (as upstream does for Plymouth).
+  Both units' `ExecStartPost=` try-restart the watch so the condition is checked once the
+  agent is up (a watch left running fires the skipped service until it hits its trigger
+  limit and fails), and their `ExecStopPost=` remove the flag and restart the watch, so a
+  question survives a crashed splash. With
   the agent on, never add `Conflicts=systemd-ask-password-console.service`: the conflict
   is applied when the start job is queued, before the condition is checked, and would
   stop the splash. An agent that cannot start ends the run as `agent-failed`.

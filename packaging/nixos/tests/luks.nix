@@ -95,7 +95,9 @@ pkgs.testers.runNixOSTest {
       if agent then
         ''
           # The splash's journal line, forwarded to the serial console.
-          machine.wait_for_console_text("a password question is open; 1 keyboard")
+          # The question can open before the keyboard has enumerated; either
+          # journal line says one is grabbed.
+          machine.wait_for_console_text("1 keyboard\\(s\\) grabbed")
           machine.send_chars("supersecret\n")
           machine.wait_for_unit("greetd.service")
 
@@ -106,8 +108,10 @@ pkgs.testers.runNixOSTest {
 
           journal = machine.succeed("journalctl -b -o cat --no-pager")
           assert "the password question was answered" in journal
-          # The console agent was asked to start and stood aside.
-          assert "Dispatch Password Requests to Console was skipped" in journal, "console agent"
+          # The console agent stood aside, and its watch never spun into its
+          # trigger limit.
+          assert "unmet condition check ConditionPathExists=!/run/fairing/agent" in journal, "console agent"
+          assert "Trigger limit hit" not in journal, "console agent watch"
           # FRN-SRS-025: not in any message, field or unit's output.
           machine.fail("journalctl -b -o verbose --no-pager | grep -q supersecret")
           # The flag is gone with the splash.

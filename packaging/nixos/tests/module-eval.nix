@@ -50,6 +50,8 @@ let
   greetdText = systemUnits."greetd.service".text;
   consoleAgentText = systemUnits."systemd-ask-password-console.service".text;
   initrdConsoleAgentText = initrdUnits."systemd-ask-password-console.service".text;
+  consoleWatchText = systemUnits."systemd-ask-password-console.path".text;
+  initrdConsoleWatchText = initrdUnits."systemd-ask-password-console.path".text;
 
   # The same machine with the in-splash agent off.
   noAgent = (evaluate { steelbore.fairing.agent.enable = false; }).config;
@@ -136,6 +138,16 @@ let
     "FRN-SRS-027: the console agent asks only while the splash agent is down" =
       hasLine consoleAgentText "ConditionPathExists=!/run/fairing/agent"
       && hasLine initrdConsoleAgentText "ConditionPathExists=!/run/fairing/agent";
+    "FRN-SRS-027: the console agent's watch is held back the same way" =
+      hasLine consoleWatchText "ConditionPathExists=!/run/fairing/agent"
+      && hasLine initrdConsoleWatchText "ConditionPathExists=!/run/fairing/agent";
+    "the console agent's watch is checked again once the splash agent is up" =
+      lib.all (
+        text:
+        lib.any (lib.hasInfix "try-restart systemd-ask-password-console.path") (
+          lib.filter (lib.hasPrefix "ExecStartPost=") (lib.splitString "\n" text)
+        )
+      ) [ initrdText systemText ];
     "FRN-SRS-027: every way out of either splash lowers the agent flag" =
       agentFlagGone initrdText && agentFlagGone systemText;
     "FRN-SRS-027: every way out of either splash re-arms the console agent" =

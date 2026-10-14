@@ -808,6 +808,17 @@ fn report(env: &Environment<'_>, activity: Activity, outcome: &mut Outcome) {
             "ASK_OPENED",
             format!("a password question is open; {n} keyboard(s) grabbed"),
         ),
+        Activity::Keyboards(0) => (
+            Severity::Warn,
+            "ASK_NO_KEYBOARD",
+            "the keyboards of the open password question have gone; looking again every second"
+                .to_owned(),
+        ),
+        Activity::Keyboards(n) => (
+            Severity::Info,
+            "ASK_KEYBOARDS",
+            format!("{n} keyboard(s) grabbed for the open password question"),
+        ),
         Activity::Answered => {
             outcome.answered = outcome.answered.saturating_add(1);
             (

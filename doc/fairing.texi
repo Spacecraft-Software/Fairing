@@ -645,10 +645,13 @@ sent.
 
 @cindex fail-open
 While the agent is up, @file{/run/fairing/agent} exists, and the NixOS module
-conditions systemd's console agent on its absence, as systemd itself does for
-Plymouth.  Every way out of the splash, a crash included, removes the file
-and starts the console agent's path unit again, so a question still open is
-asked on the console.  An agent that cannot start ends the splash at once
+conditions systemd's console agent on its absence, both its directory watch
+(the @code{.path} unit) and its service, as systemd itself does for Plymouth.
+Once the splash is ready, its unit starts the watch again so the condition is
+checked with the agent up; a watch left running would fire the skipped service
+at every question until it hit its trigger limit and failed.  Every way out of
+the splash, a crash included, removes the file and starts the watch again, so
+a question still open is asked on the console.  An agent that cannot start ends the splash at once
 with reason @code{agent-failed}, for the same reason.
 
 @node Safety argument

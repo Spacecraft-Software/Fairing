@@ -72,7 +72,17 @@ let
     "-${systemd}/bin/systemctl --no-block --job-mode=fail restart systemd-ask-password-console.path"
   ];
 
-  # The console agent asks only while Fairing's agent is down.
+  # Once the splash is ready its agent is up and the flag exists: the console
+  # agent's path unit, which may already be watching, is started again so its
+  # condition is checked now. A watch left running would fire the skipped
+  # service at every question until it hits its trigger limit and fails.
+  # `try-restart` leaves a path unit that is not yet active to its own start.
+  agentStartPost = systemd: [
+    "-${systemd}/bin/systemctl --no-block try-restart systemd-ask-password-console.path"
+  ];
+
+  # The console agent, its watch and its service, asks only while Fairing's
+  # agent is down; systemd conditions both the same way on Plymouth.
   consoleAgentDropIn = {
     unitConfig.ConditionPathExists = "!/run/fairing/agent";
   };
@@ -233,6 +243,7 @@ in
       ++ lib.optional (!cfg.agent.enable) consoleAgent;
       serviceConfig = common // {
         ExecStart = splash cfg.initrdPackage "initrd";
+        ExecStartPost = lib.mkIf cfg.agent.enable (agentStartPost config.boot.initrd.systemd.package);
         ExecStopPost = lib.mkIf cfg.agent.enable (
           agentStopPost config.boot.initrd.systemd.package pkgs.coreutils
         );
@@ -280,6 +291,7 @@ in
       stopIfChanged = false;
       serviceConfig = common // {
         ExecStart = splash cfg.splashPackage "system";
+        ExecStartPost = lib.mkIf cfg.agent.enable (agentStartPost config.systemd.package);
         ExecStopPost = lib.mkIf cfg.agent.enable (agentStopPost config.systemd.package pkgs.coreutils);
         RuntimeDirectory = "fairing";
         StateDirectory = "fairing";
@@ -315,6 +327,9 @@ in
     boot.initrd.systemd.services.systemd-ask-password-console =
       lib.mkIf cfg.agent.enable consoleAgentDropIn;
     systemd.services.systemd-ask-password-console = lib.mkIf cfg.agent.enable consoleAgentDropIn;
+    boot.initrd.systemd.paths.systemd-ask-password-console =
+      lib.mkIf cfg.agent.enable consoleAgentDropIn;
+    systemd.paths.systemd-ask-password-console = lib.mkIf cfg.agent.enable consoleAgentDropIn;
 
     # The handoff (FRN-SRS-017, FRN-SRS-032): greetd's start pulls this in and
     # waits for it. It marks the handoff, then stops the splash and waits for
