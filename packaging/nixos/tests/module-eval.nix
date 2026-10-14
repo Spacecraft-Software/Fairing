@@ -175,6 +175,8 @@ let
     ) config.boot.initrd.systemd.storePaths;
     "FRN-SRS-090: simpledrm is loaded in the initrd" =
       lib.elem "simpledrm" config.boot.initrd.kernelModules;
+    "the agent's keyboards are readable in the initrd: evdev is loaded" =
+      lib.elem "evdev" config.boot.initrd.kernelModules;
     "FRN-SRS-090: quiet and splash are on the kernel command line" =
       lib.all (p: lib.elem p config.boot.kernelParams) [
         "quiet"

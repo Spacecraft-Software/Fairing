@@ -534,7 +534,8 @@ steelbore.fairing = @{
 
 Enabling it compiles the theme at build time, copies the artefact and a small
 build of Fairing into the systemd initrd, adds @code{simpledrm} and the
-listed KMS drivers to the initrd, adds @code{quiet} and @code{splash} to the
+listed KMS drivers to the initrd (and @code{evdev}, through which the password
+agent reads keyboards), adds @code{quiet} and @code{splash} to the
 kernel command line, and installs three units.  The module requires the
 systemd initrd and greetd, and refuses a configuration that also enables
 Plymouth or names an unregistered palette.

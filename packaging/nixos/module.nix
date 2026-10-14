@@ -203,7 +203,13 @@ in
       "quiet"
       "splash"
     ];
-    boot.initrd.kernelModules = [ "simpledrm" ] ++ cfg.kmsModules;
+    # evdev: the agent reads keyboards through /dev/input/event*, and NixOS
+    # builds evdev as a module that nothing else loads in the initrd.
+    boot.initrd.kernelModules = [
+      "simpledrm"
+    ]
+    ++ cfg.kmsModules
+    ++ lib.optional cfg.agent.enable "evdev";
 
     environment.systemPackages = [ cfg.package ];
 

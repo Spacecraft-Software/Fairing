@@ -804,7 +804,8 @@ fn report(env: &Environment<'_>, activity: Activity, outcome: &mut Outcome) {
         Activity::Opened(0) => (
             Severity::Warn,
             "ASK_NO_KEYBOARD",
-            "a password question is open, but no keyboard was found; looking again every second"
+            "a password question is open, but no keyboard was found (keyboards are read \
+             through evdev, which must be loaded); looking again every second"
                 .to_owned(),
         ),
         Activity::Opened(n) => (
