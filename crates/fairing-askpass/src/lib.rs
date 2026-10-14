@@ -18,6 +18,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod agent;
 pub mod ask;
 pub mod input;
 pub mod reply;

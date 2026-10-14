@@ -140,9 +140,9 @@ impl Watcher {
         }
     }
 
-    /// The question to show: the lowest-named `ask.*` file that parses and
-    /// has not expired at `now_us` (`CLOCK_MONOTONIC`, µs). `None` when there
-    /// is none.
+    /// The question to show: the lowest-named `ask.*` file that parses, has
+    /// not expired at `now_us` (`CLOCK_MONOTONIC`, µs) and is not `skip` (one
+    /// already answered). `None` when there is none.
     ///
     /// A file that cannot be read or parsed is passed over, never fatal:
     /// another agent may still answer it.
@@ -150,13 +150,17 @@ impl Watcher {
     /// # Errors
     ///
     /// The error from reading the directory itself.
-    pub fn first(&mut self, now_us: u64) -> io::Result<Option<Question>> {
+    pub fn first(
+        &mut self,
+        now_us: u64,
+        skip: Option<&Text<NAME_CAPACITY>>,
+    ) -> io::Result<Option<Question>> {
         let mut best: Option<Question> = None;
         for entry in fs::read_dir(&self.dir)? {
             let Ok(entry) = entry else { continue };
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
-            if !name.starts_with("ask.") {
+            if !name.starts_with("ask.") || skip.is_some_and(|s| s.as_str() == name) {
                 continue;
             }
             if best.is_some_and(|b| b.name.as_str() <= name) {
@@ -256,7 +260,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         let found = watcher
-            .first(monotonic_us())
+            .first(monotonic_us(), None)
             .unwrap_or_else(|e| panic!("{e}"))
             .unwrap_or_else(|| panic!("no question"));
         assert!(
@@ -272,7 +276,12 @@ mod tests {
         let (dir, mut watcher) = open();
         fs::write(dir.path().join("sck.1"), b"").unwrap_or_else(|e| panic!("{e}"));
         assert!(!watcher.changed().unwrap_or_else(|e| panic!("{e}")));
-        assert!(watcher.first(0).unwrap_or_else(|e| panic!("{e}")).is_none());
+        assert!(
+            watcher
+                .first(0, None)
+                .unwrap_or_else(|e| panic!("{e}"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -282,7 +291,25 @@ mod tests {
         assert!(watcher.changed().unwrap_or_else(|e| panic!("{e}")));
         fs::remove_file(dir.path().join("ask.a")).unwrap_or_else(|e| panic!("{e}"));
         assert!(watcher.changed().unwrap_or_else(|e| panic!("{e}")));
-        assert!(watcher.first(0).unwrap_or_else(|e| panic!("{e}")).is_none());
+        assert!(
+            watcher
+                .first(0, None)
+                .unwrap_or_else(|e| panic!("{e}"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn an_answered_file_is_skipped() {
+        let (dir, mut watcher) = open();
+        ask(dir.path(), "ask.a", &question("/run/sck.a", ""));
+        ask(dir.path(), "ask.b", &question("/run/sck.b", ""));
+        let done = Text::exact("ask.a");
+        let found = watcher
+            .first(0, done.as_ref())
+            .unwrap_or_else(|e| panic!("{e}"))
+            .unwrap_or_else(|| panic!("no question"));
+        assert_eq!(found.name.as_str(), "ask.b");
     }
 
     #[test]
@@ -303,7 +330,7 @@ mod tests {
         big.push_str(&"#".repeat(MAX_FILE));
         ask(dir.path(), "ask.00", &big);
         let found = watcher
-            .first(1_000)
+            .first(1_000, None)
             .unwrap_or_else(|e| panic!("{e}"))
             .unwrap_or_else(|| panic!("no question"));
         assert_eq!(found.name.as_str(), "ask.b");
@@ -325,7 +352,12 @@ mod tests {
             0,
         )
         .unwrap_or_else(|e| panic!("{e}"));
-        assert!(watcher.first(0).unwrap_or_else(|e| panic!("{e}")).is_none());
+        assert!(
+            watcher
+                .first(0, None)
+                .unwrap_or_else(|e| panic!("{e}"))
+                .is_none()
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Rust guideline compliant 2026-05-18
 
-//! What a frame shows: progress and the status line.
+//! What a frame shows: progress, the status line and a password prompt.
 
 use std::fmt;
 
@@ -21,6 +21,30 @@ pub struct Scene {
     /// Progress in ten-thousandths, `0..=STEPS`.
     steps: u16,
     status: Option<String>,
+    prompt: Option<PromptView>,
+}
+
+/// What the input field of a prompt shows.
+///
+/// A masked field carries only how many characters were typed: the secret
+/// itself never leaves the password agent (FRN-SRS-021, FRN-SRS-025).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Field {
+    /// One mark per character typed.
+    Masked(usize),
+    /// The input as typed, for a question asked with `Echo=1` (FRN-SRS-026).
+    Clear(String),
+}
+
+/// A password prompt as the compositor draws it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptView {
+    /// The question's `Message=`.
+    pub message: String,
+    /// The input field.
+    pub field: Field,
+    /// A notice beside the prompt, such as a rejected answer (FRN-SRS-029).
+    pub notice: Option<String>,
 }
 
 impl Scene {
@@ -30,6 +54,7 @@ impl Scene {
         Self {
             steps: u16::from(percent.min(100)) * (STEPS / 100),
             status: None,
+            prompt: None,
         }
     }
 
@@ -48,6 +73,7 @@ impl Scene {
         Self {
             steps: steps.min(STEPS),
             status: None,
+            prompt: None,
         }
     }
 
@@ -64,6 +90,19 @@ impl Scene {
             .collect();
         self.status = (!status.trim().is_empty()).then_some(status);
         self
+    }
+
+    /// Shows `prompt`, or none.
+    #[must_use]
+    pub fn with_prompt(mut self, prompt: Option<PromptView>) -> Self {
+        self.prompt = prompt;
+        self
+    }
+
+    /// The prompt, if one is open.
+    #[must_use]
+    pub const fn prompt(&self) -> Option<&PromptView> {
+        self.prompt.as_ref()
     }
 
     /// Progress in whole percent, rounded down, `0..=100`.
