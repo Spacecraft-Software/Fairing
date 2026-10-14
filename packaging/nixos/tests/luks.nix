@@ -58,6 +58,10 @@ pkgs.testers.runNixOSTest {
       };
 
       specialisation.boot-luks.configuration = {
+        # With the agent on, the test looks inside the initrd while the
+        # question is open: a shell there, and grep for the journal.
+        testing.initrdBackdoor = agent;
+        boot.initrd.systemd.storePaths = lib.optional agent "${pkgs.gnugrep}/bin/grep";
         boot.initrd.luks.devices = lib.mkVMOverride {
           cryptroot.device = "/dev/vdb";
         };
@@ -98,11 +102,30 @@ pkgs.testers.runNixOSTest {
     + (
       if agent then
         ''
-          # The splash's journal line, forwarded to the serial console.
-          # The question can open before the keyboard has enumerated; either
-          # journal line says one is grabbed.
-          machine.wait_for_console_text("1 keyboard\\(s\\) grabbed", timeout=PATIENCE)
+          # The initrd, through its backdoor shell: the question is asked, and
+          # the splash says it holds a keyboard for it. The question can open
+          # before the keyboard has enumerated; either journal line says so.
+          grep = "${pkgs.gnugrep}/bin/grep"
+          machine.wait_until_succeeds("ls /run/systemd/ask-password/ask.*", timeout=PATIENCE)
+          try:
+              machine.wait_until_succeeds(
+                  f"journalctl -b -u fairing-initrd.service -o cat --no-pager | {grep} -q 'keyboard(s) grabbed'",
+                  timeout=PATIENCE,
+              )
+          except Exception:
+              # What the splash saw, for the log.
+              print(machine.execute(
+                  "journalctl -b -u fairing-initrd.service -o cat --no-pager; "
+                  "systemctl status fairing-initrd.service --no-pager; "
+                  "ls -l /sys/class/input/ /dev/input/; "
+                  "for e in /sys/class/input/event*; do echo $e; "
+                  "cat $e/device/name $e/device/capabilities/ev $e/device/capabilities/key; done; "
+                  "ls -l /run/systemd/ask-password/ /run/fairing/",
+                  check_return=False,
+              )[1])
+              raise
           machine.send_chars("supersecret\n")
+          machine.switch_root()
           machine.wait_for_unit("greetd.service", timeout=PATIENCE)
 
           initrd = report("fairing-initrd.service")
