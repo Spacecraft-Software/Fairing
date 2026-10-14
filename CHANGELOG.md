@@ -35,6 +35,11 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
   the theme artefact run in CI, and a crate-local clippy configuration refuses
   content-sized allocation. A LUKS VM test runs with and without the agent, and the
   manual gains a "Password agent" chapter with the safety argument.
+- `flake.lock`, pinning nixpkgs (nixos-unstable) at `7fd4004` from 2026-10-11. CI's `nix`
+  job now runs against it with `--no-update-lock-file`.
+- M1 figures from the reference machine (ThinkPad T490s, 1920x1080, 2026-10-14): the DRM
+  backend drew its first frame in 20.5 ms and held 30.06 Hz; fbdev 37.8 ms and 30.13 Hz;
+  no dropped frames in either 5 s run. Both hardware-only tests pass on a free VT.
 - M2 boot integration. Themes: the Nickel contract `contracts/fairing-theme.ncl` and the
   reference theme `themes/steelbore.ncl`; `fairing theme check|compile|inspect`, which
   evaluate a theme in memory against the embedded contract and print Nickel's own

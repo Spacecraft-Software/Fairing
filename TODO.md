@@ -62,7 +62,7 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-026 fairing preview verb: flags, agent rule, dry run, PPM snapshot, structured report; PERMISSION_DENIED error code; schema and describe rows; CLI tests with Verifies markers
 - [x] T-027 Font assets with REUSE sidecars and LICENSES/OFL-1.1.txt; .gitattributes binary declarations; deny.toml Zlib
 - [x] T-028 DEPENDENCIES.md rows for every M1 crate, accepted advisory RUSTSEC-2026-0192, bundled-asset table; README, AGENTS, SKILL, CHANGELOG, NOTICE, manual chapter
-- [ ] T-029 Hardware run on the reference machine (ThinkPad T490s): `cargo test --workspace -- --ignored` on a free VT; record first-frame and 30 Hz figures (maintainer)
+- [x] T-029 Hardware run on the reference machine (ThinkPad T490s): `cargo test --workspace -- --ignored` on a free VT, both ignored tests green; 1920x1080, 5 s `preview`, 152 frames, none dropped: DRM first frame 20.5 ms at 30.06 Hz, fbdev 37.8 ms at 30.13 Hz (2026-10-14, kernel 7.2.10)
 - [x] T-030 M1 pull request reviewed and merged
 
 ## M0 — Repository and posture
@@ -82,7 +82,7 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-013 PLAN.md and TODO.md in §17.5 shape; cargo xtask progress renders them
 - [x] T-014 .github/workflows/ci.yml: fmt, clippy, test, deny, audit, reuse, eol, texinfo, trace
 - [x] T-015 flake.nix and packaging/default.nix
-- [ ] T-016 flake.lock generated and committed (needs github.com access; maintainer)
+- [x] T-016 flake.lock generated and committed (nixos-unstable at 7fd4004, 2026-10-11)
 - [x] T-017 PRD doc: open questions Q-1 to Q-7 recorded as answered 2026-10-06
 - [x] T-018 Draft pull request open against main with CI green
 - [ ] T-019 PROJECTS.md row added in the Projects repository (maintainer)

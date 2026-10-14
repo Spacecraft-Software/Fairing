@@ -87,8 +87,9 @@ jobs:
           echo "initrd binary: $bytes of $limit bytes"
           test "$bytes" -le "$limit"
 
-  # The NixOS module: evaluation checks everywhere, VM tests on KVM. Until
-  # flake.lock is committed (P-101) the inputs resolve at run time.
+  # The NixOS module: evaluation checks everywhere, VM tests on KVM. Inputs come
+  # from the committed flake.lock (P-101); a lock that no longer matches flake.nix
+  # fails the job instead of being rewritten.
   nix:
     runs-on: ubuntu-latest
     steps:
@@ -103,7 +104,7 @@ jobs:
         with:
           extra_nix_config: |
             system-features = nixos-test benchmark big-parallel kvm
-      - run: nix flake check -L --no-write-lock-file
+      - run: nix flake check -L --no-update-lock-file
 
   # The two parsers of untrusted bytes, under libFuzzer: two minutes a
   # target on a pull request, ten on main and on a release tag. A crash
