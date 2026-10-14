@@ -10,6 +10,8 @@ members = [
   "crates/fairing-askpass",
   "xtask",
 ]
+# The fuzz targets are a workspace of their own (nightly, libfuzzer-sys).
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.0"

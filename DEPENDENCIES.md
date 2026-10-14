@@ -140,7 +140,10 @@ Facts are from the lockfile, the crate's manifest and sources, and the RustSec d
 | RUSTSEC-2024-0449 | `unsafe-libyaml` 0.2.11 (via `serde_yaml` 0.9.34, via `nickel-lang-core` 0.19.0) | Informational: unmaintained; no patched version | Accepted as a warning: `cargo audit` reports it and `cargo deny check advisories` passes. Nickel links it to import YAML files; Fairing's contract never imports one, and only `fairing theme check\|compile` links it, never a splash binary. It leaves with the `nickel` subprocess exit plan | G1 (maintainer) |
 
 Development-only (not shipped, not on any trust path): `assert_cmd` 2.2.2, `predicates`
-3.1.4, `tempfile` 3.27.0 (all MIT OR Apache-2.0).
+3.1.4, `tempfile` 3.27.0 (all MIT OR Apache-2.0). The fuzz targets (`fuzz/`, a workspace
+of their own with its own lockfile, built only by the nightly CI `fuzz` job) add
+`libfuzzer-sys` 0.4.13 (MIT OR Apache-2.0 OR NCSA; it compiles LLVM's libFuzzer, C++) and
+`arbitrary` 1.5.0 (MIT OR Apache-2.0); neither reaches a Fairing binary.
 
 ### Accepted advisories (M1)
 
