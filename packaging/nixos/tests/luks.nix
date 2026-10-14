@@ -71,7 +71,11 @@ pkgs.testers.runNixOSTest {
       boot-luks = nodes.machine.specialisation.boot-luks.configuration.system.build.toplevel;
     in
     ''
+      import datetime as dt
       import json
+
+      # A boot that stalls fails in minutes, not at the driver's one-hour limit.
+      PATIENCE = dt.timedelta(minutes=5)
 
       def report(unit):
           """The splash's JSON report for this boot, from its journal."""
@@ -97,9 +101,9 @@ pkgs.testers.runNixOSTest {
           # The splash's journal line, forwarded to the serial console.
           # The question can open before the keyboard has enumerated; either
           # journal line says one is grabbed.
-          machine.wait_for_console_text("1 keyboard\\(s\\) grabbed")
+          machine.wait_for_console_text("1 keyboard\\(s\\) grabbed", timeout=PATIENCE)
           machine.send_chars("supersecret\n")
-          machine.wait_for_unit("greetd.service")
+          machine.wait_for_unit("greetd.service", timeout=PATIENCE)
 
           initrd = report("fairing-initrd.service")
           assert initrd["agent"], initrd
@@ -119,9 +123,9 @@ pkgs.testers.runNixOSTest {
         ''
       else
         ''
-          machine.wait_for_console_text("Please enter passphrase for disk cryptroot")
+          machine.wait_for_console_text("Please enter passphrase for disk cryptroot", timeout=PATIENCE)
           machine.send_console("supersecret\n")
-          machine.wait_for_unit("greetd.service")
+          machine.wait_for_unit("greetd.service", timeout=PATIENCE)
 
           initrd = report("fairing-initrd.service")
           assert not initrd["agent"], initrd

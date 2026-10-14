@@ -794,6 +794,10 @@ impl Session {
 }
 
 /// One journal line for what the agent did; never the secret, nor its length.
+///
+/// Each is an `[OK]` side effect or a `[WARN]`, never `[INFO]`, which the
+/// default severity floor hides: the journal must say when a question opened,
+/// which keyboards were grabbed and how it ended.
 fn report(env: &Environment<'_>, activity: Activity, outcome: &mut Outcome) {
     let (severity, code, message) = match activity {
         Activity::Idle => return,
@@ -804,7 +808,7 @@ fn report(env: &Environment<'_>, activity: Activity, outcome: &mut Outcome) {
                 .to_owned(),
         ),
         Activity::Opened(n) => (
-            Severity::Info,
+            Severity::Ok,
             "ASK_OPENED",
             format!("a password question is open; {n} keyboard(s) grabbed"),
         ),
@@ -815,25 +819,32 @@ fn report(env: &Environment<'_>, activity: Activity, outcome: &mut Outcome) {
                 .to_owned(),
         ),
         Activity::Keyboards(n) => (
-            Severity::Info,
+            Severity::Ok,
             "ASK_KEYBOARDS",
             format!("{n} keyboard(s) grabbed for the open password question"),
+        ),
+        Activity::KeyboardRefused(kind) => (
+            Severity::Warn,
+            "ASK_KEYBOARD_REFUSED",
+            format!(
+                "a keyboard was found but could not be grabbed ({kind}); looking again every second"
+            ),
         ),
         Activity::Answered => {
             outcome.answered = outcome.answered.saturating_add(1);
             (
-                Severity::Info,
+                Severity::Ok,
                 "ASK_ANSWERED",
                 "the password question was answered".to_owned(),
             )
         }
         Activity::Cancelled => (
-            Severity::Info,
+            Severity::Ok,
             "ASK_CANCELLED",
             "the password question was cancelled".to_owned(),
         ),
         Activity::Closed => (
-            Severity::Info,
+            Severity::Ok,
             "ASK_CLOSED",
             "the password question closed; keyboards released".to_owned(),
         ),

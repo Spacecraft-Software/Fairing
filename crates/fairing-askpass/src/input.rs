@@ -343,6 +343,9 @@ pub struct Keyboards {
     open: Vec<Keyboard>,
     grabbed: bool,
     map: Keymap,
+    /// The last keyboard the most recent [`Keyboards::grab`] could not take,
+    /// and why.
+    refused: Option<(Text<NODE_CAPACITY>, io::ErrorKind)>,
 }
 
 impl core::fmt::Debug for Keyboards {
@@ -368,6 +371,7 @@ impl Keyboards {
             open: Vec::new(),
             grabbed: false,
             map: Keymap::new(),
+            refused: None,
         }
     }
 
@@ -388,28 +392,40 @@ impl Keyboards {
             self.map.reset();
         }
         self.grabbed = true;
+        self.refused = None;
         for name in keyboards(&self.sysfs) {
             if self.open.iter().any(|k| k.name == name) {
                 continue;
             }
-            let Ok(fd) = rustix::fs::open(
-                self.dev.join(name.as_str()),
-                OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC | OFlags::NOCTTY,
-                Mode::empty(),
-            ) else {
-                continue;
-            };
-            let Ok(mut device) = RawDevice::from_fd(fd) else {
-                continue;
-            };
-            if device.grab().is_err() {
-                continue;
+            match Self::take(&self.dev.join(name.as_str())) {
+                Ok(device) => self.open.push(Keyboard { name, device }),
+                Err(error) => self.refused = Some((name, error.kind())),
             }
-            // Typed before the grab: not part of the answer.
-            let _ignored = drain(device.as_fd(), &mut Keymap::new(), &mut |_key| {});
-            self.open.push(Keyboard { name, device });
         }
         self.open.len()
+    }
+
+    /// Opens `node` without blocking, grabs it, and discards what was typed
+    /// before the grab: it is not part of the answer.
+    fn take(node: &Path) -> io::Result<RawDevice> {
+        let fd = rustix::fs::open(
+            node,
+            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC | OFlags::NOCTTY,
+            Mode::empty(),
+        )?;
+        let mut device = RawDevice::from_fd(fd)?;
+        device.grab()?;
+        let _ignored = drain(device.as_fd(), &mut Keymap::new(), &mut |_key| {});
+        Ok(device)
+    }
+
+    /// The last keyboard the most recent [`Keyboards::grab`] found but could
+    /// not open or grab, and why.
+    #[must_use]
+    pub fn refused(&self) -> Option<(&str, io::ErrorKind)> {
+        self.refused
+            .as_ref()
+            .map(|(name, kind)| (name.as_str(), *kind))
     }
 
     /// Releases every grab and closes every keyboard, at once.

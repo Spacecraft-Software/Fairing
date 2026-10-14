@@ -49,6 +49,10 @@ pub trait KeySource {
     fn grabbed(&self) -> bool;
     /// Passes every key typed since the last call to `f`.
     fn read(&mut self, f: &mut dyn FnMut(Key));
+    /// Why the last [`KeySource::grab`] could not take a keyboard it found.
+    fn refused(&self) -> Option<io::ErrorKind> {
+        None
+    }
 }
 
 impl KeySource for Keyboards {
@@ -67,6 +71,10 @@ impl KeySource for Keyboards {
     fn read(&mut self, f: &mut dyn FnMut(Key)) {
         Self::read(self, f);
     }
+
+    fn refused(&self) -> Option<io::ErrorKind> {
+        Self::refused(self).map(|(_name, kind)| kind)
+    }
 }
 
 /// What a tick did that is worth a journal line. Never carries the secret.
@@ -79,6 +87,9 @@ pub enum Activity {
     /// The keyboards held for the open question changed, as when one
     /// appears after the question opened; how many are held now.
     Keyboards(usize),
+    /// A keyboard was found but could not be opened or grabbed, and none is
+    /// held; reported once per kind of failure.
+    KeyboardRefused(io::ErrorKind),
     /// The question was answered.
     Answered,
     /// The question was cancelled with Escape.
@@ -121,6 +132,8 @@ pub struct Agent<K: KeySource> {
     next_keyboard_scan_us: u64,
     /// Keyboards held for the open question.
     held: usize,
+    /// The keyboard failure last reported, so it is reported once.
+    refusal: Option<io::ErrorKind>,
 }
 
 impl<K: KeySource> core::fmt::Debug for Agent<K> {
@@ -168,6 +181,7 @@ impl<K: KeySource> Agent<K> {
             next_scan_us: 0,
             next_keyboard_scan_us: 0,
             held: 0,
+            refusal: None,
         }
     }
 
@@ -205,6 +219,11 @@ impl<K: KeySource> Agent<K> {
                     activity = Activity::Keyboards(held);
                 }
             }
+            let refused = self.keys.refused().filter(|_| held == 0);
+            if refused.is_some() && refused != self.refusal && activity == Activity::Idle {
+                activity = refused.map_or(Activity::Idle, Activity::KeyboardRefused);
+            }
+            self.refusal = refused;
         }
         let mut end = None;
         let secret = &mut self.secret;
@@ -311,6 +330,8 @@ mod tests {
         grabs: usize,
         /// No keyboard has appeared yet.
         absent: bool,
+        /// Why a keyboard that has appeared cannot be taken.
+        refusing: Option<io::ErrorKind>,
     }
 
     impl Script {
@@ -325,7 +346,11 @@ mod tests {
                 self.grabs += 1;
             }
             self.grabbed = true;
-            usize::from(!self.absent)
+            usize::from(!self.absent && self.refusing.is_none())
+        }
+
+        fn refused(&self) -> Option<io::ErrorKind> {
+            self.refusing
         }
 
         fn release(&mut self) {
@@ -437,6 +462,21 @@ mod tests {
         f.agent.keys.absent = false;
         assert_eq!(f.tick(1_001_000), Activity::Keyboards(1));
         assert_eq!(f.tick(2_001_000), Activity::Idle, "reported once");
+    }
+
+    #[test]
+    fn a_keyboard_that_cannot_be_grabbed_says_why_once() {
+        let mut f = fixture();
+        f.agent.keys.refusing = Some(io::ErrorKind::PermissionDenied);
+        f.ask("ask.1", "");
+        assert_eq!(f.tick(1_000), Activity::Opened(0));
+        assert_eq!(
+            f.tick(1_001_000),
+            Activity::KeyboardRefused(io::ErrorKind::PermissionDenied)
+        );
+        assert_eq!(f.tick(2_001_000), Activity::Idle, "reported once");
+        f.agent.keys.refusing = None;
+        assert_eq!(f.tick(3_001_000), Activity::Keyboards(1));
     }
 
     #[test]
