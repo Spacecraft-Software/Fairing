@@ -33,11 +33,12 @@ regex = "1.13"
 jiff = { version = "0.2", default-features = false, features = ["std"] }
 # Rendering (M1). tiny-skia without `png-format` keeps flate2/png off the boot path;
 # fontdue without `std` uses hashbrown as upstream intends; rustix's `event` feature is
-# the poll() the DRM page-flip wait needs (drm itself enables only `mm` and `fs`).
+# the poll() the DRM page-flip wait needs (drm itself enables only `mm` and `fs`);
+# `fs` is also the inotify watch and `time` CLOCK_MONOTONIC of fairing-askpass (M3).
 tiny-skia = { version = "0.12.0", default-features = false, features = ["std", "simd"] }
 fontdue = { version = "0.9.4", default-features = false, features = ["simd", "hashbrown"] }
 drm = "0.15.0"
-rustix = { version = "1.1", default-features = false, features = ["event", "std"] }
+rustix = { version = "1.1", default-features = false, features = ["event", "fs", "std", "time"] }
 # Secret zeroisation in fairing-askpass (M3, FRN-SRS-024): volatile writes the
 # optimiser cannot drop. No features: no derive macro, no alloc impls needed.
 zeroize = { version = "1.8", default-features = false }

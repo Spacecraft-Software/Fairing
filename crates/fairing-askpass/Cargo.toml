@@ -17,6 +17,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+rustix = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]

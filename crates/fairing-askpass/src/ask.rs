@@ -90,7 +90,7 @@ impl<const N: usize> Text<N> {
     }
 
     /// Copies `value` whole; `None` if it does not fit.
-    fn exact(value: &str) -> Option<Self> {
+    pub(crate) fn exact(value: &str) -> Option<Self> {
         let mut text = Self::empty();
         let dst = text.bytes.get_mut(..value.len())?;
         dst.copy_from_slice(value.as_bytes());

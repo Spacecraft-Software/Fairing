@@ -736,6 +736,7 @@ dependencies = [
 name = "fairing-askpass"
 version = "0.1.0"
 dependencies = [
+ "rustix",
  "tempfile",
  "zeroize",
 ]
