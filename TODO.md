@@ -20,7 +20,7 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-059 Splash integration and fail-open: the agent runs in the splash loop; an agent that cannot start exits 0 within 1 s so the console agent prompts; the console agent stands aside only while Fairing's agent is up
 - [x] T-060 cargo-fuzz targets for the `ask.*` parser and the theme artefact, run in CI
 - [x] T-061 Safety argument for zeroisation and no secret leak (manual node), lint against content-sized allocation in fairing-askpass
-- [ ] T-062 LUKS VM test: encrypted root, the prompt answered inside the splash, boot reaches greetd; agent-disabled variant boots through the console agent
+- [x] T-062 LUKS VM test: encrypted root, the prompt answered inside the splash, boot reaches greetd; agent-disabled variant boots through the console agent
 - [x] T-063 DEPENDENCIES.md rows for the M3 crates; manual, README, AGENTS, SKILL, CHANGELOG
 - [ ] T-064 Adversarial review folded in
 - [ ] T-065 M3 pull request reviewed and merged
