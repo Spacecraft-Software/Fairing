@@ -266,6 +266,14 @@ pub const DIAGNOSTIC_CODES: &[&str] = &[
     "NOTIFY_FAILED",
     "RELEASE_FAILED",
     "THEME_UNREADABLE",
+    "AGENT_FAILED",
+    "AGENT_FLAG",
+    "ASK_OPENED",
+    "ASK_NO_KEYBOARD",
+    "ASK_ANSWERED",
+    "ASK_CANCELLED",
+    "ASK_CLOSED",
+    "ASK_REPLY_FAILED",
 ];
 
 /// Names of the global flags, from the clap tree.
@@ -544,7 +552,7 @@ fn splash_data() -> Value {
             "reason": {
                 "type": ["string", "null"],
                 "enum": ["handoff", "stopped", "boot-finished", "switch-root", "shutdown", "failed-unit", "maintenance",
-                         "no-backend", "render-failed", "exit-after", "theme-unreadable", null],
+                         "no-backend", "render-failed", "exit-after", "agent-failed", "theme-unreadable", null],
                 "description": "Why the splash ended; null in a plan"
             },
             "chain": { "type": "array", "items": { "type": "string" } },
@@ -559,6 +567,8 @@ fn splash_data() -> Value {
             "dbus": { "type": "boolean" },
             "last_status": { "type": ["string", "null"] },
             "release_ms": { "type": ["number", "null"], "description": "From the tick that first saw SIGTERM to the output released; the signal can arrive up to one frame period (33 ms) earlier" },
+            "agent": { "type": "boolean", "description": "Whether the password agent was up (in a plan: whether it would be)" },
+            "answered": { "type": "integer", "minimum": 0, "description": "Password questions answered" },
             "planned": { "type": "boolean" }
         }
     })
@@ -827,13 +837,23 @@ mod tests {
             .unwrap_or_else(|| panic!("splash spec"));
         let splash_doc = command_schema(splash, splash_spec);
         let splash_props = &splash_doc["parameters"]["properties"];
-        for seam in ["backend", "runtime_dir", "bus", "exit_after", "cmdline"] {
+        for seam in [
+            "backend",
+            "runtime_dir",
+            "bus",
+            "exit_after",
+            "cmdline",
+            "ask_dir",
+            "input_sysfs",
+            "input_dev",
+        ] {
             assert!(
                 splash_props.get(seam).is_none(),
                 "test seam `{seam}` leaked"
             );
         }
         assert_eq!(splash_doc["parameters"]["required"], json!(["stage"]));
+        assert_eq!(splash_props["no_agent"]["type"], "boolean");
         assert_eq!(document["exit_codes"]["5"], "CONFLICT");
         let required = document["output_schema"]["properties"]["data"]["required"]
             .as_array()

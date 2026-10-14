@@ -5,7 +5,7 @@
 # without building or booting anything. A failed check fails evaluation and
 # names itself. `nix flake check` runs it as `checks.<system>.module-eval`.
 #
-# Verifies: FRN-SRS-030, FRN-SRS-031, FRN-SRS-032, FRN-SRS-091, FRN-SRS-093
+# Verifies: FRN-SRS-027, FRN-SRS-030, FRN-SRS-031, FRN-SRS-032, FRN-SRS-091, FRN-SRS-093
 {
   pkgs,
   lib ? pkgs.lib,
@@ -48,6 +48,23 @@ let
   systemText = systemUnits."fairing.service".text;
   handoffText = systemUnits."fairing-handoff.service".text;
   greetdText = systemUnits."greetd.service".text;
+  consoleAgentText = systemUnits."systemd-ask-password-console.service".text;
+  initrdConsoleAgentText = initrdUnits."systemd-ask-password-console.service".text;
+
+  # The same machine with the in-splash agent off.
+  noAgent = (evaluate { steelbore.fairing.agent.enable = false; }).config;
+  noAgentInitrdText = noAgent.boot.initrd.systemd.units."fairing-initrd.service".text;
+  noAgentSystemText = noAgent.systemd.units."fairing.service".text;
+
+  consoleAgent = "systemd-ask-password-console.service";
+  # Does an ExecStopPost= line of `text` contain `needle`?
+  stopPostHas =
+    text: needle:
+    lib.any (lib.hasInfix needle) (
+      lib.filter (lib.hasPrefix "ExecStopPost=") (lib.splitString "\n" text)
+    );
+  agentFlagGone = text: stopPostHas text "rm -f /run/fairing/agent";
+  consoleRearmed = text: stopPostHas text "restart systemd-ask-password-console.path";
 
   # Does `text` hold the line `line` exactly?
   hasLine = text: line: lib.elem line (lib.splitString "\n" text);
@@ -116,6 +133,27 @@ let
     "FRN-SRS-034: rescue and emergency mode stop the stage-2 splash" = lib.all (
       target: lib.elem target (directive systemText "Conflicts")
     ) [ "emergency.target" "rescue.target" ];
+    "FRN-SRS-027: the console agent asks only while the splash agent is down" =
+      hasLine consoleAgentText "ConditionPathExists=!/run/fairing/agent"
+      && hasLine initrdConsoleAgentText "ConditionPathExists=!/run/fairing/agent";
+    "FRN-SRS-027: every way out of either splash lowers the agent flag" =
+      agentFlagGone initrdText && agentFlagGone systemText;
+    "FRN-SRS-027: every way out of either splash re-arms the console agent" =
+      consoleRearmed initrdText && consoleRearmed systemText;
+    "with the agent on, a question does not stop the splash" =
+      !(lib.elem consoleAgent (directive initrdText "Conflicts"))
+      && !(lib.elem consoleAgent (directive systemText "Conflicts"));
+    "the initrd agent is up before LUKS asks" =
+      lib.elem "cryptsetup-pre.target" (directive initrdText "Before");
+    "with the agent off, the splash runs with --no-agent" =
+      lib.hasInfix "--no-agent" noAgentInitrdText && lib.hasInfix "--no-agent" noAgentSystemText;
+    "with the agent off, a question stops either splash for the console agent" =
+      lib.elem consoleAgent (directive noAgentInitrdText "Conflicts")
+      && lib.elem consoleAgent (directive noAgentSystemText "Conflicts");
+    "with the agent off, the console agent is not held back" =
+      !(lib.hasInfix "/run/fairing/agent" (
+        noAgent.systemd.units."systemd-ask-password-console.service".text or ""
+      ));
     "fairing.service starts only during a boot" =
       hasLine systemText "ConditionPathIsDirectory=/run/fairing";
     "the initrd keeps /run/fairing across switch-root" =

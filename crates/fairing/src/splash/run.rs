@@ -10,15 +10,23 @@
 //! non-blocking read, so the loop notices SIGTERM within one tick and a failed
 //! unit within one D-Bus poll, and the only sleep is the frame pacing
 //! (FRN-SRS-033, FRN-SRS-034, FRN-SRS-037).
+//!
+//! The password agent is one more input: each tick it drains the question
+//! directory and the keyboards, and the open question is drawn into the same
+//! frame (FRN-SRS-020, FRN-SRS-021). While it is up, `/run/fairing/agent`
+//! exists, and systemd's console agent stands aside for as long as it does.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
+use fairing_askpass::agent::{Activity, Agent};
+use fairing_askpass::input::Keyboards;
+use fairing_askpass::watch::monotonic_us;
 use fairing_render::{
-    Choice, Compositor, NoBackend, Opened, Presenter, PresenterConfig, RenderErrorKind, Scene,
-    Size, open,
+    Choice, Compositor, Field, NoBackend, Opened, Presenter, PresenterConfig, PromptView,
+    RenderErrorKind, Scene, Size, open,
 };
 use fairing_theme::{CompiledTheme, Selection};
 use serde::Serialize;
@@ -54,6 +62,25 @@ pub const SPLASH_HZ: u32 = 30;
 /// this long has failed. The bound sits inside the 5 s of FRN-SRS-037.
 pub const FLIP_STALL_LIMIT: Duration = Duration::from_secs(2);
 
+/// The file in the runtime directory that exists while the password agent
+/// is up; systemd's console agent is conditioned on its absence.
+pub const AGENT_FLAG: &str = "agent";
+
+/// What the prompt says when a question repeats one just answered
+/// (FRN-SRS-029).
+pub const REJECTED_NOTICE: &str = "Not accepted. Please try again.";
+
+/// Where the password agent finds questions and keyboards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentPaths {
+    /// `/run/systemd/ask-password`.
+    pub ask_dir: PathBuf,
+    /// `/sys/class/input`.
+    pub input_sysfs: PathBuf,
+    /// `/dev/input`.
+    pub input_dev: PathBuf,
+}
+
 /// Where the splash reads and writes its files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
@@ -82,6 +109,8 @@ pub struct Plan {
     pub paths: Paths,
     /// Behave as if SIGTERM arrived after this long (tests and demos).
     pub exit_after: Option<Duration>,
+    /// The password agent; `None` under `--no-agent`.
+    pub agent: Option<AgentPaths>,
 }
 
 /// Why the loop ended.
@@ -113,6 +142,10 @@ pub enum Reason {
     RenderFailed,
     /// `--exit-after` elapsed.
     ExitAfter,
+    /// The password agent could not start or lost its question directory:
+    /// the splash leaves the questions, and the console, to systemd's
+    /// console agent (FRN-SRS-027).
+    AgentFailed,
 }
 
 impl Reason {
@@ -130,6 +163,7 @@ impl Reason {
             Self::NoBackend => "no-backend",
             Self::RenderFailed => "render-failed",
             Self::ExitAfter => "exit-after",
+            Self::AgentFailed => "agent-failed",
         }
     }
 }
@@ -161,6 +195,10 @@ pub struct Outcome {
     /// (FRN-SRS-033); `None` when the run did not end on SIGTERM. The signal
     /// can arrive up to one frame period before a tick sees it.
     pub release_ms: Option<f64>,
+    /// Whether the password agent was up.
+    pub agent: bool,
+    /// Questions answered.
+    pub answered: u32,
 }
 
 /// What the loop needs from the process.
@@ -229,6 +267,8 @@ pub fn run_with(
         first_bar: None,
         last_status: None,
         release_ms: None,
+        agent: false,
+        answered: 0,
     };
     let mut presenter = match start(plan, env, open_chain) {
         Ok(presenter) => presenter,
@@ -241,13 +281,51 @@ pub fn run_with(
     outcome.backend = Some(presenter.backend().as_str());
 
     let mut session = Session::new(outcome.bar);
+    if let Some(paths) = &plan.agent {
+        match Agent::open(&paths.ask_dir, &paths.input_sysfs, &paths.input_dev) {
+            Ok(agent) => {
+                session.agent = Some(agent);
+                outcome.agent = true;
+                raise_flag(plan, env);
+            }
+            Err(error) => {
+                (env.emit)(
+                    Diagnostic::new(
+                        Severity::Warn,
+                        "AGENT_FAILED",
+                        format!(
+                            "the password agent cannot start ({error}); leaving questions to the console"
+                        ),
+                        env.invocation,
+                    )
+                    .with_priority(Priority::Notice),
+                );
+                outcome.reason = Reason::AgentFailed;
+                return finish(plan, env, presenter, &mut session, &timeline, outcome);
+            }
+        }
+    }
     outcome.reason = loop {
         if let Some(reason) = session.tick(plan, env, &mut presenter, &timeline, &mut outcome) {
             break reason;
         }
         presenter.pace();
     };
-    finish(plan, env, presenter, &session, &timeline, outcome)
+    finish(plan, env, presenter, &mut session, &timeline, outcome)
+}
+
+/// Marks the agent up, so systemd's console agent stands aside.
+fn raise_flag(plan: &Plan, env: &Environment<'_>) {
+    if let Err(error) = std::fs::write(plan.paths.runtime.join(AGENT_FLAG), b"") {
+        (env.emit)(Diagnostic::new(
+            Severity::Warn,
+            "AGENT_FLAG",
+            format!(
+                "cannot mark the password agent up ({error}); systemd's console agent may also ask"
+            ),
+            env.invocation,
+        ));
+    }
 }
 
 /// The fixed points of a run on the boot clock.
@@ -323,10 +401,16 @@ fn finish(
     plan: &Plan,
     env: &Environment<'_>,
     presenter: Presenter,
-    session: &Session,
+    session: &mut Session,
     timeline: &Timeline,
     mut outcome: Outcome,
 ) -> Outcome {
+    // The keyboards first: releasing a grab is one ioctl, and a question still
+    // open goes back to the console agent with them (FRN-SRS-028).
+    if let Some(agent) = session.agent.as_mut() {
+        agent.close();
+        let _gone = std::fs::remove_file(plan.paths.runtime.join(AGENT_FLAG));
+    }
     outcome.bar = session.bar.shown();
     outcome.dbus = session.latest.is_some();
     // Release the output first: greetd is waiting for it (FRN-SRS-033).
@@ -402,6 +486,8 @@ struct Session {
     /// could see them (the initrd's, or any before the bus came up) are not a
     /// unit entering the failed state now (FRN-SRS-034).
     failed_baseline: Option<u32>,
+    /// The password agent, while it is up.
+    agent: Option<Agent<Keyboards>>,
 }
 
 impl Session {
@@ -419,6 +505,7 @@ impl Session {
             ready_sent: false,
             terminate_seen: None,
             failed_baseline: None,
+            agent: None,
         }
     }
 
@@ -467,12 +554,18 @@ impl Session {
         let shown = self
             .bar
             .advance(target(plan.stage, &inputs), now, terminating);
-        let scene = Scene::from_fraction(shown).with_status(
-            self.latest
-                .as_ref()
-                .and_then(|s| s.job.clone())
-                .unwrap_or_default(),
-        );
+        let prompt = match self.ask(env, outcome) {
+            Ok(prompt) => prompt,
+            Err(reason) => return Some(reason),
+        };
+        let scene = Scene::from_fraction(shown)
+            .with_status(
+                self.latest
+                    .as_ref()
+                    .and_then(|s| s.job.clone())
+                    .unwrap_or_default(),
+            )
+            .with_prompt(prompt);
         if let Err(reason) = self.present(env, presenter, &scene, outcome, now) {
             return Some(reason);
         }
@@ -505,6 +598,45 @@ impl Session {
             (false, Stage::System, false, true) => Reason::Handoff,
             (false, Stage::System, false, false) => Reason::Stopped,
         })
+    }
+
+    /// One agent tick: the open question as the frame draws it. An agent that
+    /// can no longer read its directory ends the run, so the console agent
+    /// takes the questions (FRN-SRS-027).
+    fn ask(
+        &mut self,
+        env: &Environment<'_>,
+        outcome: &mut Outcome,
+    ) -> Result<Option<PromptView>, Reason> {
+        let Some(agent) = self.agent.as_mut() else {
+            return Ok(None);
+        };
+        let activity = match agent.tick(monotonic_us()) {
+            Ok(activity) => activity,
+            Err(error) => {
+                (env.emit)(
+                    Diagnostic::new(
+                        Severity::Warn,
+                        "AGENT_FAILED",
+                        format!(
+                            "the password agent stopped ({error}); leaving questions to the console"
+                        ),
+                        env.invocation,
+                    )
+                    .with_priority(Priority::Notice),
+                );
+                return Err(Reason::AgentFailed);
+            }
+        };
+        report(env, activity, outcome);
+        Ok(agent.view().map(|view| PromptView {
+            message: view.message.to_owned(),
+            field: match view.echo {
+                Some(text) => Field::Clear(text.to_owned()),
+                None => Field::Masked(view.typed),
+            },
+            notice: view.rejected.then(|| REJECTED_NOTICE.to_owned()),
+        }))
     }
 
     /// Reports, once, that D-Bus missed its deadline (FRN-SRS-016).
@@ -661,6 +793,48 @@ impl Session {
     }
 }
 
+/// One journal line for what the agent did; never the secret, nor its length.
+fn report(env: &Environment<'_>, activity: Activity, outcome: &mut Outcome) {
+    let (severity, code, message) = match activity {
+        Activity::Idle => return,
+        Activity::Opened(0) => (
+            Severity::Warn,
+            "ASK_NO_KEYBOARD",
+            "a password question is open, but no keyboard was found; looking again every second"
+                .to_owned(),
+        ),
+        Activity::Opened(n) => (
+            Severity::Info,
+            "ASK_OPENED",
+            format!("a password question is open; {n} keyboard(s) grabbed"),
+        ),
+        Activity::Answered => {
+            outcome.answered = outcome.answered.saturating_add(1);
+            (
+                Severity::Info,
+                "ASK_ANSWERED",
+                "the password question was answered".to_owned(),
+            )
+        }
+        Activity::Cancelled => (
+            Severity::Info,
+            "ASK_CANCELLED",
+            "the password question was cancelled".to_owned(),
+        ),
+        Activity::Closed => (
+            Severity::Info,
+            "ASK_CLOSED",
+            "the password question closed; keyboards released".to_owned(),
+        ),
+        Activity::ReplyFailed(kind) => (
+            Severity::Warn,
+            "ASK_REPLY_FAILED",
+            format!("the answer could not be sent ({kind}); the question stays with systemd"),
+        ),
+    };
+    (env.emit)(Diagnostic::new(severity, code, message, env.invocation));
+}
+
 /// Writes what outlives the process: the handoff at switch-root (FRN-SRS-014),
 /// the measured durations at the greetd handoff (FRN-SRS-015).
 fn persist(
@@ -807,6 +981,16 @@ mod tests {
                 selection: Selection::Color(Theme::family_default()),
                 paths: self.paths(),
                 exit_after,
+                agent: None,
+            }
+        }
+
+        /// The agent's directories, under the harness's temporary directory.
+        fn agent_paths(&self) -> AgentPaths {
+            AgentPaths {
+                ask_dir: self.dir.path().join("ask-password"),
+                input_sysfs: self.dir.path().join("sys-class-input"),
+                input_dev: self.dir.path().join("dev-input"),
             }
         }
 
@@ -855,6 +1039,61 @@ mod tests {
         fn codes(&self) -> Vec<&'static str> {
             self.diagnostics.borrow().iter().map(|d| d.code).collect()
         }
+    }
+
+    #[test]
+    fn an_agent_that_cannot_start_steps_aside_at_once() {
+        // Verifies: FRN-SRS-027
+        let harness = Harness::new();
+        let mut plan = harness.plan(Stage::Initrd, Some(Duration::from_mins(1)));
+        let mut paths = harness.agent_paths();
+        // A file where the directory should be: the watch cannot be set.
+        paths.ask_dir = harness.dir.path().join("not-a-directory");
+        std::fs::write(&paths.ask_dir, b"").unwrap_or_else(|e| panic!("{e}"));
+        plan.agent = Some(paths);
+        std::fs::create_dir_all(&plan.paths.runtime).unwrap_or_else(|e| panic!("{e}"));
+        let started = Instant::now();
+        let outcome = harness.run(&plan, false, Vec::new(), memory);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(outcome.reason, Reason::AgentFailed);
+        assert!(!outcome.agent);
+        assert!(harness.codes().contains(&"AGENT_FAILED"));
+        assert_eq!(harness.notifications(), ["READY=1", "STOPPING=1"]);
+        assert!(!plan.paths.runtime.join(AGENT_FLAG).exists());
+    }
+
+    #[test]
+    fn the_agent_runs_in_the_loop_and_lowers_its_flag() {
+        let harness = Harness::new();
+        let mut plan = harness.plan(Stage::Initrd, Some(Duration::from_millis(100)));
+        let paths = harness.agent_paths();
+        std::fs::create_dir_all(&paths.ask_dir).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::create_dir_all(&paths.input_sysfs).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(
+            paths.ask_dir.join("ask.1"),
+            "[Ask]\nSocket=/run/nobody/sck.1\nMessage=Passphrase\nId=cryptsetup:x\n",
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        plan.agent = Some(paths);
+        std::fs::create_dir_all(&plan.paths.runtime).unwrap_or_else(|e| panic!("{e}"));
+        let outcome = harness.run(&plan, false, Vec::new(), memory);
+        assert_eq!(outcome.reason, Reason::ExitAfter);
+        assert!(outcome.agent);
+        // No keyboard in the empty sysfs tree: the question is shown and the
+        // journal says why nothing can be typed.
+        assert!(
+            harness.codes().contains(&"ASK_NO_KEYBOARD"),
+            "{:?}",
+            harness.codes()
+        );
+        assert!(
+            !plan.paths.runtime.join(AGENT_FLAG).exists(),
+            "flag lowered"
+        );
     }
 
     fn snapshot(progress: f64, failed: u32, state: &str, job: Option<&str>) -> Event {

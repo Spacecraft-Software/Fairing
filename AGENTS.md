@@ -13,11 +13,12 @@ acts as the systemd password agent, and hands the screen to greetd. Part of Spac
 Software. Assurance **Category B**, with `crates/fairing-askpass` and the initrd
 lifecycle unit raised to **Category A** (Steelbore Standard §19). Licence GPL-3.0-or-later.
 
-Milestone state: M0 (repository and posture) and M1 (draws a frame) are merged. M2 (boots
-on Bravais: themes, progress, `fairing splash`, the NixOS module) is implemented; its VM
-tests pass under TCG, and every requirement waits on G1 baselining. The password
-agent (M3) and accessibility, the shutdown splash and frame-sequence playback (M4) are not
-started. Do not advertise verbs, flags or files that do not exist yet.
+Milestone state: M0 (repository and posture), M1 (draws a frame) and M2 (boots on
+Bravais: themes, progress, `fairing splash`, the NixOS module) are merged. M3 (the
+password agent in `fairing-askpass`, run inside the splash) is in progress on its branch;
+every requirement waits on G1 baselining. Accessibility, the shutdown splash and
+frame-sequence playback (M4) are not started. Do not advertise verbs, flags or files that
+do not exist yet.
 
 ## Build, test, lint
 
@@ -130,6 +131,17 @@ will not be green there.
   `Conflicts=greetd.service` (systemd drops greetd's start from the boot transaction).
   `fairing.service` only starts while `/run/fairing` exists (the initrd unit leaves it,
   the stage-2 unit removes it), so `nixos-rebuild switch` never restarts the splash.
+- The password agent (`fairing_askpass::agent::Agent`) is one more non-blocking input of
+  the splash loop, ticked once per frame; `--no-agent` turns it off. The secret lives only
+  in `fairing-askpass` (`Secret`, a fixed 512-byte buffer); the rest of the process sees
+  a `PromptView` with the count typed, or the text only under `Echo=1`. Keyboards are
+  grabbed only while a question is open and released the tick it closes. While the agent
+  is up, `/run/fairing/agent` exists and systemd's console agent is conditioned on its
+  absence (as upstream does for Plymouth); both units' `ExecStopPost=` remove it and
+  restart the console agent's path unit, so a question survives a crashed splash. With
+  the agent on, never add `Conflicts=systemd-ask-password-console.service`: the conflict
+  is applied when the start job is queued, before the condition is checked, and would
+  stop the splash. An agent that cannot start ends the run as `agent-failed`.
 - zbus connects to `/run/dbus/system_bus_socket` by name, never through
   `DBUS_SYSTEM_BUS_ADDRESS`, and refuses systemd's private socket: zbus 5.19 panics on
   PID 1's replies there and release builds abort on panic.
@@ -205,6 +217,7 @@ will not be green there.
 | Backends and fallback chain | `crates/fairing-render/src/backend/` |
 | Frame pacing, re-acquire, first-frame timing | `crates/fairing-render/src/{cadence,presenter}.rs` |
 | CLI integration tests | `crates/fairing/tests/cli.rs` |
+| Password agent: ask files, watch, keyboards, secret, reply | `crates/fairing-askpass/src/` |
 | Requirement model, validation, Texinfo generator | `xtask/src/requirements/` |
 | Marker scanner, matrix, verdicts | `xtask/src/trace/` |
 | §17 progress block | `xtask/src/progress.rs` |

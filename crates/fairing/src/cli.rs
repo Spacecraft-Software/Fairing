@@ -240,6 +240,18 @@ pub struct SplashArgs {
     /// Stop as if the greetd handoff arrived after this many seconds (test seam).
     #[arg(long, value_name = "n", value_parser = parse_seconds, hide = true)]
     pub exit_after: Option<f64>,
+    /// Do not answer password questions; leave them to systemd's console agent.
+    #[arg(long)]
+    pub no_agent: bool,
+    /// Directory systemd asks password questions in (test seam).
+    #[arg(long, value_name = "dir", default_value = fairing_askpass::watch::ASK_DIR, hide = true)]
+    pub ask_dir: PathBuf,
+    /// Where the kernel lists input devices (test seam).
+    #[arg(long, value_name = "dir", default_value = fairing_askpass::input::SYSFS_INPUT, hide = true)]
+    pub input_sysfs: PathBuf,
+    /// Where the input device nodes are (test seam).
+    #[arg(long, value_name = "dir", default_value = fairing_askpass::input::DEV_INPUT, hide = true)]
+    pub input_dev: PathBuf,
 }
 
 /// Seconds as a finite number in `0.0..=3600.0`.
