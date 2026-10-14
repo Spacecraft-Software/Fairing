@@ -7,7 +7,8 @@
 //! The agent watches `/run/systemd/ask-password/` with inotify, parses the
 //! bounded `ask.*` files, replies on the `Socket=` path and zeroises every
 //! buffer that held secret bytes (milestone M3, FRN-SRS-020 to FRN-SRS-029,
-//! FRN-SRS-102, FRN-SRS-104). [`ask`] is the question file's parser.
+//! FRN-SRS-102, FRN-SRS-104). [`ask`] is the question file's parser, [`secret`] the typed secret and
+//! [`reply`] the answer datagram.
 //!
 //! **Assurance Category A** (raised subsystem): every parser is fuzzed, every
 //! allocation on the prompt path has a documented worst-case bound, and
@@ -18,3 +19,5 @@
 #![forbid(unsafe_code)]
 
 pub mod ask;
+pub mod reply;
+pub mod secret;
