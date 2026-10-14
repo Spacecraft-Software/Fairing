@@ -11,7 +11,7 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 
 ## M3 — Unlocks a LUKS root
 
-- [ ] T-053 `ask.*` parser in fairing-askpass: 64 KiB and UTF-8 checked before any field, fixed-capacity fields, `Id=`, `Message=`, `Socket=`, `NotAfter=`, `Echo=`, `PID=`
+- [x] T-053 `ask.*` parser in fairing-askpass: 64 KiB and UTF-8 checked before any field, fixed-capacity fields, `Id=`, `Message=`, `Socket=`, `NotAfter=`, `Echo=`, `PID=`
 - [ ] T-054 inotify watcher on `/run/systemd/ask-password/`, polled once per frame, new file seen within 50 ms
 - [ ] T-055 Secret buffer of fixed capacity, zeroised eagerly on reply, cancel, expiry, error and exit (release builds abort on panic); `PR_SET_DUMPABLE=0`, `LimitCORE=0`
 - [ ] T-056 Reply as one datagram on `Socket=`: `+` and the secret on Enter, `-` on Escape
