@@ -5,6 +5,7 @@
 //! What a frame shows: progress, the status line and a password prompt.
 
 use std::fmt;
+use std::time::Duration;
 
 use zeroize::Zeroize;
 
@@ -24,6 +25,8 @@ pub struct Scene {
     steps: u16,
     status: Option<String>,
     prompt: Option<PromptView>,
+    /// How far into its frame sequence the theme's animation is.
+    time: Duration,
 }
 
 /// What the input field of a prompt shows.
@@ -121,6 +124,7 @@ impl Scene {
             steps: u16::from(percent.min(100)) * (STEPS / 100),
             status: None,
             prompt: None,
+            time: Duration::ZERO,
         }
     }
 
@@ -140,6 +144,7 @@ impl Scene {
             steps: steps.min(STEPS),
             status: None,
             prompt: None,
+            time: Duration::ZERO,
         }
     }
 
@@ -163,6 +168,21 @@ impl Scene {
     pub fn with_prompt(mut self, prompt: Option<PromptView>) -> Self {
         self.prompt = prompt;
         self
+    }
+
+    /// Sets the animation time: how long the theme's frame sequence has been
+    /// playing. Zero, the default, is its first frame; reduced motion keeps
+    /// it there (FRN-SRS-052).
+    #[must_use]
+    pub const fn with_time(mut self, time: Duration) -> Self {
+        self.time = time;
+        self
+    }
+
+    /// The animation time.
+    #[must_use]
+    pub const fn time(&self) -> Duration {
+        self.time
     }
 
     /// The prompt, if one is open.

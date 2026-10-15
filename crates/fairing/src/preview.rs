@@ -410,7 +410,7 @@ fn draw(
     let mut presenter = Presenter::new(opened.surface, compositor, config)
         .map_err(|e| AppError::from_render(&e, MEMORY_HINT, invocation))?;
 
-    let outcome = animate(&mut presenter, plan.args, invocation).and_then(|run_time| {
+    let outcome = animate(&mut presenter, plan, invocation).and_then(|run_time| {
         let written = match snapshot {
             Some(file) => Some(file.write(&presenter, context, invocation)?),
             None => None,
@@ -496,9 +496,10 @@ fn report_fallbacks(
 /// Presents the simulated bar for the requested duration; returns the wall time taken.
 fn animate(
     presenter: &mut Presenter,
-    args: &PreviewArgs,
+    plan: &Plan<'_>,
     invocation: &str,
 ) -> Result<Duration, AppError> {
+    let args = plan.args;
     let duration = Duration::from_secs_f64(args.seconds);
     let start = Instant::now();
     loop {
@@ -509,8 +510,13 @@ fn animate(
         } else {
             simulated_percent(elapsed, duration)
         };
+        let time = crate::splash::run::animation_time(plan.reduced_motion, elapsed);
         presenter
-            .present(&Scene::new(percent).with_status(args.status.as_str()))
+            .present(
+                &Scene::new(percent)
+                    .with_status(args.status.as_str())
+                    .with_time(time),
+            )
             .map_err(|e| AppError::from_render(&e, MEMORY_HINT, invocation))?;
         if done {
             return Ok(start.elapsed());

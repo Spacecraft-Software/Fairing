@@ -188,7 +188,7 @@ pub struct PromptSpec {
     pub size: f32,
 }
 
-/// A frame sequence played in a box (FRN-SRS-051, from M4).
+/// A frame sequence played in a loop in a box (FRN-SRS-051).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SequenceSpec {
     /// The box frames are fitted into.

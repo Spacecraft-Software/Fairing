@@ -6,8 +6,9 @@
 //! and, while a question is open, the password prompt.
 
 use std::fmt;
+use std::time::Duration;
 
-use fairing_theme::{CompiledTheme, LogoImage, Role, Selection};
+use fairing_theme::{CompiledTheme, LogoImage, Role, Selection, SequenceSpec};
 
 use crate::fault::RenderError;
 use crate::frame::Frame;
@@ -30,6 +31,53 @@ pub struct Compositor {
     text: TextRenderer,
     /// The theme's logo image; `None` draws the built-in vector mark.
     logo: Option<Sprite>,
+    /// The theme's frame sequence, if it declares one.
+    sequence: Option<Sequence>,
+}
+
+/// A frame sequence with its frames copied out of the theme (FRN-SRS-051).
+#[derive(Debug)]
+struct Sequence {
+    /// The box frames are fitted into, in reference pixels.
+    rect: Rect,
+    /// Frames per second, `1..=30`.
+    fps: u8,
+    frames: Vec<Sprite>,
+}
+
+impl Sequence {
+    /// The frames `spec` names in `theme`; `None` if any is missing (the
+    /// artefact's validation makes that impossible).
+    fn new(theme: &CompiledTheme, spec: &SequenceSpec) -> Option<Self> {
+        let frames = (0..spec.count)
+            .map(|offset| {
+                spec.first
+                    .checked_add(offset)
+                    .and_then(|index| theme.image(index))
+                    .map(Sprite::new)
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            rect: Rect::new(spec.rect.x, spec.rect.y, spec.rect.width, spec.rect.height),
+            fps: spec.fps,
+            frames,
+        })
+    }
+}
+
+/// The frame of a looping sequence of `count` frames at `fps` shown `time`
+/// into it: frame `n` from `n / fps` seconds, back to the first after the
+/// last (FRN-SRS-051).
+///
+/// Implements: FRN-SRS-051
+#[must_use]
+pub fn sequence_frame(time: Duration, fps: u8, count: usize) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    let shown = time.as_millis() * u128::from(fps) / 1000;
+    let count = u128::try_from(count).unwrap_or(u128::MAX);
+    usize::try_from(shown % count).unwrap_or(0)
 }
 
 impl Compositor {
@@ -53,6 +101,7 @@ impl Compositor {
             layout,
             text: TextRenderer::new()?,
             logo: None,
+            sequence: None,
         })
     }
 
@@ -71,6 +120,10 @@ impl Compositor {
             LogoImage::Builtin => None,
             LogoImage::Image(index) => theme.image(index).map(Sprite::new),
         };
+        compositor.sequence = boot
+            .sequence
+            .as_ref()
+            .and_then(|spec| Sequence::new(theme, spec));
         Ok(compositor)
     }
 
@@ -106,6 +159,13 @@ impl Compositor {
             Some(sprite) => sprite.draw(frame, &self.palette, logo_box),
             // The mark is square: fitted uniformly, centred, like an image.
             None => logo::draw(frame, &self.palette, square_in(logo_box)),
+        }
+        if let Some(sequence) = &mut self.sequence {
+            let index = sequence_frame(scene.time(), sequence.fps, sequence.frames.len());
+            let bounds = viewport.rect(sequence.rect);
+            if let Some(sprite) = sequence.frames.get_mut(index) {
+                sprite.draw(frame, &self.palette, bounds);
+            }
         }
         let bar = self.draw_bar(frame, &viewport, scene);
         self.draw_percent(frame, &viewport, scene, bar);
@@ -314,6 +374,7 @@ impl fmt::Debug for Compositor {
             .field("layout", &self.layout)
             .field("text", &self.text)
             .field("logo", &self.logo)
+            .field("sequence", &self.sequence)
             .finish()
     }
 }
@@ -354,6 +415,56 @@ mod tests {
             .flat_map(|y| (x0..x1).map(move |x| (x, y)))
             .filter(|&(x, y)| frame.pixel(x, y) == Some(color))
             .count()
+    }
+
+    /// A theme whose sequence blinks a 100-pixel square in the top-left
+    /// corner at 10 fps: frame 0 is filled with the accent, frame 1 empty.
+    fn blinking_theme() -> CompiledTheme {
+        use fairing_theme::{Encoding, ImageMeta, Meta, RectSpec};
+        let mut meta = Meta::builtin();
+        let image = |offset| ImageMeta {
+            width: 2,
+            height: 2,
+            encoding: Encoding::Mask(Role::Accent),
+            offset,
+        };
+        meta.images = vec![image(0), image(4)];
+        meta.boot.sequence = Some(SequenceSpec {
+            rect: RectSpec::new(0.0, 0.0, 100.0, 100.0),
+            fps: 10,
+            first: 0,
+            count: 2,
+        });
+        let mut blob = vec![255; 4];
+        blob.extend([0; 4]);
+        CompiledTheme::new(meta, blob).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn sequences_loop_at_their_declared_rate() {
+        // Verifies: FRN-SRS-051
+        let at = |ms: u64| sequence_frame(Duration::from_millis(ms), 10, 3);
+        assert_eq!([at(0), at(99), at(100), at(250), at(299)], [0, 0, 1, 2, 2]);
+        assert_eq!(at(300), 0, "back to the first after the last");
+        assert_eq!(at(1_000_000), 1);
+        assert_eq!(sequence_frame(Duration::from_secs(1), 30, 30), 0);
+        assert_eq!(sequence_frame(Duration::from_millis(500), 30, 0), 0);
+
+        let theme = blinking_theme();
+        let accent = Theme::family_default().color(Role::Accent);
+        let mut compositor =
+            Compositor::with_theme(Selection::Color(Theme::family_default()), &theme)
+                .unwrap_or_else(|e| panic!("{e}"));
+        let size = Size::new(192, 108).unwrap_or_else(|e| panic!("{e}"));
+        let mut frame = Frame::new(size, PixelFormat::Rgba8888).unwrap_or_else(|e| panic!("{e}"));
+        let mut corner_at = |ms: u64| {
+            let scene = Scene::new(10).with_time(Duration::from_millis(ms));
+            compositor.render(&mut frame, &scene);
+            frame.pixel(5, 5)
+        };
+        assert_eq!(corner_at(0), Some(accent));
+        assert_ne!(corner_at(100), Some(accent));
+        assert_eq!(corner_at(200), Some(accent));
     }
 
     #[test]

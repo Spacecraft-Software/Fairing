@@ -53,7 +53,7 @@ pub use backend::{
 #[doc(inline)]
 pub use cadence::{Cadence, Clock, SystemClock};
 #[doc(inline)]
-pub use compositor::Compositor;
+pub use compositor::{Compositor, sequence_frame};
 #[doc(inline)]
 pub use fault::{RenderError, RenderErrorKind};
 #[doc(inline)]

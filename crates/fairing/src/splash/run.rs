@@ -389,6 +389,19 @@ impl Output {
     }
 }
 
+/// How far the theme's frame sequence has played: since this process
+/// started, or not at all under reduced motion, which keeps the first frame
+/// (FRN-SRS-052).
+///
+/// Implements: FRN-SRS-052
+pub fn animation_time(reduced_motion: bool, running: Duration) -> Duration {
+    if reduced_motion {
+        Duration::ZERO
+    } else {
+        running
+    }
+}
+
 /// Marks the agent up, so systemd's console agent stands aside.
 fn raise_flag(plan: &Plan, env: &Environment<'_>) {
     if let Err(error) = std::fs::write(plan.paths.runtime.join(AGENT_FLAG), b"") {
@@ -666,6 +679,7 @@ impl Session {
             Err(reason) => return Some(reason),
         };
         let scene = Scene::from_fraction(shown)
+            .with_time(animation_time(plan.reduced_motion, running))
             .with_status(
                 self.latest
                     .as_ref()
@@ -1595,6 +1609,19 @@ mod tests {
             memory,
         );
         assert_eq!(outcome.reason, Reason::ExitAfter);
+    }
+
+    #[test]
+    fn reduced_motion_holds_the_first_frame() {
+        // Verifies: FRN-SRS-052
+        for running in [
+            Duration::ZERO,
+            Duration::from_millis(40),
+            Duration::from_mins(3),
+        ] {
+            assert_eq!(animation_time(true, running), Duration::ZERO);
+            assert_eq!(animation_time(false, running), running);
+        }
     }
 
     #[test]
