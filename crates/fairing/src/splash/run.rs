@@ -270,7 +270,7 @@ pub fn run_with(
     let carried = match plan.stage {
         Stage::System => read_handoff(&plan.paths.runtime.join(HANDOFF_FILE))
             .filter(|handoff| handoff.initrd_end <= started),
-        Stage::Initrd => None,
+        Stage::Initrd | Stage::Shutdown => None,
     };
     // Stage 2 counts from its own start, not from the handoff's initrd end: an
     // initrd splash stopped by a passphrase prompt left long before switch-root,
@@ -279,7 +279,7 @@ pub fn run_with(
         started,
         stage_origin: match plan.stage {
             Stage::Initrd => Duration::ZERO,
-            Stage::System => started,
+            Stage::System | Stage::Shutdown => started,
         },
         carried,
     };
@@ -504,7 +504,11 @@ fn start(
             env.invocation,
         ));
     }
-    Compositor::with_theme(plan.selection, &plan.theme)
+    let compositor = match plan.stage {
+        Stage::Shutdown => Compositor::with_shutdown(plan.selection, &plan.theme),
+        Stage::Initrd | Stage::System => Compositor::with_theme(plan.selection, &plan.theme),
+    };
+    compositor
         .and_then(|compositor| {
             Presenter::new(
                 opened.surface,
@@ -694,6 +698,7 @@ impl Session {
             cached: self.durations.and_then(|d| match plan.stage {
                 Stage::Initrd => d.initrd,
                 Stage::System => d.stage2,
+                Stage::Shutdown => None,
             }),
             systemd_progress: self
                 .latest
@@ -712,16 +717,21 @@ impl Session {
             Err(reason) => return Some(reason),
         };
         let overlay = self.navigate(now, prompt.is_some());
-        let scene = Scene::from_fraction(shown)
-            .with_time(animation_time(plan.reduced_motion, running))
-            .with_overlay(overlay)
-            .with_status(
+        let scene = match plan.stage {
+            // The shutdown layout: the logo and its one line (FRN-SRS-035).
+            Stage::Shutdown => Scene::new(0)
+                .without_progress()
+                .with_status(plan.theme.meta().shutdown.message.as_str()),
+            Stage::Initrd | Stage::System => Scene::from_fraction(shown).with_status(
                 self.latest
                     .as_ref()
                     .and_then(|s| s.job.clone())
                     .unwrap_or_default(),
-            )
-            .with_prompt(prompt);
+            ),
+        }
+        .with_time(animation_time(plan.reduced_motion, running))
+        .with_overlay(overlay)
+        .with_prompt(prompt);
         if let Err(reason) = self.present(env, output, &scene, outcome, now) {
             return Some(reason);
         }
@@ -750,7 +760,7 @@ impl Session {
         terminating.then_some(match (exit_after, plan.stage, stopping, handed_over) {
             (true, _, _, _) => Reason::ExitAfter,
             (false, Stage::Initrd, _, _) => Reason::SwitchRoot,
-            (false, Stage::System, true, _) => Reason::Shutdown,
+            (false, Stage::Shutdown, _, _) | (false, Stage::System, true, _) => Reason::Shutdown,
             (false, Stage::System, false, true) => Reason::Handoff,
             (false, Stage::System, false, false) => Reason::Stopped,
         })
@@ -1002,6 +1012,7 @@ impl Session {
         let dir = match plan.stage {
             Stage::Initrd => &plan.paths.sysroot_state,
             Stage::System => &plan.paths.state,
+            Stage::Shutdown => return,
         };
         let path = dir.join(DURATIONS_FILE);
         if path.exists() {
@@ -1709,6 +1720,31 @@ mod tests {
         let outcome = harness.run(&plan, false, Vec::new(), memory);
         assert_eq!(outcome.reason, Reason::NoBackend);
         assert!(harness.notifications().contains(&"READY=1".to_owned()));
+    }
+
+    #[test]
+    fn the_shutdown_splash_holds_its_line_until_killed() {
+        // Verifies: FRN-SRS-035
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::Shutdown, Some(Duration::from_millis(300)));
+        let held = harness.run(&plan, false, Vec::new(), memory);
+        assert_eq!(
+            held.reason,
+            Reason::ExitAfter,
+            "nothing ends it but a signal"
+        );
+        assert!(held.frames > 1);
+        assert_eq!(held.last_status.as_deref(), Some("Shutting down"));
+        assert!((held.bar - 0.0).abs() < f32::EPSILON);
+        let killed = harness.run(&plan, true, Vec::new(), memory);
+        assert_eq!(killed.reason, Reason::Shutdown);
+        assert_eq!(killed.frames, 1, "drawn, then gone");
+        assert!(!plan.paths.runtime.join(HANDOFF_FILE).exists());
+        assert!(!plan.paths.state.join(DURATIONS_FILE).exists());
+        assert_eq!(
+            harness.notifications(),
+            ["READY=1", "STOPPING=1", "READY=1", "STOPPING=1"]
+        );
     }
 
     #[test]

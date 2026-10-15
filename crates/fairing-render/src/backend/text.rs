@@ -133,14 +133,18 @@ impl<W: Write> TextConsole<W> {
     }
 }
 
-/// `Fairing <NN>% <status>`, or `Fairing <NN>%` with no status.
+/// `Fairing <NN>% <status>`, or `Fairing <NN>%` with no status; a scene
+/// without progress, the shutdown's, is `Fairing <status>`.
 ///
 /// Implements: FRN-SRS-071
 #[must_use]
 pub fn progress_line(scene: &Scene) -> String {
-    match scene.status() {
-        Some(status) => plain(&format!("Fairing {}% {}", scene.percent(), status.trim())),
-        None => format!("Fairing {}%", scene.percent()),
+    let status = scene.status().map(str::trim);
+    match (scene.shows_progress(), status) {
+        (true, Some(status)) => plain(&format!("Fairing {}% {status}", scene.percent())),
+        (true, None) => format!("Fairing {}%", scene.percent()),
+        (false, Some(status)) => plain(&format!("Fairing {status}")),
+        (false, None) => "Fairing".to_owned(),
     }
 }
 
@@ -185,6 +189,15 @@ mod tests {
             "Fairing 3% Mounting /home\nFairing 5% Mounting /home\nFairing 6%\n"
         );
         assert_eq!(console.lines(), 3);
+    }
+
+    #[test]
+    fn the_shutdown_line_has_no_percentage() {
+        let scene = Scene::new(0)
+            .without_progress()
+            .with_status("Shutting down");
+        assert_eq!(progress_line(&scene), "Fairing Shutting down");
+        assert_eq!(progress_line(&Scene::new(0).without_progress()), "Fairing");
     }
 
     #[test]

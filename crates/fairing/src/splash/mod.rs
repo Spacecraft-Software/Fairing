@@ -148,6 +148,7 @@ pub fn run(
     let stage = match args.stage {
         StageArg::Initrd => Stage::Initrd,
         StageArg::System => Stage::System,
+        StageArg::Shutdown => Stage::Shutdown,
     };
     let memory_size = Size::new(args.size.0, args.size.1)
         .map_err(|e| AppError::invalid_argument(e.to_string(), HINT, invocation))?;
@@ -212,7 +213,7 @@ pub fn run(
     let terminate = termination_flag(invocation)?;
     let notifier = Notifier::new(std::env::var_os("NOTIFY_SOCKET").as_deref());
     let systemd = match (stage, args.bus.as_str()) {
-        (Stage::Initrd, _) | (_, "none") => None,
+        (Stage::Initrd | Stage::Shutdown, _) | (_, "none") => None,
         (Stage::System, bus) => Some(dbus::spawn(bus)),
     };
     let plan = Plan {
@@ -227,7 +228,9 @@ pub fn run(
             sysroot_state: args.sysroot_state_dir.clone(),
         },
         exit_after: args.exit_after.map(Duration::from_secs_f64),
-        agent: agent_paths(args),
+        // Nothing asks for a password while the system shuts down; a question
+        // that does is the console agent's.
+        agent: agent_paths(args).filter(|_| stage != Stage::Shutdown),
         overlay: text.is_none().then(|| overlay_paths(args)),
         text,
         reduced_motion,

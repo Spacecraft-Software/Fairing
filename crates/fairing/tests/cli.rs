@@ -1694,3 +1694,22 @@ fn accessible_preview_writes_text_to_stderr_and_the_report_to_stdout() {
         .assert()
         .code(2);
 }
+
+#[test]
+fn the_shutdown_stage_draws_until_it_is_stopped() {
+    // Verifies: FRN-SRS-035
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let out = splash_in(dir.path(), "shutdown")
+        .args(["--exit-after", "0.3", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let data = json(&out)["data"].clone();
+    assert_eq!(data["stage"], "shutdown");
+    assert_eq!(data["reason"], "exit-after");
+    assert_eq!(data["agent"], false, "nothing is asked at shutdown");
+    assert_eq!(data["last_status"], "Shutting down");
+    assert!(!dir.path().join("run/state").exists());
+}

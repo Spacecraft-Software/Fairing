@@ -28,6 +28,8 @@ pub struct Scene {
     /// How far into its frame sequence the theme's animation is.
     time: Duration,
     overlay: Option<OverlayView>,
+    /// Whether the bar and the percentage are drawn: not at shutdown.
+    progress: bool,
 }
 
 /// The journal overlay as the compositor draws it (FRN-SRS-060).
@@ -136,6 +138,7 @@ impl Scene {
             prompt: None,
             time: Duration::ZERO,
             overlay: None,
+            progress: true,
         }
     }
 
@@ -157,6 +160,7 @@ impl Scene {
             prompt: None,
             time: Duration::ZERO,
             overlay: None,
+            progress: true,
         }
     }
 
@@ -189,6 +193,20 @@ impl Scene {
     pub const fn with_time(mut self, time: Duration) -> Self {
         self.time = time;
         self
+    }
+
+    /// Hides the bar and the percentage: the shutdown layout has neither
+    /// (FRN-SRS-035).
+    #[must_use]
+    pub const fn without_progress(mut self) -> Self {
+        self.progress = false;
+        self
+    }
+
+    /// Whether the bar and the percentage are drawn.
+    #[must_use]
+    pub const fn shows_progress(&self) -> bool {
+        self.progress
     }
 
     /// Shows the journal overlay, or none.

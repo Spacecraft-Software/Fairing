@@ -10,7 +10,7 @@
 //! declares. Everything is in reference pixels and goes through a
 //! [`Viewport`](crate::Viewport) before it is drawn (FRN-SRS-007).
 
-use fairing_theme::{BootLayout, RectSpec, Role};
+use fairing_theme::{BootLayout, RectSpec, Role, ShutdownLayout};
 
 use crate::geometry::{Rect, Size};
 
@@ -84,6 +84,23 @@ impl Layout {
             status_color: spec.status.color,
             prompt: rect(spec.prompt.rect),
             prompt_size: spec.prompt.size,
+        }
+    }
+}
+
+impl Layout {
+    /// The layout a compiled theme's shutdown layout describes: its logo and
+    /// its line, with the built-in bar and prompt, which the shutdown scene
+    /// does not draw (FRN-SRS-035).
+    #[must_use]
+    pub fn from_shutdown(spec: &ShutdownLayout) -> Self {
+        Self {
+            logo: rect(spec.logo.rect),
+            show_status: spec.status.show,
+            status_top: spec.status.top,
+            status_size: spec.status.size,
+            status_color: spec.status.color,
+            ..Self::builtin()
         }
     }
 }

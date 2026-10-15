@@ -206,12 +206,14 @@ pub enum StageArg {
     Initrd,
     /// `fairing.service`: from switch-root until greetd takes the screen.
     System,
+    /// `fairing-shutdown.service`: from shutdown.target until the final kill.
+    Shutdown,
 }
 
 /// Arguments of `fairing splash`.
 #[derive(Debug, Args)]
 pub struct SplashArgs {
-    /// Which instance this is: `initrd` before switch-root, `system` after it.
+    /// Which instance this is: `initrd` before switch-root, `system` after it, `shutdown` at the end.
     #[arg(long, value_enum, value_name = "stage")]
     pub stage: StageArg,
     /// Compiled theme (`fairing theme compile`); the built-in theme without it.
@@ -302,7 +304,7 @@ fn parse_size(text: &str) -> Result<(u32, u32), String> {
     Ok((width, height))
 }
 
-/// The verb tree. The shutdown splash arrives with M4.
+/// The verb tree.
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Emit the capability manifest (safe, no side effects).

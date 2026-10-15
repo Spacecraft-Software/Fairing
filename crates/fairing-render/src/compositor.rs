@@ -136,6 +136,28 @@ impl Compositor {
         Ok(compositor)
     }
 
+    /// A compositor for `selection` drawing a compiled theme's shutdown
+    /// layout: its logo, its line and its frame sequence (FRN-SRS-035).
+    ///
+    /// # Errors
+    ///
+    /// Propagates a bundled-font parse failure.
+    ///
+    /// Implements: FRN-SRS-035
+    pub fn with_shutdown(selection: Selection, theme: &CompiledTheme) -> Result<Self, RenderError> {
+        let shutdown = &theme.meta().shutdown;
+        let mut compositor = Self::with_layout(selection, Layout::from_shutdown(shutdown))?;
+        compositor.logo = match shutdown.logo.image {
+            LogoImage::Builtin => None,
+            LogoImage::Image(index) => theme.image(index).map(Sprite::new),
+        };
+        compositor.sequence = shutdown
+            .sequence
+            .as_ref()
+            .and_then(|spec| Sequence::new(theme, spec));
+        Ok(compositor)
+    }
+
     /// The palette in use.
     #[must_use]
     pub const fn palette(&self) -> &Palette {
@@ -176,8 +198,10 @@ impl Compositor {
                 sprite.draw(frame, &self.palette, bounds);
             }
         }
-        let bar = self.draw_bar(frame, &viewport, scene);
-        self.draw_percent(frame, &viewport, scene, bar);
+        if scene.shows_progress() {
+            let bar = self.draw_bar(frame, &viewport, scene);
+            self.draw_percent(frame, &viewport, scene, bar);
+        }
         self.draw_status(frame, &viewport, scene);
         if let Some(prompt) = scene.prompt() {
             self.draw_prompt(frame, &viewport, prompt);
@@ -570,6 +594,33 @@ mod tests {
             none.pixel(round_u32(panel.x + 30.0), round_u32(panel.y + 30.0)),
             Some(theme.color(Role::Background)),
             "no overlay unless asked"
+        );
+    }
+
+    #[test]
+    fn the_shutdown_layout_draws_its_line_and_no_bar() {
+        // Verifies: FRN-SRS-035
+        let theme = Theme::family_default();
+        let size = Size::new(1920, 1080).unwrap_or_else(|e| panic!("{e}"));
+        let mut frame = Frame::new(size, PixelFormat::Rgba8888).unwrap_or_else(|e| panic!("{e}"));
+        let mut compositor =
+            Compositor::with_shutdown(Selection::Color(theme), &CompiledTheme::builtin())
+                .unwrap_or_else(|e| panic!("{e}"));
+        let scene = Scene::new(50)
+            .without_progress()
+            .with_status("Shutting down");
+        compositor.render(&mut frame, &scene);
+        let viewport = Viewport::fit(REFERENCE_SIZE, size);
+        let bar = viewport.rect(Layout::builtin().bar);
+        assert_eq!(
+            count(&frame, bar, theme.color(Role::Accent)),
+            0,
+            "no bar fill at shutdown"
+        );
+        let line = Rect::new(0.0, 640.0, 1920.0, 40.0);
+        assert!(
+            count(&frame, line, theme.color(Role::Foreground)) > 0,
+            "the line"
         );
     }
 

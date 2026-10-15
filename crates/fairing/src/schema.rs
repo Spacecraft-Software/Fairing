@@ -555,7 +555,7 @@ fn splash_data() -> Value {
         "type": "object",
         "required": ["stage", "reason", "chain", "theme", "palette", "frames", "bar", "planned"],
         "properties": {
-            "stage": { "type": "string", "enum": ["initrd", "system"] },
+            "stage": { "type": "string", "enum": ["initrd", "system", "shutdown"] },
             "reason": {
                 "type": ["string", "null"],
                 "enum": ["handoff", "stopped", "boot-finished", "switch-root", "shutdown", "failed-unit", "maintenance",

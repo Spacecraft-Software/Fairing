@@ -5,7 +5,7 @@
 # without building or booting anything. A failed check fails evaluation and
 # names itself. `nix flake check` runs it as `checks.<system>.module-eval`.
 #
-# Verifies: FRN-SRS-027, FRN-SRS-030, FRN-SRS-031, FRN-SRS-032, FRN-SRS-091, FRN-SRS-093
+# Verifies: FRN-SRS-027, FRN-SRS-030, FRN-SRS-031, FRN-SRS-032, FRN-SRS-035, FRN-SRS-091, FRN-SRS-093
 {
   pkgs,
   lib ? pkgs.lib,
@@ -47,6 +47,7 @@ let
   initrdText = initrdUnits."fairing-initrd.service".text;
   systemText = systemUnits."fairing.service".text;
   handoffText = systemUnits."fairing-handoff.service".text;
+  shutdownText = systemUnits."fairing-shutdown.service".text;
   greetdText = systemUnits."greetd.service".text;
   consoleAgentText = systemUnits."systemd-ask-password-console.service".text;
   initrdConsoleAgentText = initrdUnits."systemd-ask-password-console.service".text;
@@ -191,6 +192,33 @@ let
       lib.elem "simpledrm" config.boot.initrd.kernelModules;
     "the agent's keyboards are readable in the initrd: evdev is loaded" =
       lib.elem "evdev" config.boot.initrd.kernelModules;
+    "the overlay's keyboards are readable with the agent off too" =
+      lib.elem "evdev" noAgent.boot.initrd.kernelModules;
+    "FRN-SRS-060: the overlay's journalctl is in the initrd" = lib.any (
+      path: lib.hasSuffix "/bin/journalctl" (toString (path.source or path))
+    ) config.boot.initrd.systemd.storePaths;
+    "FRN-SRS-060: every splash is told which journalctl to run" = lib.all (
+      text: lib.hasInfix "--journalctl /nix/store/" text
+    ) [ initrdText systemText shutdownText ];
+    "FRN-SRS-035: shutdown.target pulls in the shutdown splash" =
+      lib.elem "shutdown.target" systemUnits."fairing-shutdown.service".wantedBy
+      && hasLine shutdownText "DefaultDependencies=no";
+    "FRN-SRS-035: the shutdown splash runs the shutdown stage" =
+      lib.hasInfix "--stage shutdown" shutdownText;
+    "FRN-SRS-035: nothing stops the shutdown splash before the final kill" =
+      !(lib.elem "shutdown.target" (directive shutdownText "Conflicts"))
+      && !(lib.elem "shutdown.target" (directive shutdownText "Before"));
+    "FRN-SRS-035: the shutdown splash waits for the screen to be free" = lib.all (
+      unit: lib.elem unit (directive shutdownText "After")
+    ) [ "greetd.service" "fairing.service" "user.slice" ];
+    "FRN-SRS-035: the machine goes down only once the shutdown splash is drawn" =
+      lib.all (unit: lib.elem unit (directive shutdownText "Before")) [
+        "systemd-poweroff.service"
+        "systemd-reboot.service"
+        "systemd-halt.service"
+        "systemd-kexec.service"
+      ]
+      && hasLine shutdownText "Type=notify";
     "FRN-SRS-090: quiet and splash are on the kernel command line" =
       lib.all (p: lib.elem p config.boot.kernelParams) [
         "quiet"

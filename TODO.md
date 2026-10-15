@@ -16,7 +16,7 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-070 Text backend: `Fairing <NN>% <status>` at most once a second, prompts as plain text, no ANSI sequences, on the console
 - [x] T-071 Frame sequences played in a loop at the theme's rate; reduced motion (accessible mode, `--reduced-motion`, `fairing.reduced_motion=1`) draws the first frame only and moves the bar without easing
 - [x] T-072 Journal overlay: Esc toggles the last 40 entries at notice or higher from `journalctl -o json --follow`; Up/Down, PgUp/PgDn and j/k scroll; keyboards read without a grab while no prompt is open
-- [ ] T-073 Shutdown splash: `fairing splash --stage shutdown` draws the shutdown layout until killed; `fairing-shutdown.service` from shutdown.target to the final kill
+- [x] T-073 Shutdown splash: `fairing splash --stage shutdown` draws the shutdown layout until killed; `fairing-shutdown.service` from shutdown.target to the final kill
 - [ ] T-074 M3 follow-ups: the Caps Lock state read from the keyboard's LED when a grab starts; glyphs rasterised for an echoed answer dropped when its prompt closes
 - [ ] T-075 Module, module-eval and VM tests for the shutdown unit, the overlay's `journalctl` in the initrd and accessible mode
 - [ ] T-076 Manual (overlay, accessible mode, reduced motion, shutdown), README, AGENTS, SKILL, CHANGELOG
