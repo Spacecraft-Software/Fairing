@@ -10,6 +10,8 @@ members = [
   "crates/fairing-askpass",
   "xtask",
 ]
+# The fuzz targets are a workspace of their own (nightly, libfuzzer-sys).
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.0"
@@ -33,11 +35,19 @@ regex = "1.13"
 jiff = { version = "0.2", default-features = false, features = ["std"] }
 # Rendering (M1). tiny-skia without `png-format` keeps flate2/png off the boot path;
 # fontdue without `std` uses hashbrown as upstream intends; rustix's `event` feature is
-# the poll() the DRM page-flip wait needs (drm itself enables only `mm` and `fs`).
+# the poll() the DRM page-flip wait needs (drm itself enables only `mm` and `fs`);
+# `fs` is also the inotify watch, `time` CLOCK_MONOTONIC and `process` the
+# PR_SET_DUMPABLE of fairing-askpass (M3).
 tiny-skia = { version = "0.12.0", default-features = false, features = ["std", "simd"] }
 fontdue = { version = "0.9.4", default-features = false, features = ["simd", "hashbrown"] }
 drm = "0.15.0"
-rustix = { version = "1.1", default-features = false, features = ["event", "std"] }
+rustix = { version = "1.1", default-features = false, features = ["event", "fs", "process", "std", "time"] }
+# Keyboard grab in fairing-askpass (M3, FRN-SRS-028): only open-from-fd and
+# EVIOCGRAB are used; events are read into Fairing's own zeroised buffer.
+evdev = { version = "0.13.2", default-features = false }
+# Secret zeroisation in fairing-askpass (M3, FRN-SRS-024): volatile writes the
+# optimiser cannot drop. No features: no derive macro, no alloc impls needed.
+zeroize = { version = "1.8", default-features = false }
 # Compiled theme artefact (M2): postcard's wire format is specified and stable.
 # No features at all: `to_extend` and `from_bytes` need none, and `use-std`
 # would add two versions of embedded-io for flavours Fairing never uses.

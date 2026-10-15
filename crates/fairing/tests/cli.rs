@@ -1351,6 +1351,9 @@ fn splash_args(dir: &std::path::Path, stage: &str) -> Vec<std::ffi::OsString> {
         ("--runtime-dir", "run"),
         ("--state-dir", "var"),
         ("--sysroot-state-dir", "sysroot"),
+        ("--ask-dir", "ask-password"),
+        ("--input-sysfs", "sys-class-input"),
+        ("--input-dev", "dev-input"),
     ] {
         args.push(flag.into());
         args.push(dir.join(sub).into_os_string());
@@ -1478,6 +1481,7 @@ fn splash_releases_the_output_within_100_ms_of_sigterm() {
     .unwrap_or_else(|e| panic!("{e}"));
     let data = json(stdout.as_bytes())["data"].clone();
     assert_eq!(data["reason"], "handoff");
+    assert_eq!(data["agent"], true, "the agent ran on its own directory");
     assert_eq!(data["bar"], 1.0, "the handoff frame shows 100%");
     // The requirement's 100 ms is the splash's own: from SIGTERM to the
     // output released. Process exit, measured above, has a looser bound.
@@ -1550,6 +1554,10 @@ fn splash_under_an_agent_never_opens_a_vt() {
         .arg(dir.path().join("run"))
         .arg("--state-dir")
         .arg(dir.path().join("var"))
+        .arg("--ask-dir")
+        .arg(dir.path().join("ask-password"))
+        .arg("--input-sysfs")
+        .arg(dir.path().join("sys-class-input"))
         .assert()
         .success()
         .get_output()

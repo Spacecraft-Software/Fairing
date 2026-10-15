@@ -13,11 +13,12 @@ acts as the systemd password agent, and hands the screen to greetd. Part of Spac
 Software. Assurance **Category B**, with `crates/fairing-askpass` and the initrd
 lifecycle unit raised to **Category A** (Steelbore Standard §19). Licence GPL-3.0-or-later.
 
-Milestone state: M0 (repository and posture) and M1 (draws a frame) are merged. M2 (boots
-on Bravais: themes, progress, `fairing splash`, the NixOS module) is implemented; its VM
-tests pass under TCG, and every requirement waits on G1 baselining. The password
-agent (M3) and accessibility, the shutdown splash and frame-sequence playback (M4) are not
-started. Do not advertise verbs, flags or files that do not exist yet.
+Milestone state: M0 (repository and posture), M1 (draws a frame) and M2 (boots on
+Bravais: themes, progress, `fairing splash`, the NixOS module) are merged. M3 (the
+password agent in `fairing-askpass`, run inside the splash) is in progress on its branch;
+every requirement waits on G1 baselining. Accessibility, the shutdown splash and
+frame-sequence playback (M4) are not started. Do not advertise verbs, flags or files that
+do not exist yet.
 
 ## Build, test, lint
 
@@ -130,6 +131,35 @@ will not be green there.
   `Conflicts=greetd.service` (systemd drops greetd's start from the boot transaction).
   `fairing.service` only starts while `/run/fairing` exists (the initrd unit leaves it,
   the stage-2 unit removes it), so `nixos-rebuild switch` never restarts the splash.
+- The password agent (`fairing_askpass::agent::Agent`) is one more non-blocking input of
+  the splash loop, ticked once per frame; `--no-agent` turns it off. The secret lives only
+  in `fairing-askpass` (`Secret`, a fixed 512-byte buffer); the rest of the process sees
+  a `PromptView` with the count typed (nothing under `Silent=1`), or the text only
+  under `Echo=1`, carried in `EchoText`, a fixed buffer zeroised on clear and drop;
+  never copy it into a `String`. Keyboards are
+  grabbed only while a question is open and released the tick it closes. While the agent
+  is up, `/run/fairing/agent` exists and systemd's console agent, its `.path` watch as
+  well as its service, is conditioned on its absence (as upstream does for Plymouth).
+  Both units' `ExecStartPost=` try-restart the watch so the condition is checked once the
+  agent is up (a watch left running fires the skipped service until it hits its trigger
+  limit and fails), and their `ExecStopPost=` remove the flag and restart the watch, so a
+  question survives a crashed splash. With
+  the agent on, never add `Conflicts=systemd-ask-password-console.service`: the conflict
+  is applied when the start job is queued, before the condition is checked, and would
+  stop the splash. An agent that cannot start, a question with no keyboard for
+  10 s, and a prompt left undrawn by a lost output for 2 s each end the run as
+  `agent-failed`, so the console agent asks. The initrd console agent is ordered
+  after `fairing-initrd.service`; never order the stage-2 one after
+  `fairing.service`, which waits for the `/var` mount an encrypted `/var` needs
+  the agent for. The agent is off by default on a non-US console keymap.
+- `ask.*` files are parsed by `fairing_askpass::ask::Ask::parse` only. A key it reads
+  that appears twice in `[Ask]` refuses the file: systemd writes `Message=` raw, after
+  `Socket=` and `Echo=`, so a newline in a device label could otherwise smuggle in a second
+  `Socket=` and redirect the passphrase. Never relax that to "last value wins".
+- The agent answers only a `Socket=` directly inside the question directory it watches,
+  and `reply::send` refuses a path that is a link rather than a socket (maintainer
+  decision, 2026-10-14, T-067). Never widen this, and never hand a refused question to
+  the console agent: it reads the file with the last value winning.
 - zbus connects to `/run/dbus/system_bus_socket` by name, never through
   `DBUS_SYSTEM_BUS_ADDRESS`, and refuses systemd's private socket: zbus 5.19 panics on
   PID 1's replies there and release builds abort on panic.
@@ -205,6 +235,7 @@ will not be green there.
 | Backends and fallback chain | `crates/fairing-render/src/backend/` |
 | Frame pacing, re-acquire, first-frame timing | `crates/fairing-render/src/{cadence,presenter}.rs` |
 | CLI integration tests | `crates/fairing/tests/cli.rs` |
+| Password agent: ask files, watch, keyboards, secret, reply | `crates/fairing-askpass/src/` |
 | Requirement model, validation, Texinfo generator | `xtask/src/requirements/` |
 | Marker scanner, matrix, verdicts | `xtask/src/trace/` |
 | §17 progress block | `xtask/src/progress.rs` |

@@ -51,6 +51,10 @@ pub struct Layout {
     pub status_size: f32,
     /// Colour of the status line.
     pub status_color: Role,
+    /// The region a password prompt is drawn in (FRN-SRS-021).
+    pub prompt: Rect,
+    /// Text size of the prompt.
+    pub prompt_size: f32,
 }
 
 impl Layout {
@@ -78,6 +82,8 @@ impl Layout {
             status_top: spec.status.top,
             status_size: spec.status.size,
             status_color: spec.status.color,
+            prompt: rect(spec.prompt.rect),
+            prompt_size: spec.prompt.size,
         }
     }
 }

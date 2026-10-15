@@ -43,7 +43,7 @@ use crate::selection::{PaletteSources, choose_backend, resolve_palette};
 use crate::splash::clock::Boottime;
 use crate::splash::notify::Notifier;
 use crate::splash::progress::Stage;
-use crate::splash::run::{Environment, Outcome, Paths, Plan, Reason};
+use crate::splash::run::{AgentPaths, Environment, Outcome, Paths, Plan, Reason};
 
 /// The runnable hint for splash failures.
 const HINT: &str = "fairing splash --stage system --dry-run";
@@ -77,6 +77,8 @@ struct Report {
     dbus: bool,
     last_status: Option<String>,
     release_ms: Option<f64>,
+    agent: bool,
+    answered: u32,
     planned: bool,
 }
 
@@ -147,6 +149,8 @@ pub fn run(
         dbus: false,
         last_status: None,
         release_ms: None,
+        agent: !args.no_agent,
+        answered: 0,
         planned: flags.dry_run,
     };
     if flags.dry_run {
@@ -179,6 +183,11 @@ pub fn run(
             sysroot_state: args.sysroot_state_dir.clone(),
         },
         exit_after: args.exit_after.map(Duration::from_secs_f64),
+        agent: (!args.no_agent).then(|| AgentPaths {
+            ask_dir: args.ask_dir.clone(),
+            input_sysfs: args.input_sysfs.clone(),
+            input_dev: args.input_dev.clone(),
+        }),
     };
     let emit_diagnostic = |diagnostic: Diagnostic| diagnostic.emit(context);
     let environment = Environment {
@@ -241,6 +250,8 @@ fn step_aside(
         dbus: false,
         last_status: None,
         release_ms: None,
+        agent: false,
+        answered: 0,
         planned: false,
     };
     emit(&report, context, invocation, flags)
@@ -257,6 +268,8 @@ fn fill(report: &mut Report, outcome: &Outcome) {
     report.dbus = outcome.dbus;
     report.last_status.clone_from(&outcome.last_status);
     report.release_ms = outcome.release_ms;
+    report.agent = outcome.agent;
+    report.answered = outcome.answered;
     if outcome.reason == Reason::NoBackend {
         report.chain.clear();
     }

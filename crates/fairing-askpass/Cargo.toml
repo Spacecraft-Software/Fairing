@@ -17,3 +17,9 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+evdev = { workspace = true }
+rustix = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

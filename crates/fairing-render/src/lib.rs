@@ -65,4 +65,4 @@ pub use palette::Palette;
 #[doc(inline)]
 pub use presenter::{DEFAULT_REACQUIRE_BUDGET, Presenter, PresenterConfig, Reopen, Stats};
 #[doc(inline)]
-pub use scene::Scene;
+pub use scene::{ECHO_CAPACITY, EchoText, Field, PromptView, Scene};

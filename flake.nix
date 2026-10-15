@@ -102,6 +102,11 @@
         // nixpkgs.lib.optionalAttrs (system == "x86_64-linux") {
           vm-boot = import ./packaging/nixos/tests/boot.nix { inherit pkgs module; };
           vm-failed-unit = import ./packaging/nixos/tests/failed-unit.nix { inherit pkgs module; };
+          vm-luks = import ./packaging/nixos/tests/luks.nix { inherit pkgs module; };
+          vm-luks-no-agent = import ./packaging/nixos/tests/luks.nix {
+            inherit pkgs module;
+            agent = false;
+          };
         }
       );
 

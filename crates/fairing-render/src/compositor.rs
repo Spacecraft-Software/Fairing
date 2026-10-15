@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Rust guideline compliant 2026-05-18
 
-//! Draws a [`Scene`] into a [`Frame`]: canvas, logo, bar, percentage, status.
+//! Draws a [`Scene`] into a [`Frame`]: canvas, logo, bar, percentage, status
+//! and, while a question is open, the password prompt.
 
 use std::fmt;
 
@@ -14,7 +15,7 @@ use crate::geometry::{Rect, Viewport, as_f32, round_u32};
 use crate::layout::{Layout, REFERENCE_SIZE};
 use crate::logo;
 use crate::palette::Palette;
-use crate::scene::Scene;
+use crate::scene::{Field, PromptView, Scene};
 use crate::shapes;
 use crate::sprite::Sprite;
 use crate::text::{MIN_PX, TextRenderer};
@@ -109,6 +110,106 @@ impl Compositor {
         let bar = self.draw_bar(frame, &viewport, scene);
         self.draw_percent(frame, &viewport, scene, bar);
         self.draw_status(frame, &viewport, scene);
+        if let Some(prompt) = scene.prompt() {
+            self.draw_prompt(frame, &viewport, prompt);
+        }
+    }
+
+    /// The prompt, top to bottom in its region: the message on the canvas,
+    /// the field on a surface with the focus colour round it, and any notice
+    /// in the error colour on the canvas (FRN-SRS-021, FRN-SRS-026,
+    /// FRN-SRS-029). Every text sits on a pairing the palette verifies.
+    ///
+    /// Implements: FRN-SRS-021, FRN-SRS-026, FRN-SRS-029
+    fn draw_prompt(&mut self, frame: &mut Frame, viewport: &Viewport, prompt: &PromptView) {
+        let region = viewport.rect(self.layout.prompt);
+        let size = viewport.length(self.layout.prompt_size);
+        let px = round_u32(size).max(MIN_PX);
+        let ascent = self.text.line_metrics(px).ascent;
+
+        self.draw_centred(
+            frame,
+            &prompt.message,
+            region,
+            region.y + ascent,
+            px,
+            Role::Foreground,
+        );
+
+        let field = Rect::new(region.x, region.y + 1.5 * size, region.width, 1.8 * size);
+        if let Some(path) = shapes::rounded_rect(field, 0.3 * size) {
+            shapes::fill(frame, &path, self.palette.color(Role::Surface));
+            shapes::stroke(
+                frame,
+                &path,
+                self.palette.color(Role::Focus),
+                viewport.length(2.0),
+            );
+        }
+        let inset = 0.5 * size;
+        let inner = (field.width - 2.0 * inset).max(0.0);
+        let foreground = self.palette.color(Role::Foreground);
+        match &prompt.field {
+            Field::Masked(count) => {
+                let pitch = 0.6 * size;
+                let fits = (inner / pitch).floor();
+                let shown = u32::try_from(*count)
+                    .unwrap_or(u32::MAX)
+                    .min(round_u32(fits));
+                for i in 0..shown {
+                    let cx = field.x + inset + pitch * (as_f32(i) + 0.5);
+                    if let Some(dot) = shapes::circle(cx, field.center_y(), 0.18 * size) {
+                        shapes::fill(frame, &dot, foreground);
+                    }
+                }
+            }
+            Field::Clear(text) => {
+                let tail = self.fit_tail(text.as_str(), px, inner);
+                let baseline =
+                    field.center_y() + f32::midpoint(ascent, self.text.line_metrics(px).descent);
+                self.text
+                    .draw(frame, tail, field.x + inset, baseline, px, foreground);
+            }
+        }
+
+        if let Some(notice) = &prompt.notice {
+            let baseline = field.bottom() + 0.5 * size + ascent;
+            self.draw_centred(frame, notice, region, baseline, px, Role::Error);
+        }
+    }
+
+    /// One line centred in `region`, shortened to its width.
+    fn draw_centred(
+        &mut self,
+        frame: &mut Frame,
+        text: &str,
+        region: Rect,
+        baseline: f32,
+        px: u32,
+        role: Role,
+    ) {
+        let text = self.fit(text, px, region.width);
+        let width = self.text.measure(&text, px);
+        let x = (region.center_x() - width / 2.0).floor();
+        self.text
+            .draw(frame, &text, x, baseline, px, self.palette.color(role));
+    }
+
+    /// The end of `text` that fits in `available` pixels: an echoed field
+    /// shows where the typing is. A slice of `text`, never a copy: the text
+    /// may be an echoed answer (FRN-SRS-024).
+    fn fit_tail<'t>(&mut self, text: &'t str, px: u32, available: f32) -> &'t str {
+        let mut width = 0.0;
+        let mut start = text.len();
+        for (index, ch) in text.char_indices().rev() {
+            let advance = self.text.advance(ch, px);
+            if width + advance > available {
+                break;
+            }
+            width += advance;
+            start = index;
+        }
+        &text[start..]
     }
 
     /// Track, outline and fill; returns the track rectangle in output pixels.
@@ -235,6 +336,7 @@ mod tests {
     use super::*;
     use crate::frame::PixelFormat;
     use crate::geometry::Size;
+    use crate::scene::EchoText;
 
     fn render(width: u32, height: u32, scene: &Scene, format: PixelFormat) -> (Frame, Viewport) {
         let size = Size::new(width, height).unwrap_or_else(|e| panic!("{e}"));
@@ -399,6 +501,126 @@ mod tests {
             round_u32(bar.center_y()),
         );
         assert_eq!(filled, Some(compositor.palette().color(Role::Accent)));
+    }
+
+    fn prompt(field: Field, notice: Option<&str>) -> Scene {
+        Scene::new(30).with_prompt(Some(PromptView {
+            message: "Please enter passphrase for disk root".to_owned(),
+            field,
+            notice: notice.map(str::to_owned),
+        }))
+    }
+
+    /// The field box in output pixels, at 1920x1080.
+    fn field_box() -> Rect {
+        let layout = Layout::builtin();
+        let size = layout.prompt_size;
+        let region = layout.prompt;
+        Rect::new(region.x, region.y + 1.5 * size, region.width, 1.8 * size)
+    }
+
+    #[test]
+    fn no_prompt_leaves_its_region_as_canvas() {
+        let theme = Theme::family_default();
+        let (frame, viewport) = render(1920, 1080, &Scene::new(30), PixelFormat::Rgba8888);
+        let region = viewport.rect(Layout::builtin().prompt);
+        let area = round_u32(region.width * region.height) as usize;
+        assert_eq!(count(&frame, region, theme.color(Role::Background)), area);
+    }
+
+    #[test]
+    fn the_prompt_draws_message_and_a_masked_field() {
+        // Verifies: FRN-SRS-021
+        let theme = Theme::family_default();
+        let layout = Layout::builtin();
+        let (frame, _) = render(
+            1920,
+            1080,
+            &prompt(Field::Masked(6), None),
+            PixelFormat::Rgba8888,
+        );
+        let message = Rect::new(
+            layout.prompt.x,
+            layout.prompt.y,
+            layout.prompt.width,
+            1.4 * layout.prompt_size,
+        );
+        assert!(count(&frame, message, theme.color(Role::Foreground)) > 200);
+        let field = field_box();
+        assert!(count(&frame, field, theme.color(Role::Surface)) > 10_000);
+        assert!(
+            count(&frame, field, theme.color(Role::Focus)) > 100,
+            "focus outline"
+        );
+        let six = count(&frame, field, theme.color(Role::Foreground));
+        let (frame, _) = render(
+            1920,
+            1080,
+            &prompt(Field::Masked(3), None),
+            PixelFormat::Rgba8888,
+        );
+        let three = count(&frame, field, theme.color(Role::Foreground));
+        assert!(
+            three > 0 && six > 3 * three / 2,
+            "one mark per character: {three} vs {six}"
+        );
+        // A very long secret stays inside the field.
+        let (frame, _) = render(
+            1920,
+            1080,
+            &prompt(Field::Masked(4096), None),
+            PixelFormat::Rgba8888,
+        );
+        let right = Rect::new(field.right() + 1.0, field.y, 40.0, field.height);
+        assert_eq!(count(&frame, right, theme.color(Role::Foreground)), 0);
+    }
+
+    #[test]
+    fn echo_draws_the_input_as_text() {
+        // Verifies: FRN-SRS-026
+        let theme = Theme::family_default();
+        let field = field_box();
+        let (masked, _) = render(
+            1920,
+            1080,
+            &prompt(Field::Masked(0), None),
+            PixelFormat::Rgba8888,
+        );
+        assert_eq!(count(&masked, field, theme.color(Role::Foreground)), 0);
+        let (clear, _) = render(
+            1920,
+            1080,
+            &prompt(Field::Clear(EchoText::new("operator")), None),
+            PixelFormat::Rgba8888,
+        );
+        assert!(count(&clear, field, theme.color(Role::Foreground)) > 100);
+        // Longer than the field: the tail is shown and nothing spills out.
+        let long = Field::Clear(EchoText::new(&"y".repeat(500)));
+        let (frame, _) = render(1920, 1080, &prompt(long, None), PixelFormat::Rgba8888);
+        let right = Rect::new(field.right() + 1.0, field.y, 40.0, field.height);
+        assert_eq!(count(&frame, right, theme.color(Role::Foreground)), 0);
+    }
+
+    #[test]
+    fn a_notice_is_drawn_below_the_field_in_the_error_colour() {
+        // Verifies: FRN-SRS-029
+        let theme = Theme::family_default();
+        let field = field_box();
+        let below = Rect::new(field.x, field.bottom() + 2.0, field.width, 50.0);
+        let (plain, _) = render(
+            1920,
+            1080,
+            &prompt(Field::Masked(0), None),
+            PixelFormat::Rgba8888,
+        );
+        assert_eq!(count(&plain, below, theme.color(Role::Error)), 0);
+        let (noticed, _) = render(
+            1920,
+            1080,
+            &prompt(Field::Masked(0), Some("Wrong passphrase. Try again.")),
+            PixelFormat::Rgba8888,
+        );
+        assert!(count(&noticed, below, theme.color(Role::Error)) > 100);
     }
 
     #[test]

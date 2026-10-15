@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# FRN-SRS-104: nothing in the password agent allocates by what a question,
+# or a secret, contains. Text from a question goes into a fixed `Text<N>`,
+# the secret into the fixed `Secret`, a file into the one buffer the watcher
+# allocates when it opens. These are the ways such an allocation would come
+# back; CI's clippy run (-D warnings) refuses them. Tests build fixtures with
+# them and allow the three lints by name.
+
+disallowed-types = [
+  { path = "std::string::String", reason = "a growable string sized by content (FRN-SRS-104); use ask::Text<N>" },
+]
+
+disallowed-macros = [
+  { path = "std::format", reason = "allocates a String sized by its arguments (FRN-SRS-104)" },
+]
+
+disallowed-methods = [
+  { path = "std::fs::read", reason = "reads a whole file into a Vec sized by the file (FRN-SRS-104)" },
+  { path = "std::fs::read_to_string", reason = "reads a whole file into a String sized by the file (FRN-SRS-104)" },
+  { path = "std::io::Read::read_to_end", reason = "grows a Vec to the size of the input (FRN-SRS-104)" },
+  { path = "std::io::Read::read_to_string", reason = "grows a String to the size of the input (FRN-SRS-104)" },
+  { path = "std::vec::Vec::extend_from_slice", reason = "grows a Vec by content (FRN-SRS-104)" },
+]

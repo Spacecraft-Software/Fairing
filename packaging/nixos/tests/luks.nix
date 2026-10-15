@@ -1,0 +1,162 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# NixOS VM test: a LUKS root unlocked at boot. With the agent on (the
+# default), the passphrase is typed on QEMU's virtual keyboard into the
+# splash's own prompt, through evdev and the grab; with `agent = false`, the
+# splash steps aside and systemd's console agent asks on the serial console.
+# Either way the machine boots to greetd. CI runs both under KVM.
+#
+# Verifies: FRN-SRS-022, FRN-SRS-025, FRN-SRS-092
+#
+# What it checks, agent on:
+#   - the initrd splash grabbed a keyboard for the question and answered it
+#     once;
+#   - systemd's console agent stood aside while the splash agent was up;
+#   - the passphrase appears nowhere in the boot's journal;
+#   - the root is the unlocked LUKS device.
+# Agent off: the console agent asked, the splash ran with no agent, and the
+# boot still reached greetd.
+#
+# `tcg = true` runs it without KVM, under QEMU's emulator.
+{
+  pkgs,
+  module,
+  agent ? true,
+  tcg ? false,
+}:
+pkgs.testers.runNixOSTest {
+  name = if agent then "fairing-luks" else "fairing-luks-no-agent";
+  requiredFeatures.kvm = !tcg;
+
+  nodes.machine =
+    { config, lib, ... }:
+    {
+      imports = [ module ];
+      virtualisation = {
+        emptyDiskImages = [ 512 ];
+        useBootLoader = true;
+        # The encrypted root has no store of its own.
+        mountHostNixStore = true;
+        useEFIBoot = true;
+      };
+      boot.loader.systemd-boot.enable = true;
+      environment.systemPackages = [ pkgs.cryptsetup ];
+      boot.initrd.systemd.enable = true;
+      steelbore.fairing = {
+        enable = true;
+        agent.enable = agent;
+        kmsModules = [ "bochs" ];
+      };
+      systemd.services.fairing.serviceConfig.TimeoutStartSec = lib.mkIf tcg (lib.mkForce "120s");
+      boot.initrd.systemd.services.fairing-initrd.serviceConfig.TimeoutStartSec = lib.mkIf tcg (
+        lib.mkForce "120s"
+      );
+      services.greetd = {
+        enable = true;
+        settings.default_session.command = "${lib.getExe' config.services.greetd.package "agreety"} --cmd true";
+      };
+
+      specialisation.boot-luks.configuration = {
+        # With the agent on, the test looks inside the initrd while the
+        # question is open: a shell there, and grep for the journal.
+        testing.initrdBackdoor = agent;
+        boot.initrd.systemd.storePaths = lib.optional agent "${pkgs.gnugrep}/bin/grep";
+        boot.initrd.luks.devices = lib.mkVMOverride {
+          cryptroot.device = "/dev/vdb";
+        };
+        virtualisation.rootDevice = "/dev/mapper/cryptroot";
+      };
+    };
+
+  testScript =
+    { nodes, ... }:
+    let
+      boot-luks = nodes.machine.specialisation.boot-luks.configuration.system.build.toplevel;
+    in
+    ''
+      import datetime as dt
+      import json
+
+      # A boot that stalls fails in minutes, not at the driver's one-hour limit.
+      PATIENCE = dt.timedelta(minutes=5)
+
+      def report(unit):
+          """The splash's JSON report for this boot, from its journal."""
+          lines = machine.succeed(
+              f"journalctl -b -u {unit} -o cat --no-pager | grep '^{{\"data\"'"
+          ).strip().splitlines()
+          assert len(lines) == 1, f"{unit}: {lines}"
+          return json.loads(lines[0])["data"]
+
+      machine.wait_for_unit("multi-user.target")
+      machine.succeed("echo -n supersecret | cryptsetup luksFormat -q --iter-time=1 /dev/vdb -")
+      machine.succeed("echo -n supersecret | cryptsetup luksOpen -q /dev/vdb cryptroot")
+      machine.succeed("mkfs.ext4 /dev/mapper/cryptroot")
+      machine.succeed("${boot-luks}/bin/switch-to-configuration boot")
+      machine.succeed("sync")
+      machine.crash()
+
+      machine.start()
+    ''
+    + (
+      if agent then
+        ''
+          # The initrd, through its backdoor shell: the question is asked, and
+          # the splash says it holds a keyboard for it. The question can open
+          # before the keyboard has enumerated; either journal line says so.
+          grep = "${pkgs.gnugrep}/bin/grep"
+          machine.wait_until_succeeds("ls /run/systemd/ask-password/ask.*", timeout=PATIENCE)
+          try:
+              machine.wait_until_succeeds(
+                  f"journalctl -b -u fairing-initrd.service -o cat --no-pager | {grep} -q 'keyboard(s) grabbed'",
+                  timeout=PATIENCE,
+              )
+          except Exception:
+              # What the splash saw, for the log.
+              print(machine.execute(
+                  "journalctl -b -u fairing-initrd.service -o cat --no-pager; "
+                  "systemctl status fairing-initrd.service --no-pager; "
+                  "ls -l /sys/class/input/ /dev/input/; "
+                  "for e in /sys/class/input/event*; do echo $e; "
+                  "cat $e/device/name $e/device/capabilities/ev $e/device/capabilities/key; done; "
+                  "ls -l /run/systemd/ask-password/ /run/fairing/",
+                  check_return=False,
+              )[1])
+              raise
+          machine.send_chars("supersecret\n")
+          machine.switch_root()
+          machine.wait_for_unit("greetd.service", timeout=PATIENCE)
+
+          initrd = report("fairing-initrd.service")
+          assert initrd["agent"], initrd
+          assert initrd["answered"] == 1, initrd
+          assert initrd["reason"] == "switch-root", initrd
+
+          journal = machine.succeed("journalctl -b -o cat --no-pager")
+          assert "the password question was answered" in journal
+          # The console agent stood aside, and its watch never spun into its
+          # trigger limit.
+          assert "unmet condition check ConditionPathExists=!/run/fairing/agent" in journal, "console agent"
+          assert "Trigger limit hit" not in journal, "console agent watch"
+          # FRN-SRS-025: not in any message, field or unit's output.
+          machine.fail("journalctl -b -o verbose --no-pager | grep -q supersecret")
+          # The flag is gone with the splash.
+          machine.fail("test -e /run/fairing/agent")
+        ''
+      else
+        ''
+          machine.wait_for_console_text("Please enter passphrase for disk cryptroot", timeout=PATIENCE)
+          machine.send_console("supersecret\n")
+          machine.wait_for_unit("greetd.service", timeout=PATIENCE)
+
+          initrd = report("fairing-initrd.service")
+          assert not initrd["agent"], initrd
+          assert initrd["answered"] == 0, initrd
+        ''
+    )
+    + ''
+      assert "/dev/mapper/cryptroot on / type ext4" in machine.succeed("mount")
+      machine.fail("systemctl is-failed --quiet fairing-initrd.service")
+    '';
+}

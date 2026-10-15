@@ -23,6 +23,7 @@ tiny-skia = { workspace = true }
 fontdue = { workspace = true }
 drm = { workspace = true }
 rustix = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

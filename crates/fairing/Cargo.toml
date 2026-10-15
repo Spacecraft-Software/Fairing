@@ -28,6 +28,7 @@ theme-tool = ["fairing-theme/compile"]
 dbus = ["dep:zbus"]
 
 [dependencies]
+fairing-askpass = { version = "0.1.0", path = "../fairing-askpass" }
 fairing-render = { version = "0.1.0", path = "../fairing-render" }
 fairing-theme = { version = "0.1.0", path = "../fairing-theme" }
 clap = { workspace = true }

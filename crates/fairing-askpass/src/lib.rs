@@ -4,10 +4,11 @@
 
 //! systemd ask-password agent for Fairing.
 //!
-//! This crate will watch `/run/systemd/ask-password/` with inotify, parse the
-//! bounded `ask.*` files, reply on the `Socket=` path and zeroise every buffer
-//! that held secret bytes (milestone M3, FRN-SRS-020 to FRN-SRS-029,
-//! FRN-SRS-102, FRN-SRS-104). In M0 it is a compile-only stub.
+//! The agent watches `/run/systemd/ask-password/` with inotify, parses the
+//! bounded `ask.*` files, replies on the `Socket=` path and zeroises every
+//! buffer that held secret bytes (milestone M3, FRN-SRS-020 to FRN-SRS-029,
+//! FRN-SRS-102, FRN-SRS-104). [`ask`] is the question file's parser, [`secret`] the typed secret and
+//! [`reply`] the answer datagram.
 //!
 //! **Assurance Category A** (raised subsystem): every parser is fuzzed, every
 //! allocation on the prompt path has a documented worst-case bound, and
@@ -16,3 +17,10 @@
 //! never relies on drop glue alone.
 
 #![forbid(unsafe_code)]
+
+pub mod agent;
+pub mod ask;
+pub mod input;
+pub mod reply;
+pub mod secret;
+pub mod watch;
