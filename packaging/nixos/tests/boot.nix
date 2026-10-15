@@ -46,6 +46,9 @@ pkgs.testers.runNixOSTest {
       boot.initrd.systemd.services.fairing-initrd.serviceConfig.TimeoutStartSec = lib.mkIf tcg (
         lib.mkForce "120s"
       );
+      systemd.services.fairing-shutdown.serviceConfig.TimeoutStartSec = lib.mkIf tcg (
+        lib.mkForce "120s"
+      );
       services.greetd = {
         enable = true;
         settings.default_session.command = "${lib.getExe' config.services.greetd.package "agreety"} --cmd true";
@@ -134,7 +137,9 @@ pkgs.testers.runNixOSTest {
     # plain lines on the console instead of frames.
     machine.succeed("systemctl set-environment SPACECRAFT_A11Y=1")
     machine.succeed("systemctl start fairing-shutdown.service")
-    machine.wait_for_console_text("Fairing Shutting down")
+    # /dev/console is the last console= of the test VM, tty0, not the serial
+    # port the driver reads: the line is read back from the VT itself.
+    machine.wait_until_succeeds("grep -q 'Fairing Shutting down' /dev/vcs", timeout=30)
     machine.succeed("systemctl stop fairing-shutdown.service")
     machine.succeed("systemctl unset-environment SPACECRAFT_A11Y")
     lines = machine.succeed(

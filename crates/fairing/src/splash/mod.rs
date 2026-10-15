@@ -200,7 +200,7 @@ pub fn run(
         },
         theme: theme.meta().name.clone(),
         palette: palette_report(&resolution),
-        agent: !args.no_agent,
+        agent: !args.no_agent && stage != Stage::Shutdown,
         accessible: accessible.on,
         reduced_motion,
         planned: flags.dry_run,

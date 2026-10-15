@@ -176,10 +176,13 @@ will not be green there.
   shown, is read without blocking once per frame, and is killed in `finish`.
 - `fairing-shutdown.service` has no default dependencies and must never conflict with or
   be ordered before `shutdown.target`: it draws until systemd-shutdown's final kill.
-- The D-Bus client forwards systemd's `JobRemoved` (`failed`/`timeout`), `JobNew`
-  (rescue/emergency) and `NFailedUnits` signals from a second thread on the same
-  connection; on the system bus only signals sent by `org.freedesktop.systemd1` count.
-  A failed poll closes the connection, which ends the signal thread.
+- The D-Bus client forwards systemd's `NFailedUnits`, `JobNew` (rescue/emergency) and
+  `JobRemoved` (`failed`/`timeout`) signals from a second thread on the same connection;
+  on the system bus only signals whose sender is the unique name owning
+  `org.freedesktop.systemd1` count. A failed job never ends the splash by itself (a
+  `Restart=` service or a device timeout is no failed unit): only a count above the
+  baseline for `SIGNAL_SETTLE` does. A failed poll closes the connection, which ends the
+  signal thread.
 - `fairing preview` under `AI_AGENT`, `CI`, `CLAUDECODE`, `CURSOR_AGENT` or `GEMINI_CLI`
   never opens a VT (`Context::is_agent_environment`): `--backend auto` becomes memory with a
   `[WARN]`, an explicit device backend is exit 2. The theme resolver takes `no_color` from

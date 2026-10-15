@@ -20,7 +20,7 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-074 M3 follow-ups: the Caps Lock state read from the keyboard's LED when a grab starts; glyphs rasterised for an echoed answer dropped when its prompt closes
 - [x] T-075 Module, module-eval and VM tests for the shutdown unit, the overlay's `journalctl` in the initrd and accessible mode
 - [x] T-076 Manual (overlay, accessible mode, reduced motion, shutdown), README, AGENTS, SKILL, CHANGELOG
-- [ ] T-077 Adversarial review folded in
+- [x] T-077 Adversarial review folded in
 - [ ] T-078 M4 pull request reviewed and merged
 - [ ] T-079 Screen-reader run on the console with the text backend (Orca or espeakup, brltty), dated note in README.md (maintainer, P-044)
 

@@ -20,11 +20,13 @@
 //! Polling alone ties FRN-SRS-034's second to PID 1's answer time: a failure
 //! shows within one poll interval plus the time of five calls. So a second
 //! thread on the same connection subscribes to the manager's signals and
-//! forwards, the moment each arrives, a job that ended `failed` or `timeout`
-//! (`JobRemoved`), a queued `rescue.target` or `emergency.target` (`JobNew`)
-//! and a change of `NFailedUnits` (`PropertiesChanged`). systemd sends a
-//! signal when the event happens, without being asked, so a slow reply to a
-//! property read no longer delays the exit (P-045).
+//! forwards, the moment each arrives, a change of `NFailedUnits`
+//! (`PropertiesChanged`), a queued `rescue.target` or `emergency.target`
+//! (`JobNew`) and, to name the unit, a job that ended `failed` or `timeout`
+//! (`JobRemoved`). systemd sends a signal when the event happens, without
+//! being asked, so a slow reply to a property read no longer delays the exit
+//! (P-045). Only signals from the connection that owns
+//! `org.freedesktop.systemd1` are taken.
 //!
 //! The threads live until the process exits; the splash exits by returning
 //! from `main`, which ends them.
@@ -315,6 +317,23 @@ fn watch_signals(connection: &Connection, manager: &ManagerProxy<'_>, tx: &Sende
     let Ok(messages) = MessageIterator::for_match_rule(rule, connection, Some(SIGNAL_QUEUE)) else {
         return;
     };
+    // On the bus, the daemon filters broadcasts by the well-known name, but a
+    // signal sent to this connection directly passes every match rule and
+    // zbus cannot compare a well-known sender itself: the owner's unique
+    // name is what each signal is checked against. A bus that cannot name
+    // the owner leaves the polls.
+    let owner = if connection.is_bus() {
+        let owner = zbus::blocking::fdo::DBusProxy::new(connection).and_then(|bus| {
+            bus.get_name_owner(zbus::names::BusName::try_from(MANAGER_SERVICE)?)
+                .map_err(zbus::Error::from)
+        });
+        match owner {
+            Ok(owner) => Some(owner),
+            Err(_e) => return,
+        }
+    } else {
+        None
+    };
     if manager.subscribe().is_err() {
         return;
     }
@@ -325,6 +344,12 @@ fn watch_signals(connection: &Connection, manager: &ManagerProxy<'_>, tx: &Sende
         .spawn(move || {
             for message in messages {
                 let Ok(message) = message else { return };
+                let header = message.header();
+                if let Some(owner) = &owner
+                    && header.sender().map(zbus::names::UniqueName::as_str) != Some(owner.as_str())
+                {
+                    continue;
+                }
                 if let Some(event) = signal_event(&message)
                     && tx.send(event).is_err()
                 {
@@ -334,8 +359,8 @@ fn watch_signals(connection: &Connection, manager: &ManagerProxy<'_>, tx: &Sende
         });
 }
 
-/// Every signal of the manager object. On the system bus only systemd's own
-/// are taken: another client may send a signal on the same path.
+/// Every signal of the manager object. On the system bus the daemon is asked
+/// for systemd's broadcasts only; [`watch_signals`] also checks each sender.
 fn signal_rule(bus: bool) -> zbus::Result<MatchRule<'static>> {
     let rule = MatchRule::builder()
         .msg_type(Type::Signal)

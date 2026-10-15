@@ -619,9 +619,10 @@ The initrd build of Fairing carries no D-Bus client, so the initrd splash
 learns of trouble only through its conflict with emergency mode.  A failed
 unit stops the stage-2 splash, counted from its first reading of systemd, so
 units that failed earlier do not.  The splash hears of a failure the moment
-it happens, from systemd's own signals: a job that ended @code{failed} or
-@code{timeout}, a queued rescue or emergency target, a rise in the count of
-failed units; a poll four times a second backs them up.  After switch-root the splash connects to the system bus; if no
+it happens, from systemd's own signals: a queued rescue or emergency target,
+or a count of failed units that stays above the first reading for 200 ms (a
+service restarted after a failed start is counted failed only for an
+instant); a poll four times a second backs them up.  After switch-root the splash connects to the system bus; if no
 connection is made within 2 seconds, it says so once in the journal and
 drives the bar from the previous boot's measured duration instead.
 
@@ -835,6 +836,16 @@ the console without making it its controlling terminal and never waits on
 it.  @command{fairing preview --accessible} writes the same lines to
 standard error.  Accessible mode also selects the palette's high-contrast
 sibling.
+
+A question is answered from a keyboard attached to the machine, as in
+graphical mode: the splash does not read a serial line.  On a machine
+answered only over a serial console, turn the splash's agent off
+(@code{agent.enable = false}) so systemd's console agent asks there.  If the
+console takes no text for two seconds while a question is open (a terminal
+stopped with Scroll Lock, say), the splash steps aside and leaves the
+question to systemd's console agent.  The lines are UTF-8, as the Linux
+console expects; a serial terminal set to an 8-bit character set may read
+some letters as control codes.
 
 @cindex reduced motion
 Reduced motion keeps a theme's frame sequence on its first frame and moves

@@ -70,6 +70,12 @@ pub const FLIP_STALL_LIMIT: Duration = Duration::from_secs(2);
 /// longer than a simpledrm-to-native swap, short of a user typing.
 pub const BLIND_PROMPT_LIMIT: Duration = Duration::from_secs(2);
 
+/// How long a failed-unit count from systemd's signals must stay above the
+/// baseline before it ends the splash: a service restarted after a failed
+/// start is counted failed for an instant. Signal, settle and one frame stay
+/// well inside FRN-SRS-034's second.
+pub const SIGNAL_SETTLE: Duration = Duration::from_millis(200);
+
 /// The file in the runtime directory that exists while the password agent
 /// is up; systemd's console agent is conditioned on its absence.
 pub const AGENT_FLAG: &str = "agent";
@@ -554,13 +560,14 @@ fn finish(
     if let Some(keys) = session.keys.as_mut() {
         keys.close();
     }
-    if let Some(overlay) = session.overlay.as_mut() {
-        overlay.close();
-    }
     outcome.bar = session.bar.shown();
     outcome.dbus = session.latest.is_some();
     // Release the output first: greetd is waiting for it (FRN-SRS-033).
     let closed = output.close();
+    // Then the overlay's journalctl, whose reaping has no bound of its own.
+    if let Some(overlay) = session.overlay.as_mut() {
+        overlay.close();
+    }
     outcome.release_ms = session
         .terminate_seen
         .map(|seen| seen.elapsed().as_secs_f64() * 1000.0);
@@ -634,6 +641,10 @@ struct Session {
     /// could see them (the initrd's, or any before the bus came up) are not a
     /// unit entering the failed state now (FRN-SRS-034).
     failed_baseline: Option<u32>,
+    /// The unit of the last job systemd's signals reported failed.
+    failed_job: Option<String>,
+    /// The last `NFailedUnits` systemd's signals reported, and since when.
+    failed_count: Option<(u32, Duration)>,
     /// The password agent, while it is up.
     agent: Option<Agent<Keyboards>>,
     /// The overlay's keys, read without a grab.
@@ -658,6 +669,8 @@ impl Session {
             ready_sent: false,
             terminate_seen: None,
             failed_baseline: None,
+            failed_job: None,
+            failed_count: None,
             agent: None,
             keys: None,
             overlay: None,
@@ -676,7 +689,7 @@ impl Session {
         let now = env.clock.now();
         let running = now.saturating_sub(timeline.started);
         self.look_for_cache(plan, now);
-        if let Some(reason) = self.drain(env) {
+        if let Some(reason) = self.drain(env, now) {
             return Some(reason);
         }
         if plan.stage == Stage::System {
@@ -818,19 +831,24 @@ impl Session {
         }))
     }
 
-    /// What systemd's signals said since the last tick (P-045): a failed job,
-    /// a queued rescue or emergency target, or more failed units than at the
-    /// first reading. Signals arrive as the events happen, so the exit does
-    /// not wait for the next poll's answers (FRN-SRS-034). A failure while
+    /// What systemd's signals said (P-045): a queued rescue or emergency
+    /// target, or more failed units than at the first reading for
+    /// [`SIGNAL_SETTLE`]. Signals arrive as the events happen, so the exit
+    /// does not wait for the next poll's answers (FRN-SRS-034).
+    ///
+    /// A failed job alone is not a failed unit: a service that fails its
+    /// start and is restarted (`Restart=`) ends its job `failed` and is
+    /// counted failed for an instant, and a device job that times out leaves
+    /// no unit failed. So only a count that stays above the baseline ends
+    /// the splash; the last failed job only names the unit. A failure while
     /// the system is stopping is part of the shutdown, not of the boot.
     ///
     /// Implements: FRN-SRS-034
     fn signalled(
         &self,
         env: &Environment<'_>,
-        failed_job: Option<String>,
+        now: Duration,
         maintenance_queued: bool,
-        failed_count: Option<u32>,
     ) -> Option<Reason> {
         if self.latest.as_ref().is_some_and(Snapshot::is_stopping) {
             return None;
@@ -844,13 +862,12 @@ impl Session {
             ));
             return Some(Reason::Maintenance);
         }
-        let more_failed = failed_count
-            .zip(self.failed_baseline)
-            .is_some_and(|(count, baseline)| count > baseline);
-        if failed_job.is_none() && !more_failed {
+        let (count, since) = self.failed_count?;
+        let baseline = self.failed_baseline?;
+        if count <= baseline || now.saturating_sub(since) < SIGNAL_SETTLE {
             return None;
         }
-        let message = failed_job.map_or_else(
+        let message = self.failed_job.as_ref().map_or_else(
             || "a unit failed during the boot; leaving the screen to the console".to_owned(),
             |unit| format!("`{unit}` failed during the boot; leaving the screen to the console"),
         );
@@ -874,6 +891,11 @@ impl Session {
         keys.scan(now);
         let mut pressed: Vec<Nav> = Vec::new();
         keys.read(|key| pressed.push(key));
+        if prompt_open {
+            // The agent's grab hides every release from the overlay: a
+            // modifier let go during the prompt would read as held after it.
+            keys.release_modifiers();
+        }
         overlay.frame(&pressed, prompt_open)
     }
 
@@ -974,9 +996,12 @@ impl Session {
     }
 
     /// Writes one scene as text (FRN-SRS-071). A console that cannot be
-    /// written ends the run, so a question is never asked where nobody sees it.
+    /// written ends the run, and so does one that has not taken an open
+    /// question for [`BLIND_PROMPT_LIMIT`] (a tty stopped with Scroll Lock,
+    /// which the agent's grab keeps stopped): a question is never asked
+    /// where nobody sees it.
     fn write(
-        &self,
+        &mut self,
         env: &Environment<'_>,
         text: &mut TextOutput,
         scene: &Scene,
@@ -986,9 +1011,28 @@ impl Session {
         match text.console.present(scene, now) {
             Ok(_lines) => {
                 text.frames += 1;
-                text.first.get_or_insert_with(|| text.origin.elapsed());
+                if text.console.bytes_written() > 0 {
+                    text.first.get_or_insert_with(|| text.origin.elapsed());
+                }
                 outcome.first_bar.get_or_insert(self.bar.shown());
                 outcome.last_status = scene.status().map(str::to_owned);
+                if scene.prompt().is_none() || text.console.prompt_written() {
+                    self.lost_since = None;
+                    return Ok(());
+                }
+                let since = *self.lost_since.get_or_insert(now);
+                if now.saturating_sub(since) > BLIND_PROMPT_LIMIT {
+                    (env.emit)(
+                        Diagnostic::new(
+                            Severity::Warn,
+                            "ASK_BLIND",
+                            "a password question is open but the console takes nothing; leaving it to the console agent",
+                            env.invocation,
+                        )
+                        .with_priority(Priority::Notice),
+                    );
+                    return Err(Reason::AgentFailed);
+                }
                 Ok(())
             }
             Err(error) => {
@@ -1021,19 +1065,20 @@ impl Session {
     }
 
     /// Takes every pending D-Bus message; returns a reason to stop, if any.
-    fn drain(&mut self, env: &Environment<'_>) -> Option<Reason> {
+    fn drain(&mut self, env: &Environment<'_>, now: Duration) -> Option<Reason> {
         let rx = env.systemd.as_ref()?;
-        let mut failed_job = None;
         let mut maintenance_queued = false;
-        let mut failed_count = None;
         while let Ok(event) = rx.try_recv() {
             match event {
                 Event::Connected => self.connected = true,
-                Event::JobFailed(unit) => {
-                    failed_job.get_or_insert(unit);
-                }
+                Event::JobFailed(unit) => self.failed_job = Some(unit),
                 Event::MaintenanceQueued => maintenance_queued = true,
-                Event::FailedUnits(count) => failed_count = Some(count),
+                Event::FailedUnits(count) => {
+                    // Kept from its first arrival while it stays the same.
+                    if self.failed_count.is_none_or(|(last, _)| last != count) {
+                        self.failed_count = Some((count, now));
+                    }
+                }
                 Event::Snapshot(snapshot) => {
                     self.connected = true;
                     let baseline = self.failed_baseline.unwrap_or(snapshot.failed_units);
@@ -1054,7 +1099,7 @@ impl Session {
                 }
             }
         }
-        if let Some(reason) = self.signalled(env, failed_job, maintenance_queued, failed_count) {
+        if let Some(reason) = self.signalled(env, now, maintenance_queued) {
             return Some(reason);
         }
         let latest = self.latest.as_ref()?;
@@ -1613,13 +1658,13 @@ mod tests {
             &plan,
             false,
             vec![
-                Event::Connected,
+                snapshot(0.3, 1, "starting", None),
                 Event::JobFailed("nginx.service".to_owned()),
+                Event::FailedUnits(2),
             ],
             memory,
         );
         assert_eq!(failed.reason, Reason::FailedUnit);
-        assert_eq!(failed.frames, 0, "the first tick ends it");
         assert!(
             harness
                 .diagnostics
@@ -1629,29 +1674,31 @@ mod tests {
         );
         let rescue = harness.run(&plan, false, vec![Event::MaintenanceQueued], memory);
         assert_eq!(rescue.reason, Reason::Maintenance);
-        let counted = harness.run(
-            &plan,
-            false,
-            vec![snapshot(0.3, 1, "starting", None), Event::FailedUnits(2)],
-            memory,
-        );
-        assert_eq!(counted.reason, Reason::FailedUnit);
     }
 
     #[test]
-    fn signals_of_no_new_failure_change_nothing() {
+    fn signals_of_no_lasting_failure_change_nothing() {
+        // Verifies: FRN-SRS-034
         let harness = Harness::new();
-        let plan = harness.plan(Stage::System, Some(Duration::from_millis(100)));
-        // The count is the baseline's; a count before any reading has no
-        // baseline to rise above.
+        let plan = harness.plan(Stage::System, Some(Duration::from_millis(400)));
         for events in [
-            vec![snapshot(0.3, 1, "starting", None), Event::FailedUnits(1)],
-            vec![Event::FailedUnits(4)],
-            // A stop job failing during a shutdown is the shutdown's.
+            // A service restarted after a failed start: its job failed, it
+            // was counted failed for an instant.
             vec![
-                snapshot(0.9, 0, "stopping", None),
-                Event::JobFailed("x.service".to_owned()),
+                snapshot(0.3, 1, "starting", None),
+                Event::JobFailed("flaky.service".to_owned()),
+                Event::FailedUnits(2),
+                Event::FailedUnits(1),
             ],
+            // A device that timed out: a failed job, no failed unit.
+            vec![
+                snapshot(0.3, 0, "starting", None),
+                Event::JobFailed("dev-sdz.device".to_owned()),
+            ],
+            // No baseline to rise above.
+            vec![Event::FailedUnits(4)],
+            // A failure during a shutdown is the shutdown's.
+            vec![snapshot(0.9, 0, "stopping", None), Event::FailedUnits(3)],
         ] {
             let outcome = harness.run(&plan, false, events, memory);
             assert_eq!(outcome.reason, Reason::ExitAfter);
@@ -1745,6 +1792,54 @@ mod tests {
             harness.notifications(),
             ["READY=1", "STOPPING=1", "READY=1", "STOPPING=1"]
         );
+    }
+
+    #[test]
+    fn a_question_the_console_never_takes_goes_to_the_console_agent() {
+        use std::io::Write as _;
+        let harness = Harness::new();
+        let mut plan = harness.plan(Stage::Initrd, Some(Duration::from_mins(1)));
+        // A console that takes nothing: a FIFO whose buffer is already full,
+        // as a tty stopped with Scroll Lock.
+        let console = harness.dir.path().join("console");
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            &console,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::from_raw_mode(0o600),
+            0,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let _reader = rustix::fs::open(
+            &console,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK,
+            rustix::fs::Mode::empty(),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let mut filler = crate::splash::console::Sink::open(&TextTarget::Console(console.clone()))
+            .unwrap_or_else(|e| panic!("{e}"));
+        while filler.write(&[b'x'; 4096]).is_ok() {}
+        plan.text = Some(TextTarget::Console(console));
+        let paths = harness.agent_paths();
+        std::fs::create_dir_all(&paths.ask_dir).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(
+            paths.ask_dir.join("ask.1"),
+            format!(
+                "[Ask]\nSocket={}/sck.1\nMessage=Passphrase\nId=cryptsetup:x\n",
+                paths.ask_dir.display()
+            ),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        plan.agent = Some(paths);
+        std::fs::create_dir_all(&plan.paths.runtime).unwrap_or_else(|e| panic!("{e}"));
+        let outcome = harness.run(&plan, false, Vec::new(), memory);
+        assert_eq!(outcome.reason, Reason::AgentFailed);
+        assert!(
+            harness.codes().contains(&"ASK_BLIND"),
+            "{:?}",
+            harness.codes()
+        );
+        assert_eq!(outcome.first_frame_ms, None, "nothing reached the console");
     }
 
     #[test]

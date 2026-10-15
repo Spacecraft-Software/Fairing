@@ -56,6 +56,10 @@ impl Entry {
         let text = |name: &str| field(name).and_then(Value::as_str).map(str::to_owned);
         let message = match field("MESSAGE")? {
             Value::String(text) => text.clone(),
+            // A field given twice is an array of its values: the first.
+            Value::Array(values) if values.first().is_some_and(Value::is_string) => {
+                values.first().and_then(Value::as_str)?.to_owned()
+            }
             // A message that is not UTF-8 is an array of bytes.
             Value::Array(bytes) => {
                 let bytes: Vec<u8> = bytes
@@ -131,6 +135,9 @@ impl Journal {
                 "--lines=40",
                 "--no-pager",
                 "--quiet",
+                // Without it, journalctl writes a field of 4 KiB or more as
+                // null; MAX_LINE bounds the line instead.
+                "--all",
             ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -245,6 +252,9 @@ mod tests {
         let entry = Entry::parse(notice.as_bytes()).unwrap_or_else(|| panic!("no entry"));
         assert_eq!(entry.line(), "       - [INFO] Reached target");
         assert_eq!(Entry::parse(b"{\"MESSAGE\":null}"), None);
+        let twice = r#"{"PRIORITY":"5","MESSAGE":["first","second"]}"#;
+        let entry = Entry::parse(twice.as_bytes()).unwrap_or_else(|| panic!("no entry"));
+        assert_eq!(entry.line(), "       - [INFO] first");
         assert_eq!(Entry::parse(b"not json"), None);
     }
 

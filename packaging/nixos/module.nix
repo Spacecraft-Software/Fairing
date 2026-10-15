@@ -14,7 +14,7 @@
 # Escape shows the journal over any of the three; each runs journalctl for
 # it, from the initrd's systemd or the system's.
 #
-# Neither unit is required by anything: a splash that fails, hangs or is
+# No Fairing unit is required by anything: a splash that fails, hangs or is
 # missing never stops a boot (FRN-SRS-031).
 #
 # Both instances answer systemd's password questions in the splash (M3). While
@@ -381,18 +381,6 @@ in
       lib.mkIf cfg.agent.enable initrdConsoleAgentDropIn;
     systemd.paths.systemd-ask-password-console = lib.mkIf cfg.agent.enable consoleAgentDropIn;
 
-    # The handoff (FRN-SRS-017, FRN-SRS-032): greetd's start pulls this in and
-    # waits for it. It marks the handoff, then stops the splash and waits for
-    # it to exit, so DRM master is free when greetd opens the console. The
-    # marker is what makes that SIGTERM the handoff (a full bar, the durations
-    # cached); a stop without it is a plain stop. A unit of its own, not an
-    # ExecStartPre of greetd: greetd is Type=idle, and systemd would hold
-    # every command of it, ExecStartPre included, for its 5 s idle wait.
-    # It runs once logins are allowed, after systemd-user-sessions.service as
-    # greetd itself and plymouth-quit.service do; ordered after the splash
-    # alone, it would run as soon as the splash sent READY=1 and end it at the
-    # start of stage 2. Both commands may fail: once the splash has gone,
-    # /run/fairing is gone.
     # The shutdown splash (FRN-SRS-035). Every shutdown, reboot and power-off
     # activates shutdown.target, which pulls this in. It starts once the
     # sessions, greetd and any boot splash have let the screen go: systemd
@@ -446,6 +434,18 @@ in
       };
     };
 
+    # The handoff (FRN-SRS-017, FRN-SRS-032): greetd's start pulls this in and
+    # waits for it. It marks the handoff, then stops the splash and waits for
+    # it to exit, so DRM master is free when greetd opens the console. The
+    # marker is what makes that SIGTERM the handoff (a full bar, the durations
+    # cached); a stop without it is a plain stop. A unit of its own, not an
+    # ExecStartPre of greetd: greetd is Type=idle, and systemd would hold
+    # every command of it, ExecStartPre included, for its 5 s idle wait.
+    # It runs once logins are allowed, after systemd-user-sessions.service as
+    # greetd itself and plymouth-quit.service do; ordered after the splash
+    # alone, it would run as soon as the splash sent READY=1 and end it at the
+    # start of stage 2. Both commands may fail: once the splash has gone,
+    # /run/fairing is gone.
     systemd.services.fairing-handoff = {
       description = "Fairing hands the screen to greetd";
       unitConfig.DefaultDependencies = "no";

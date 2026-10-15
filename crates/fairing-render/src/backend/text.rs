@@ -33,7 +33,13 @@ pub struct TextConsole<W> {
     last: Option<(String, Duration)>,
     /// The message and notice of the open question, as written.
     prompt: Option<(String, Option<String>)>,
+    /// The part of the last line the console has not taken yet. A
+    /// non-blocking write can take part of a line; the rest goes out before
+    /// anything else, so no line is ever broken or written twice.
+    pending: Vec<u8>,
     lines: u64,
+    /// Bytes the console has taken.
+    written: u64,
 }
 
 impl<W: Write> TextConsole<W> {
@@ -44,7 +50,9 @@ impl<W: Write> TextConsole<W> {
             out,
             last: None,
             prompt: None,
+            pending: Vec::new(),
             lines: 0,
+            written: 0,
         }
     }
 
@@ -62,6 +70,9 @@ impl<W: Write> TextConsole<W> {
     ///
     /// Implements: FRN-SRS-071, FRN-SRS-073
     pub fn present(&mut self, scene: &Scene, now: Duration) -> io::Result<u32> {
+        if !self.flush_pending()? {
+            return Ok(0);
+        }
         let Some(prompt) = scene.prompt() else {
             self.prompt = None;
             return self.progress(scene, now);
@@ -91,7 +102,22 @@ impl<W: Write> TextConsole<W> {
         Ok(written)
     }
 
-    /// Lines written so far.
+    /// Whether the open question's message has reached the console whole.
+    /// A console that takes nothing (a tty stopped with Scroll Lock) leaves
+    /// the question unseen, which the splash must not wait on for ever.
+    #[must_use]
+    pub fn prompt_written(&self) -> bool {
+        self.prompt.is_some() && self.pending.is_empty()
+    }
+
+    /// Bytes the console has taken so far.
+    #[must_use]
+    pub const fn bytes_written(&self) -> u64 {
+        self.written
+    }
+
+    /// Lines written so far, a line the console has taken only part of
+    /// included.
     #[must_use]
     pub const fn lines(&self) -> u64 {
         self.lines
@@ -117,16 +143,36 @@ impl<W: Write> TextConsole<W> {
         Ok(1)
     }
 
-    /// Writes `text` and a newline; `false` when the console is not ready.
+    /// Writes `text` and a newline; `false` when the console is not ready
+    /// for a new line. A line the console takes only part of counts as
+    /// written: its tail goes out first on later calls.
     fn line(&mut self, text: &str) -> io::Result<bool> {
-        let mut bytes = Vec::with_capacity(text.len() + 1);
-        bytes.extend_from_slice(text.as_bytes());
-        bytes.push(b'\n');
-        match self.out.write_all(&bytes).and_then(|()| self.out.flush()) {
-            Ok(()) => {
-                self.lines += 1;
-                Ok(true)
+        if !self.flush_pending()? {
+            return Ok(false);
+        }
+        self.pending.extend_from_slice(text.as_bytes());
+        self.pending.push(b'\n');
+        self.lines += 1;
+        self.flush_pending()?;
+        Ok(true)
+    }
+
+    /// Writes what is left of the last line; `true` once nothing is left.
+    fn flush_pending(&mut self) -> io::Result<bool> {
+        while !self.pending.is_empty() {
+            match self.out.write(&self.pending) {
+                Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+                Ok(n) => {
+                    self.pending.drain(..n);
+                    self.written += u64::try_from(n).unwrap_or(u64::MAX);
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(false),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
             }
+        }
+        match self.out.flush() {
+            Ok(()) => Ok(true),
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(false),
             Err(error) => Err(error),
         }
@@ -155,8 +201,24 @@ pub fn progress_line(scene: &Scene) -> String {
 #[must_use]
 pub fn plain(text: &str) -> String {
     text.chars()
-        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .map(|ch| {
+            if ch.is_control() || reorders(ch) {
+                ' '
+            } else {
+                ch
+            }
+        })
         .collect()
+}
+
+/// Line and paragraph separators and the bidirectional controls: not
+/// escape sequences, but they break a line or reorder it, and a screen
+/// reader reads the result in an order nobody wrote.
+const fn reorders(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+    )
 }
 
 #[cfg(test)]
@@ -204,7 +266,7 @@ mod tests {
     fn nothing_but_plain_text_reaches_the_console() {
         // Verifies: FRN-SRS-073
         let mut console = TextConsole::new(Vec::new());
-        let hostile = "\u{1b}[31mRed\u{1b}[0m \u{9b}2J\u{7}done\r";
+        let hostile = "\u{1b}[31mRed\u{1b}[0m \u{9b}2J\u{7}done\r\u{202e}gro\u{2028}";
         let scene = Scene::new(10).with_status(hostile);
         console
             .present(&scene, secs(0.0))
@@ -219,7 +281,8 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"));
         let out = written(&console);
         assert!(
-            out.chars().all(|ch| ch == '\n' || !ch.is_control()),
+            out.chars()
+                .all(|ch| ch == '\n' || !(ch.is_control() || reorders(ch))),
             "{out:?}"
         );
         assert!(out.contains("Fairing 10%"), "{out:?}");
@@ -283,14 +346,84 @@ mod tests {
         }
     }
 
+    /// A console that takes `take` bytes, then refuses `busy` writes.
+    struct Short {
+        take: usize,
+        busy: u32,
+        out: Vec<u8>,
+    }
+
+    impl Write for Short {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.take == 0 && self.busy > 0 {
+                self.busy -= 1;
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
+            let n = if self.take > 0 {
+                buf.len().min(std::mem::take(&mut self.take))
+            } else {
+                buf.len()
+            };
+            self.out.extend_from_slice(&buf[..n]);
+            Ok(n)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_line_cut_short_is_finished_never_repeated() {
+        // Verifies: FRN-SRS-071
+        let mut console = TextConsole::new(Short {
+            take: 5,
+            busy: 2,
+            out: Vec::new(),
+        });
+        let scene = |p: u8| Scene::new(p).with_status("Mounting /home");
+        assert_eq!(console.present(&scene(3), secs(0.0)).ok(), Some(1));
+        // Still busy: neither the tail nor a new line goes out.
+        assert_eq!(console.present(&scene(5), secs(1.0)).ok(), Some(0));
+        assert_eq!(console.present(&scene(6), secs(2.0)).ok(), Some(1));
+        assert_eq!(
+            String::from_utf8_lossy(&console.into_inner().out),
+            "Fairing 3% Mounting /home\nFairing 6% Mounting /home\n"
+        );
+    }
+
+    #[test]
+    fn an_unwritten_question_is_known_as_such() {
+        let mut console = TextConsole::new(Busy {
+            busy: 3,
+            out: Vec::new(),
+        });
+        let ask = Scene::new(1).with_prompt(Some(PromptView {
+            message: "Passphrase:".to_owned(),
+            field: Field::Masked(0),
+            notice: None,
+        }));
+        console
+            .present(&ask, secs(0.0))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(!console.prompt_written());
+        for _ in 0..3 {
+            console
+                .present(&ask, secs(0.1))
+                .unwrap_or_else(|e| panic!("{e}"));
+        }
+        assert!(console.prompt_written());
+    }
+
     #[test]
     fn a_busy_console_gets_the_line_later() {
         let mut console = TextConsole::new(Busy {
             busy: 1,
             out: Vec::new(),
         });
-        assert_eq!(console.present(&Scene::new(1), secs(0.0)).ok(), Some(0));
-        assert_eq!(console.present(&Scene::new(1), secs(0.1)).ok(), Some(1));
+        // The line is taken on, and goes out once the console is ready.
+        assert_eq!(console.present(&Scene::new(1), secs(0.0)).ok(), Some(1));
+        assert_eq!(console.present(&Scene::new(1), secs(0.1)).ok(), Some(0));
         assert_eq!(console.into_inner().out, b"Fairing 1%\n");
     }
 }

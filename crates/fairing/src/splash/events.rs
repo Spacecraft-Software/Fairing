@@ -55,9 +55,9 @@ pub enum Event {
     Connected,
     /// A fresh reading.
     Snapshot(Snapshot),
-    /// A job ended with `failed` or `timeout`: its unit has entered the failed
-    /// state. Sent from systemd's `JobRemoved` signal the moment it arrives,
-    /// however slowly PID 1 answers the polls (FRN-SRS-034).
+    /// A job ended with `failed` or `timeout` (`JobRemoved`). Not proof of a
+    /// failed unit, which a restarted service or a device timeout is not:
+    /// it names the unit when the failed-unit count confirms one.
     JobFailed(String),
     /// A job for `rescue.target` or `emergency.target` was queued (`JobNew`).
     MaintenanceQueued,

@@ -25,8 +25,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
   `--reduced-motion`, `fairing.reduced_motion=1`) keeps the first frame and moves the
   bar without easing. `fairing splash --stage shutdown` and `fairing-shutdown.service`
   draw the theme's shutdown layout from `shutdown.target` until the final kill.
-- The stage-2 splash ends on systemd's `JobRemoved`, `JobNew` and `NFailedUnits` signals
-  as they arrive, not only on its polls.
+- The stage-2 splash ends on systemd's signals as they arrive, not only on its polls: a
+  queued rescue or emergency target (`JobNew`), or an `NFailedUnits` count that stays
+  above the first reading for 200 ms. A failed job alone (a restarted service, a device
+  timeout) does not end it, and only signals from systemd's own connection count.
 - Caps Lock is read from the keyboard's LED when the agent grabs it, and the glyphs drawn
   for an echoed answer are zeroised and dropped once its prompt closes.
 

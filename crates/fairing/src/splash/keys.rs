@@ -155,6 +155,11 @@ impl Navigation {
         }
     }
 
+    /// Forgets every held modifier.
+    pub const fn release_modifiers(&mut self) {
+        self.held = 0;
+    }
+
     /// Closes every keyboard.
     pub fn close(&mut self) {
         self.open.clear();
