@@ -464,6 +464,7 @@ impl fmt::Debug for Compositor {
             .field("text", &self.text)
             .field("logo", &self.logo)
             .field("sequence", &self.sequence)
+            .field("echoed", &self.echoed)
             .finish()
     }
 }
