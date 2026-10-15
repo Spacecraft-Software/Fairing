@@ -14,6 +14,22 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 
 ### Added
 
+- M4 operator and accessibility. Escape shows the journal over the splash: the boot's last
+  40 entries at notice or higher from `journalctl -o json --follow`, newest at the bottom,
+  scrolled with Up/Down, PgUp/PgDn and j/k; keyboards are read without a grab and the
+  overlay is off while a password prompt is open. Accessible mode (`--accessible`,
+  `SPACECRAFT_A11Y=1`, kernel `fairing.accessible=1`; off otherwise, `--no-accessible`
+  wins) writes `Fairing <NN>% <status>` to the console at most once a second, prompts as
+  plain text, no ANSI sequences, and selects the high-contrast palette. Theme frame
+  sequences play in a loop at their rate; reduced motion (accessible mode,
+  `--reduced-motion`, `fairing.reduced_motion=1`) keeps the first frame and moves the
+  bar without easing. `fairing splash --stage shutdown` and `fairing-shutdown.service`
+  draw the theme's shutdown layout from `shutdown.target` until the final kill.
+- The stage-2 splash ends on systemd's `JobRemoved`, `JobNew` and `NFailedUnits` signals
+  as they arrive, not only on its polls.
+- Caps Lock is read from the keyboard's LED when the agent grabs it, and the glyphs drawn
+  for an echoed answer are zeroised and dropped once its prompt closes.
+
 - The password agent refuses an `ask.*` file that repeats a key it reads, and answers
   only a socket directly inside the question directory, never through a link. systemd
   writes `Message=` raw after `Socket=`, so a device label with a newline could otherwise

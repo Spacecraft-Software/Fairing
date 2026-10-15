@@ -10,7 +10,8 @@ description: >
   themes, `fairing splash` is the boot splash the systemd units run, and `--version
   --json` returns the attribution envelope. In the repository, `cargo xtask` runs the
   requirements generator, traceability gate, progress block and text-format gate. The
-  splash also answers systemd's password questions; the shutdown splash arrives later.
+  splash also answers systemd's password questions, shows the journal on Escape, draws
+  at shutdown, and writes plain console text in accessible mode.
 license: GPL-3.0-or-later
 project: Spacecraft Software
 component: Fairing
@@ -24,7 +25,7 @@ version: 0.1.0
 - `fairing describe` — capability manifest; safe, idempotent, no side effects
 - `fairing schema [<command>]` — JSON Schema Draft 2020-12 for the tool or one command
 - `fairing preview [--seconds n] [--backend auto|drm|fbdev|memory] [--snapshot file.ppm]
-  [--palette slug] [--status text] [--size WxH] [--fps hz]` — draw the splash with a
+  [--palette slug] [--status text] [--size WxH] [--fps hz] [--reduced-motion]` — draw the splash with a
   simulated bar, then restore the console; `--dry-run` reports the plan without opening
   a device; `--theme <path>` draws a compiled theme or a Nickel source
 - `fairing theme check <theme.ncl>` — contract and compile rules, writing nothing; exit 2
@@ -32,17 +33,22 @@ version: 0.1.0
 - `fairing theme compile <theme.ncl> [--output file.fairing]` — write the artefact;
   `--dry-run` compiles without writing; the report carries `bytes` and `load_ms`
 - `fairing theme inspect <file.fairing>` — layouts and images of a compiled theme
-- `fairing splash --stage initrd|system [--theme file.fairing] [--palette slug]
-  [--no-agent]` — the boot splash, which also answers password questions unless
-  `--no-agent`; always exits 0 once its arguments are valid, with the reason in
+- `fairing splash --stage initrd|system|shutdown [--theme file.fairing] [--palette slug]
+  [--no-agent] [--reduced-motion]` — the boot splash (or, with `shutdown`, the shutdown
+  splash), which also answers password questions unless `--no-agent`; always exits 0 once its arguments are valid, with the reason in
   `data.reason` (`handoff`, `switch-root`, `shutdown`, `failed-unit`, `maintenance`,
   `no-backend`, `render-failed`, `agent-failed`, `theme-unreadable`, `stopped`,
-  `boot-finished`) and `data.agent`/`data.answered`; `--dry-run` reports the plan
+  `boot-finished`) and `data.agent`/`data.answered`/`data.accessible`/
+  `data.reduced_motion`; `--dry-run` reports the plan
 - `fairing --version` — name, version, maintainer, website, copyright
 
 `theme check` and `theme compile` exist only in the full build (cargo feature
-`theme-tool`); the splash builds answer `FEATURE_UNAVAILABLE`. Planned (not yet present):
-the shutdown stage of `fairing splash`.
+`theme-tool`); the splash builds answer `FEATURE_UNAVAILABLE`.
+
+Accessible mode (`--accessible`, `SPACECRAFT_A11Y=1`, kernel `fairing.accessible=1`;
+`--no-accessible` keeps it off) draws no frames: `backend` is `text`, and the lines
+`Fairing <NN>% <status>` go to the console (`splash`) or stderr (`preview`, and `splash`
+under an agent harness). `preview --accessible --snapshot` is exit 2.
 
 ## Agents and `preview`
 
@@ -66,7 +72,7 @@ with `--backend auto` the `backend` is `auto`, `chain` lists what would be tried
 
 `--json`, `--format`, `--fields`, `--dry-run`, `--verbose`/`-v`, `--quiet`/`-q`,
 `--no-color`, `--color`, `--absolute-time`, `--print0`/`-0`, `--yes`, `--force`,
-`--help`, `--version`/`-V`.
+`--accessible`, `--no-accessible`, `--help`, `--version`/`-V`.
 
 ## Exit codes
 

@@ -64,6 +64,8 @@ Maintained by Mohamed Hammad
 * Themes::              Writing, checking and compiling a theme.
 * Running under systemd:: The units, the NixOS module and the greetd handoff.
 * Password agent::      Answering a LUKS passphrase inside the splash.
+* Journal overlay::     The boot's log, over the splash, on Escape.
+* Accessibility::       Accessible mode, the text backend and reduced motion.
 * Needs::               Why the software exists and the constraints it serves.
 * Requirements::        What the software shall do, one verifiable statement at a time.
 * Index::               Concept and identifier index.
@@ -129,9 +131,8 @@ Standard: every verb answers in human-readable text on a terminal and in a
 single JSON document (@code{--json}) when piped, under an agent variable, or
 when asked.  The live capability manifest is @command{fairing describe --json};
 @command{fairing schema [@var{command}]} returns JSON Schema Draft 2020-12 for
-the whole tool or one verb.  This chapter describes the verbs that exist in
-version @value{VERSION}; the shutdown splash and the password prompt arrive
-with later milestones and are documented when they do.
+the whole tool or one verb.  This chapter describes the verbs of version
+@value{VERSION}.
 
 @menu
 * splash::              The boot splash the systemd units run.
@@ -148,8 +149,8 @@ with later milestones and are documented when they do.
 
 @cindex splash
 @example
-fairing splash --stage initrd|system [--theme @var{file.fairing}] [--palette @var{slug}]
-               [--no-agent]
+fairing splash --stage initrd|system|shutdown [--theme @var{file.fairing}]
+               [--palette @var{slug}] [--no-agent] [--reduced-motion]
 @end example
 
 The boot splash itself.  The systemd units run it, once per boot stage
@@ -175,6 +176,10 @@ is the handoff: the splash shows the full bar, releases the display within
 @file{/var/lib/fairing/boot-duration} and exits.  Any other @code{SIGTERM}
 releases the display just as fast, without the full bar or the
 measurement.
+@item --stage shutdown
+From @code{shutdown.target} until the final kill: the theme's shutdown layout,
+its logo and one line (``Shutting down'' in the built-in theme), with no bar.
+Nothing but a signal ends it, and it asks no password question.
 @item --theme
 A compiled theme (@pxref{Themes}).  Without it the built-in theme is drawn.
 @item --palette
@@ -182,7 +187,12 @@ A registered palette slug, as for @command{fairing preview}.
 @item --no-agent
 Do not answer password questions; leave them to systemd's console agent.
 Without it the splash answers them itself (@pxref{Password agent}).
+@item --reduced-motion
+Keep the theme's frame sequence on its first frame and move the bar without
+easing (@pxref{Accessibility}).
 @end table
+
+Escape shows the journal over the splash (@pxref{Journal overlay}).
 
 @cindex fail-open
 The bar never moves backwards: when a new reading is lower it holds, and a
@@ -245,7 +255,7 @@ answer @code{FEATURE_UNAVAILABLE}; they load compiled themes only.
 fairing preview [--seconds @var{n}] [--backend auto|drm|fbdev|memory]
                 [--snapshot @var{file.ppm}] [--palette @var{slug}]
                 [--status @var{text}] [--size @var{W}x@var{H}] [--fps @var{hz}]
-                [--theme @var{file}]
+                [--theme @var{file}] [--reduced-motion]
 @end example
 
 Draws the splash with a bar that advances from 0 to 100 percent over
@@ -363,6 +373,10 @@ NUL-delimited output for @command{xargs -0}.
 Skip confirmations.
 @item --version
 Name, version, maintainer, website and copyright, as text or as an envelope.
+@item --accessible
+@itemx --no-accessible
+Turn accessible mode on, or keep it off whatever the environment and the
+kernel command line say (@pxref{Accessibility}).
 @end table
 
 @node Environment
@@ -391,6 +405,9 @@ Colour precedence as the CLI Standard defines it.  @env{NO_COLOR} also selects
 the mono theme for the splash itself.
 @item SPACECRAFT_THEME
 A registered theme slug for the splash palette (Steelbore Standard §11.6).
+@item SPACECRAFT_A11Y
+@code{1} turns accessible mode on, @code{0} keeps it off; below
+@option{--accessible} and above the kernel command line.
 @item NOTIFY_SOCKET
 Set by systemd for a @code{Type=notify} unit: @command{fairing splash} sends
 @code{READY=1} there after its first frame and @code{STOPPING=1} as it exits.
@@ -400,9 +417,10 @@ written as journal lines with a syslog priority.
 @end table
 
 @cindex kernel command line
-The splash also reads one kernel parameter, @code{fairing.theme=@var{slug}},
+The splash also reads three kernel parameters: @code{fairing.theme=@var{slug}},
 which chooses the palette below @code{--palette} and above
-@env{SPACECRAFT_THEME}.
+@env{SPACECRAFT_THEME}; @code{fairing.accessible=1} or @code{=0}, accessible
+mode below @env{SPACECRAFT_A11Y}; and @code{fairing.reduced_motion=1}.
 
 @node Exit codes
 @section Exit codes
@@ -486,8 +504,8 @@ relative to the theme.  Every opaque pixel of a PNG must be a colour of the
 declared palette, unless the logo sets @code{tint}, in which case only the
 image's alpha channel is used and drawn in that colour.  A frame sequence is
 a list of PNG frames of one size, played at up to 30 frames per second, under
-the same rule.  Sequences are compiled and stored now; playing them arrives
-with the reduced-motion work of a later milestone.
+the same rule.  The splash plays it in a loop at its declared rate, from the
+first frame; under reduced motion it shows the first frame only.
 
 @cindex artefact
 The compiled artefact is one file of at most 4 MiB: an eight-byte magic,
@@ -510,8 +528,8 @@ fatal; the module also refuses an unregistered @code{palette} option at build
 time.  @command{fairing preview}, run by a person, treats an unregistered
 @code{--palette} as a usage error instead.  Then,
 unless a @code{-high-contrast} or mono slug was named outright, @env{NO_COLOR}
-selects the mono variant.  The accessible-mode overlay to
-@code{-high-contrast} arrives with the accessibility milestone.
+selects the mono variant, and otherwise accessible mode selects the
+palette's @code{-high-contrast} sibling.
 
 @node Running under systemd
 @chapter Running under systemd
@@ -535,8 +553,9 @@ steelbore.fairing = @{
 Enabling it compiles the theme at build time, copies the artefact and a small
 build of Fairing into the systemd initrd, adds @code{simpledrm} and the
 listed KMS drivers to the initrd (and @code{evdev}, through which the password
-agent reads keyboards), adds @code{quiet} and @code{splash} to the
-kernel command line, and installs three units.  The module requires the
+agent and the journal overlay read keyboards, with @command{journalctl} for
+the overlay), adds @code{quiet} and @code{splash} to the
+kernel command line, and installs four units.  The module requires the
 systemd initrd and greetd, and refuses a configuration that also enables
 Plymouth or names an unregistered palette.
 
@@ -558,6 +577,16 @@ read-only except its own two directories, and no network.
 @item fairing-handoff.service
 Runs once logins are allowed, just before greetd: writes the handoff marker,
 stops @code{fairing.service} and waits for it to exit.
+@item fairing-shutdown.service
+@cindex shutdown splash
+Runs @code{fairing splash --stage shutdown} whenever @code{shutdown.target}
+is reached for a halt, a power-off, a reboot or a kexec.  It starts once the
+user sessions, greetd and any boot splash have let the screen go, and the
+service that halts, powers off or reboots the machine waits until its first
+frame is drawn.  Nothing stops it: it neither conflicts with
+@code{shutdown.target} nor has default dependencies, so it draws until
+@command{systemd-shutdown} kills every process at the very end.  It runs in
+the same sandbox as @code{fairing.service}, without its directories.
 @end table
 
 @cindex greetd
@@ -589,7 +618,10 @@ seconds to start, one second to stop.
 The initrd build of Fairing carries no D-Bus client, so the initrd splash
 learns of trouble only through its conflict with emergency mode.  A failed
 unit stops the stage-2 splash, counted from its first reading of systemd, so
-units that failed earlier do not.  After switch-root the splash connects to the system bus; if no
+units that failed earlier do not.  The splash hears of a failure the moment
+it happens, from systemd's own signals: a job that ended @code{failed} or
+@code{timeout}, a queued rescue or emergency target, a rise in the count of
+failed units; a poll four times a second backs them up.  After switch-root the splash connects to the system bus; if no
 connection is made within 2 seconds, it says so once in the journal and
 drives the bar from the previous boot's measured duration instead.
 
@@ -725,6 +757,15 @@ socket directly inside the question directory, where systemd always creates
 it, and sends nothing when that path is a link rather than a socket.  A
 refused question is not handed to the console agent, which reads the file
 the usual way; it stays unanswered, which fails closed.
+
+@item What the splash keeps of an echoed answer
+An @code{Echo=1} answer reaches the compositor in a fixed buffer zeroised on
+clear and drop.  The glyphs drawn for it stay in the renderer's cache only
+while its prompt is open: on the first frame after, every cached glyph is
+zeroised and the cache emptied, so the set of characters the answer used is
+not kept for the rest of the boot.  Caps Lock is read from the keyboard's
+LED when the grab starts, so a passphrase typed with Caps Lock already on is
+sent as typed.
 @end table
 
 @cindex residual risk
@@ -733,6 +774,73 @@ spilled stack slots, which no library can zeroise; the kernel's own buffers
 (the input queue, the socket); the program that receives the answer; and,
 after switch-root, swap, since locking the buffer in memory needs
 @code{unsafe}, which Fairing forbids.  The initrd has no swap.
+
+@node Journal overlay
+@chapter Journal overlay
+
+@cindex journal overlay
+@cindex Escape
+Escape shows the journal over the splash, in the initrd, in stage 2 and at
+shutdown alike: the boot's last 40 entries at priority @code{notice} or
+higher, newest at the bottom, each one line of plain text with the seconds
+since boot, a severity tag (@code{[ERROR]}, @code{[WARN]} or @code{[INFO]})
+and the program that wrote it.  New entries appear as they are written.
+Escape again hides it.
+
+@table @kbd
+@item Up
+@itemx k
+One entry back.
+@item Down
+@itemx j
+One entry forward.
+@item PgUp
+@itemx PgDn
+Ten entries back or forward.
+@end table
+
+@cindex keyboard, no grab
+The overlay reads the keyboards without taking them: every key also reaches
+the console as it would with no splash, so @kbd{Ctrl+Alt+F@var{n}}, a screen
+reader's keys and SysRq keep working, and keys held with Ctrl, Alt or Meta
+are left alone.  While a password question is open the overlay is hidden and
+Escape belongs to the question.  The splash runs @command{journalctl} for the
+overlay the first time it is shown and stops it when the splash ends.  If it
+cannot run, the overlay says so instead of showing entries.
+
+@node Accessibility
+@chapter Accessibility
+
+@cindex accessible mode
+@cindex text backend
+@cindex screen reader
+Accessible mode replaces the graphics with plain text on the console, which
+a screen reader, a braille display through @command{brltty} or a serial
+console can read.  It is off unless one of three triggers turns it on, in
+this order of precedence: the @option{--accessible} flag (or
+@option{--no-accessible} to keep it off), the environment variable
+@env{SPACECRAFT_A11Y} (@code{1} or @code{0}), and the kernel parameter
+@code{fairing.accessible} (@code{1} or @code{0}).  An explicit off wins
+over every source below it.  Under @option{--verbose} the splash reports the
+mode and the source that decided it.
+
+In accessible mode the splash writes one line, @samp{Fairing @var{NN}%
+@var{status}}, when the progress or the status changes, at most once a
+second, to @file{/dev/console}; at shutdown the line is @samp{Fairing
+Shutting down}.  A password question is written as the plain text of its
+message, and a rejected answer as one more line; what is typed is never
+written, not even as a count.  Every control character is replaced by a
+space, so no colour or cursor sequence reaches the console.  The splash opens
+the console without making it its controlling terminal and never waits on
+it.  @command{fairing preview --accessible} writes the same lines to
+standard error.  Accessible mode also selects the palette's high-contrast
+sibling.
+
+@cindex reduced motion
+Reduced motion keeps a theme's frame sequence on its first frame and moves
+the bar straight to each new value instead of easing toward it.  Accessible
+mode always has it; on its own it is @option{--reduced-motion} or the kernel
+parameter @code{fairing.reduced_motion=1}.
 
 @include needs.texi
 

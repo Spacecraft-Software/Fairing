@@ -14,11 +14,11 @@ Software. Assurance **Category B**, with `crates/fairing-askpass` and the initrd
 lifecycle unit raised to **Category A** (Steelbore Standard §19). Licence GPL-3.0-or-later.
 
 Milestone state: M0 (repository and posture), M1 (draws a frame) and M2 (boots on
-Bravais: themes, progress, `fairing splash`, the NixOS module) are merged. M3 (the
-password agent in `fairing-askpass`, run inside the splash) is in progress on its branch;
-every requirement waits on G1 baselining. Accessibility, the shutdown splash and
-frame-sequence playback (M4) are not started. Do not advertise verbs, flags or files that
-do not exist yet.
+Bravais: themes, progress, `fairing splash`, the NixOS module) and M3 (the password agent
+in `fairing-askpass`, run inside the splash) are merged. M4 (journal overlay, accessible
+mode and the text backend, frame sequences and reduced motion, the shutdown splash,
+failure signals) is in progress on its branch; every requirement waits on G1 baselining.
+Do not advertise verbs, flags or files that do not exist yet.
 
 ## Build, test, lint
 
@@ -163,6 +163,23 @@ will not be green there.
 - zbus connects to `/run/dbus/system_bus_socket` by name, never through
   `DBUS_SYSTEM_BUS_ADDRESS`, and refuses systemd's private socket: zbus 5.19 panics on
   PID 1's replies there and release builds abort on panic.
+- Accessible mode is one toggle, `Context::accessible`: `--accessible`/`--no-accessible`,
+  then `SPACECRAFT_A11Y=1/0` (both resolved in `mode.rs`), then the kernel's
+  `fairing.accessible=1/0`, applied with `Accessible::with_kernel` in `splash/mod.rs`
+  only. Off without a trigger; never add auto-detect hints. It selects the text backend
+  (`fairing_render::TextConsole`, on `/dev/console`, stderr under an agent harness) and
+  implies reduced motion. The text backend writes plain text only: every control
+  character becomes a space, and nothing typed into a prompt is ever written.
+- The journal overlay reads keyboards read-only and never grabs them (FRN-SRS-063); only
+  the agent grabs, and only while a question is open. While a prompt is open the overlay
+  is neither toggled nor drawn. journalctl runs as a child only once the overlay is first
+  shown, is read without blocking once per frame, and is killed in `finish`.
+- `fairing-shutdown.service` has no default dependencies and must never conflict with or
+  be ordered before `shutdown.target`: it draws until systemd-shutdown's final kill.
+- The D-Bus client forwards systemd's `JobRemoved` (`failed`/`timeout`), `JobNew`
+  (rescue/emergency) and `NFailedUnits` signals from a second thread on the same
+  connection; on the system bus only signals sent by `org.freedesktop.systemd1` count.
+  A failed poll closes the connection, which ends the signal thread.
 - `fairing preview` under `AI_AGENT`, `CI`, `CLAUDECODE`, `CURSOR_AGENT` or `GEMINI_CLI`
   never opens a VT (`Context::is_agent_environment`): `--backend auto` becomes memory with a
   `[WARN]`, an explicit device backend is exit 2. The theme resolver takes `no_color` from
@@ -234,6 +251,8 @@ will not be green there.
 | Compositor, logo, text | `crates/fairing-render/src/{compositor,logo,text,shapes}.rs` |
 | Backends and fallback chain | `crates/fairing-render/src/backend/` |
 | Frame pacing, re-acquire, first-frame timing | `crates/fairing-render/src/{cadence,presenter}.rs` |
+| Accessible mode, text backend | `crates/fairing/src/output/mode.rs`, `crates/fairing/src/splash/console.rs`, `crates/fairing-render/src/backend/text.rs` |
+| Journal overlay: keys, journalctl, state | `crates/fairing/src/splash/{keys,journal,overlay}.rs` |
 | CLI integration tests | `crates/fairing/tests/cli.rs` |
 | Password agent: ask files, watch, keyboards, secret, reply | `crates/fairing-askpass/src/` |
 | Requirement model, validation, Texinfo generator | `xtask/src/requirements/` |
