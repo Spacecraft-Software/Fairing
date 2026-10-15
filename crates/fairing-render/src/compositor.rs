@@ -42,6 +42,8 @@ pub struct Compositor {
     logo: Option<Sprite>,
     /// The theme's frame sequence, if it declares one.
     sequence: Option<Sequence>,
+    /// The last frame drew an echoed answer.
+    echoed: bool,
 }
 
 /// A frame sequence with its frames copied out of the theme (FRN-SRS-051).
@@ -111,6 +113,7 @@ impl Compositor {
             text: TextRenderer::new()?,
             logo: None,
             sequence: None,
+            echoed: false,
         })
     }
 
@@ -209,6 +212,13 @@ impl Compositor {
         if let Some(overlay) = scene.overlay() {
             self.draw_overlay(frame, &viewport, overlay);
         }
+        let echoed = scene
+            .prompt()
+            .is_some_and(|prompt| matches!(prompt.field, Field::Clear(_)));
+        if self.echoed && !echoed {
+            self.text.forget();
+        }
+        self.echoed = echoed;
     }
 
     /// The journal overlay over everything: a surface panel with a border,
@@ -622,6 +632,25 @@ mod tests {
             count(&frame, line, theme.color(Role::Foreground)) > 0,
             "the line"
         );
+    }
+
+    #[test]
+    fn an_echoed_answers_glyphs_go_when_its_prompt_closes() {
+        // Verifies: FRN-SRS-024
+        let size = Size::new(640, 360).unwrap_or_else(|e| panic!("{e}"));
+        let mut frame = Frame::new(size, PixelFormat::Rgba8888).unwrap_or_else(|e| panic!("{e}"));
+        let mut compositor = Compositor::new(Selection::Color(Theme::family_default()))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let echoed = Scene::new(10).with_prompt(Some(PromptView {
+            message: "Token".to_owned(),
+            field: Field::Clear(EchoText::new("zq")),
+            notice: None,
+        }));
+        compositor.render(&mut frame, &echoed);
+        assert!(compositor.text.has_cached('z'));
+        compositor.render(&mut frame, &Scene::new(10));
+        assert!(!compositor.text.has_cached('z'));
+        assert!(!compositor.text.has_cached('q'));
     }
 
     #[test]

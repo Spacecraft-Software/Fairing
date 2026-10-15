@@ -15,6 +15,7 @@ use std::fmt;
 
 use fairing_theme::Rgb;
 use fontdue::{Font, FontSettings, LineMetrics, Metrics};
+use zeroize::Zeroize;
 
 use crate::fault::{RenderError, RenderErrorKind};
 use crate::frame::{BYTES_PER_PIXEL, Frame};
@@ -113,6 +114,23 @@ impl TextRenderer {
             pen += glyph.metrics.advance_width;
         }
         pen
+    }
+
+    /// Drops every rasterised glyph, each one's coverage zeroised first.
+    ///
+    /// The cache keeps the characters an echoed answer used; once its prompt
+    /// closes they are not kept for the rest of the boot (FRN-SRS-024).
+    pub(crate) fn forget(&mut self) {
+        for glyph in self.cache.values_mut() {
+            glyph.coverage.zeroize();
+        }
+        self.cache = HashMap::new();
+    }
+
+    /// Whether `ch` is cached at any size.
+    #[cfg(test)]
+    pub(crate) fn has_cached(&self, ch: char) -> bool {
+        self.cache.keys().any(|(cached, _)| *cached == ch)
     }
 
     fn glyph(&mut self, ch: char, px: u32) -> &Glyph {

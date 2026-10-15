@@ -25,6 +25,7 @@ use std::io;
 use std::os::fd::{AsFd, BorrowedFd};
 use std::path::{Path, PathBuf};
 
+use evdev::LedCode;
 use evdev::raw_stream::RawDevice;
 use rustix::fs::{Mode, OFlags};
 use rustix::io::Errno;
@@ -172,6 +173,11 @@ impl Keymap {
         self.shift_right = false;
         self.ctrl = 0;
         self.alt = 0;
+    }
+
+    /// Sets Caps Lock, as the keyboard's LED shows it when a grab starts.
+    pub const fn set_caps_lock(&mut self, on: bool) {
+        self.caps_lock = on;
     }
 
     /// Forgets every held modifier, as when a grab starts: keys held before
@@ -371,6 +377,8 @@ pub struct Keyboards {
     /// The last keyboard the most recent [`Keyboards::grab`] could not take,
     /// and why.
     refused: Option<(Text<NODE_CAPACITY>, io::ErrorKind)>,
+    /// Caps Lock was read from a keyboard's LED since the grab started.
+    caps_read: bool,
 }
 
 impl core::fmt::Debug for Keyboards {
@@ -397,6 +405,7 @@ impl Keyboards {
             grabbed: false,
             map: Keymap::new(),
             refused: None,
+            caps_read: false,
         }
     }
 
@@ -425,6 +434,17 @@ impl Keyboards {
             match Self::take(&self.dev.join(name.as_str())) {
                 Ok(device) => self.open.push(Keyboard { name, device }),
                 Err(error) => self.refused = Some((name, error.kind())),
+            }
+        }
+        // Caps Lock may have been on before the grab: its LED says so. Read
+        // once per grab, from the first keyboard taken; a keyboard that
+        // cannot say leaves it off.
+        if !self.caps_read
+            && let Some(keyboard) = self.open.first()
+        {
+            self.caps_read = true;
+            if let Ok(leds) = keyboard.device.get_led_state() {
+                self.map.set_caps_lock(leds.contains(LedCode::LED_CAPSL));
             }
         }
         self.open.len()
@@ -462,6 +482,7 @@ impl Keyboards {
             let _ignored = keyboard.device.ungrab();
         }
         self.grabbed = false;
+        self.caps_read = false;
         self.map.reset();
     }
 
@@ -551,6 +572,19 @@ mod tests {
         // A held Enter does not answer twice.
         assert_eq!(map.key(KEY_ENTER, 2), None);
         assert_eq!(map.key(30, 0), None);
+    }
+
+    #[test]
+    fn caps_lock_from_the_led_shifts_letters() {
+        let mut map = Keymap::new();
+        map.set_caps_lock(true);
+        assert_eq!(typed(&mut map, &[30]), "A");
+        press(&mut map, KEY_CAPSLOCK);
+        assert_eq!(
+            typed(&mut map, &[30]),
+            "a",
+            "and Caps Lock still toggles it"
+        );
     }
 
     #[test]
