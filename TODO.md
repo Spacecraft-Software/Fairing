@@ -12,8 +12,8 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 ## M4 — Operator and accessibility
 
 - [x] T-068 Event-driven failure detection (P-045, T-052): systemd's `JobRemoved` and `JobNew` signals and the `NFailedUnits` change end the splash within 1 s however slowly PID 1 answers property reads
-- [ ] T-069 Accessible mode resolved once: `--accessible`/`--no-accessible`, `SPACECRAFT_A11Y`, kernel `fairing.accessible=1`; off unless a trigger is present; reported with its source
-- [ ] T-070 Text backend: `Fairing <NN>% <status>` at most once a second, prompts as plain text, no ANSI sequences, on the console
+- [x] T-069 Accessible mode resolved once: `--accessible`/`--no-accessible`, `SPACECRAFT_A11Y`, kernel `fairing.accessible=1`; off unless a trigger is present; reported with its source
+- [x] T-070 Text backend: `Fairing <NN>% <status>` at most once a second, prompts as plain text, no ANSI sequences, on the console
 - [ ] T-071 Frame sequences played in a loop at the theme's rate; reduced motion (accessible mode, `--reduced-motion`, `fairing.reduced_motion=1`) draws the first frame only and moves the bar without easing
 - [ ] T-072 Journal overlay: Esc toggles the last 40 entries at notice or higher from `journalctl -o json --follow`; Up/Down, PgUp/PgDn and j/k scroll; keyboards read without a grab while no prompt is open
 - [ ] T-073 Shutdown splash: `fairing splash --stage shutdown` draws the shutdown layout until killed; `fairing-shutdown.service` from shutdown.target to the final kill

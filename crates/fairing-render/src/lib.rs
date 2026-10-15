@@ -45,6 +45,8 @@ pub use backend::drm::DrmBackend;
 #[doc(inline)]
 pub use backend::fbdev::{FbInfo, FbdevBackend};
 #[doc(inline)]
+pub use backend::text::{TEXT_INTERVAL, TextConsole};
+#[doc(inline)]
 pub use backend::{
     Attempt, Backend, BackendKind, Choice, MemoryBackend, NoBackend, Opened, Surface, open,
 };

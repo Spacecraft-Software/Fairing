@@ -13,7 +13,7 @@ use fairing_theme::{Request, Resolution, Source};
 use crate::cli::BackendChoice;
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::error::AppError;
-use crate::output::mode::Context;
+use crate::output::mode::{Accessible, Context};
 
 /// Applies the agent rule (FRN-SRS-084) to the requested backend.
 ///
@@ -90,6 +90,9 @@ pub struct PaletteSources<'a> {
     pub declared_default: Option<&'a str>,
     /// The verb, for the hint (`preview`, `splash`).
     pub verb: &'a str,
+    /// Accessible mode is on: the high-contrast sibling overlays the base
+    /// palette (§11.6 stage 2).
+    pub accessible: bool,
 }
 
 /// Resolves the palette (Steelbore Standard §11.6, FRN-SRS-045) and reports it
@@ -116,7 +119,7 @@ pub fn resolve_palette(
         environment: environment.as_deref(),
         declared_default: sources.declared_default,
         no_color: context.no_color,
-        accessible: false,
+        accessible: sources.accessible,
     };
     let resolution = fairing_theme::resolve(&request);
     let unusable = sources.explicit.filter(|slug| {
@@ -161,4 +164,19 @@ pub fn resolve_palette(
     )
     .emit(context);
     Ok(resolution)
+}
+
+/// Reports accessible mode and what decided it, under `--verbose` (§18.1).
+pub fn report_accessible(accessible: Accessible, context: &Context, invocation: &str) {
+    Diagnostic::new(
+        Severity::Info,
+        "ACCESSIBLE_RESOLVED",
+        format!(
+            "accessible mode {} from {}",
+            if accessible.on { "on" } else { "off" },
+            accessible.source.as_str()
+        ),
+        invocation,
+    )
+    .emit(context);
 }

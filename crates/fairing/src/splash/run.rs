@@ -25,14 +25,15 @@ use fairing_askpass::agent::{Activity, Agent};
 use fairing_askpass::input::Keyboards;
 use fairing_askpass::watch::monotonic_us;
 use fairing_render::{
-    Choice, Compositor, EchoText, Field, NoBackend, Opened, Presenter, PresenterConfig, PromptView,
-    RenderErrorKind, Scene, Size, open,
+    Cadence, Choice, Compositor, EchoText, Field, NoBackend, Opened, Presenter, PresenterConfig,
+    PromptView, RenderErrorKind, Scene, Size, TextConsole, open,
 };
 use fairing_theme::{CompiledTheme, Selection};
 use serde::Serialize;
 
 use crate::diagnostic::{Diagnostic, Priority, Severity};
 use crate::splash::clock::BootClock;
+use crate::splash::console::{Sink, TextTarget};
 use crate::splash::events::{Event, Snapshot};
 use crate::splash::notify::Notifier;
 use crate::splash::progress::{Bar, Inputs, Stage, target};
@@ -116,6 +117,11 @@ pub struct Plan {
     pub exit_after: Option<Duration>,
     /// The password agent; `None` under `--no-agent`.
     pub agent: Option<AgentPaths>,
+    /// Accessible mode: lines of text here instead of graphics (FRN-SRS-070).
+    pub text: Option<TextTarget>,
+    /// Reduced motion: the bar jumps to its target and frame sequences show
+    /// their first frame (FRN-SRS-052).
+    pub reduced_motion: bool,
 }
 
 /// Why the loop ended.
@@ -275,15 +281,15 @@ pub fn run_with(
         agent: false,
         answered: 0,
     };
-    let mut presenter = match start(plan, env, open_chain) {
-        Ok(presenter) => presenter,
+    let mut output = match start(plan, env, open_chain) {
+        Ok(output) => output,
         Err(reason) => {
             outcome.reason = reason;
             notify(env, Notifier::ready, "READY=1");
             return outcome;
         }
     };
-    outcome.backend = Some(presenter.backend().as_str());
+    outcome.backend = Some(output.kind());
 
     let mut session = Session::new(outcome.bar);
     if let Some(paths) = &plan.agent {
@@ -306,17 +312,81 @@ pub fn run_with(
                     .with_priority(Priority::Notice),
                 );
                 outcome.reason = Reason::AgentFailed;
-                return finish(plan, env, presenter, &mut session, &timeline, outcome);
+                return finish(plan, env, output, &mut session, &timeline, outcome);
             }
         }
     }
     outcome.reason = loop {
-        if let Some(reason) = session.tick(plan, env, &mut presenter, &timeline, &mut outcome) {
+        if let Some(reason) = session.tick(plan, env, &mut output, &timeline, &mut outcome) {
             break reason;
         }
-        presenter.pace();
+        output.pace();
     };
-    finish(plan, env, presenter, &mut session, &timeline, outcome)
+    finish(plan, env, output, &mut session, &timeline, outcome)
+}
+
+/// Where the splash draws: pixels through the presenter, or lines of text on
+/// the console in accessible mode.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one per run, owned by the loop; the pixel case is the usual one"
+)]
+enum Output {
+    /// DRM/KMS, fbdev or memory.
+    Pixels(Presenter),
+    /// The text backend (FRN-SRS-070).
+    Text(TextOutput),
+}
+
+/// The text backend and the loop's own pacing, which the presenter keeps for
+/// the pixel backends.
+struct TextOutput {
+    console: TextConsole<Sink>,
+    cadence: Cadence,
+    origin: Instant,
+    first: Option<Duration>,
+    frames: u64,
+}
+
+impl Output {
+    /// The backend's name for the report.
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Pixels(presenter) => presenter.backend().as_str(),
+            Self::Text(_) => "text",
+        }
+    }
+
+    /// Process start to the first frame or line.
+    fn first_frame(&self) -> Option<Duration> {
+        match self {
+            Self::Pixels(presenter) => presenter.stats().first_frame(),
+            Self::Text(text) => text.first,
+        }
+    }
+
+    /// Waits for the next frame deadline.
+    fn pace(&mut self) {
+        match self {
+            Self::Pixels(presenter) => {
+                presenter.pace();
+            }
+            Self::Text(text) => {
+                text.cadence.wait();
+            }
+        }
+    }
+
+    /// Releases the output; frames presented and dropped.
+    fn close(self) -> Result<(u64, u64), String> {
+        match self {
+            Self::Pixels(presenter) => presenter
+                .close()
+                .map(|stats| (stats.frames(), stats.dropped()))
+                .map_err(|error| error.to_string()),
+            Self::Text(text) => Ok((text.frames, text.cadence.dropped())),
+        }
+    }
 }
 
 /// Marks the agent up, so systemd's console agent stands aside.
@@ -345,12 +415,38 @@ struct Timeline {
     carried: Option<Handoff>,
 }
 
-/// Opens the first backend that works and builds the presenter on it.
+/// Opens the console in accessible mode, or else the first backend that
+/// works and builds the presenter on it.
 fn start(
     plan: &Plan,
     env: &Environment<'_>,
     open_chain: fn(Choice, Size) -> Result<Opened, NoBackend>,
-) -> Result<Presenter, Reason> {
+) -> Result<Output, Reason> {
+    if let Some(target) = &plan.text {
+        return match Sink::open(target) {
+            Ok(sink) => Ok(Output::Text(TextOutput {
+                console: TextConsole::new(sink),
+                cadence: Cadence::new(SPLASH_HZ),
+                origin: env.origin,
+                first: None,
+                frames: 0,
+            })),
+            Err(error) => {
+                (env.emit)(
+                    Diagnostic::new(
+                        Severity::Warn,
+                        "NO_BACKEND",
+                        format!(
+                            "accessible mode cannot write to the console ({error}); the console stays as it is"
+                        ),
+                        env.invocation,
+                    )
+                    .with_priority(Priority::Notice),
+                );
+                Err(Reason::NoBackend)
+            }
+        };
+    }
     let opened = open_chain(plan.choice, plan.memory_size).map_err(|failure| {
         (env.emit)(
             Diagnostic::new(
@@ -390,6 +486,7 @@ fn start(
                 },
             )
         })
+        .map(Output::Pixels)
         .map_err(|error| {
             (env.emit)(Diagnostic::new(
                 Severity::Warn,
@@ -405,7 +502,7 @@ fn start(
 fn finish(
     plan: &Plan,
     env: &Environment<'_>,
-    presenter: Presenter,
+    output: Output,
     session: &mut Session,
     timeline: &Timeline,
     mut outcome: Outcome,
@@ -419,14 +516,14 @@ fn finish(
     outcome.bar = session.bar.shown();
     outcome.dbus = session.latest.is_some();
     // Release the output first: greetd is waiting for it (FRN-SRS-033).
-    let closed = presenter.close();
+    let closed = output.close();
     outcome.release_ms = session
         .terminate_seen
         .map(|seen| seen.elapsed().as_secs_f64() * 1000.0);
     match closed {
-        Ok(stats) => {
-            outcome.frames = stats.frames();
-            outcome.dropped = stats.dropped();
+        Ok((frames, dropped)) => {
+            outcome.frames = frames;
+            outcome.dropped = dropped;
         }
         Err(error) => (env.emit)(Diagnostic::new(
             Severity::Warn,
@@ -522,7 +619,7 @@ impl Session {
         &mut self,
         plan: &Plan,
         env: &Environment<'_>,
-        presenter: &mut Presenter,
+        output: &mut Output,
         timeline: &Timeline,
         outcome: &mut Outcome,
     ) -> Option<Reason> {
@@ -559,9 +656,11 @@ impl Session {
                 .map(|s| s.progress),
             handoff: handed_over,
         };
-        let shown = self
-            .bar
-            .advance(target(plan.stage, &inputs), now, terminating);
+        let shown = self.bar.advance(
+            target(plan.stage, &inputs),
+            now,
+            terminating || plan.reduced_motion,
+        );
         let prompt = match self.ask(env, outcome) {
             Ok(prompt) => prompt,
             Err(reason) => return Some(reason),
@@ -574,7 +673,7 @@ impl Session {
                     .unwrap_or_default(),
             )
             .with_prompt(prompt);
-        if let Err(reason) = self.present(env, presenter, &scene, outcome, now) {
+        if let Err(reason) = self.present(env, output, &scene, outcome, now) {
             return Some(reason);
         }
         // Ready after the first attempt: after the first frame, or at once when
@@ -586,7 +685,7 @@ impl Session {
             self.ready_sent = true;
         }
         if outcome.first_frame_ms.is_none()
-            && let Some(first) = presenter.stats().first_frame()
+            && let Some(first) = output.first_frame()
         {
             outcome.first_frame_ms = Some(first.as_secs_f64() * 1000.0);
             (env.emit)(Diagnostic::new(
@@ -732,11 +831,15 @@ impl Session {
     fn present(
         &mut self,
         env: &Environment<'_>,
-        presenter: &mut Presenter,
+        output: &mut Output,
         scene: &Scene,
         outcome: &mut Outcome,
         now: Duration,
     ) -> Result<(), Reason> {
+        let presenter = match output {
+            Output::Pixels(presenter) => presenter,
+            Output::Text(text) => return self.write(env, text, scene, outcome, now),
+        };
         match presenter.present(scene) {
             Ok(()) => {
                 self.stall.clear();
@@ -790,6 +893,36 @@ impl Session {
                     Severity::Warn,
                     "RENDER_FAILED",
                     format!("drawing failed: {error}"),
+                    env.invocation,
+                ));
+                Err(Reason::RenderFailed)
+            }
+        }
+    }
+
+    /// Writes one scene as text (FRN-SRS-071). A console that cannot be
+    /// written ends the run, so a question is never asked where nobody sees it.
+    fn write(
+        &self,
+        env: &Environment<'_>,
+        text: &mut TextOutput,
+        scene: &Scene,
+        outcome: &mut Outcome,
+        now: Duration,
+    ) -> Result<(), Reason> {
+        match text.console.present(scene, now) {
+            Ok(_lines) => {
+                text.frames += 1;
+                text.first.get_or_insert_with(|| text.origin.elapsed());
+                outcome.first_bar.get_or_insert(self.bar.shown());
+                outcome.last_status = scene.status().map(str::to_owned);
+                Ok(())
+            }
+            Err(error) => {
+                (env.emit)(Diagnostic::new(
+                    Severity::Warn,
+                    "RENDER_FAILED",
+                    format!("writing to the console failed: {error}"),
                     env.invocation,
                 ));
                 Err(Reason::RenderFailed)
@@ -1098,6 +1231,8 @@ mod tests {
                 paths: self.paths(),
                 exit_after,
                 agent: None,
+                text: None,
+                reduced_motion: false,
             }
         }
 
@@ -1460,6 +1595,43 @@ mod tests {
             memory,
         );
         assert_eq!(outcome.reason, Reason::ExitAfter);
+    }
+
+    #[test]
+    fn reduced_motion_moves_the_bar_without_easing() {
+        // Verifies: FRN-SRS-052
+        let harness = Harness::new();
+        let mut plan = harness.plan(Stage::Initrd, Some(Duration::from_millis(100)));
+        let eased = harness.run(&plan, false, Vec::new(), memory);
+        plan.reduced_motion = true;
+        let jumped = harness.run(&plan, false, Vec::new(), memory);
+        // Five seconds into a first boot the target is about 0.19: the
+        // eased bar starts from zero, the reduced one is there at once.
+        let eased = eased.first_bar.unwrap_or(1.0);
+        let jumped = jumped.first_bar.unwrap_or(0.0);
+        assert!(eased < 0.01, "{eased}");
+        assert!(jumped > 0.15, "{jumped}");
+    }
+
+    #[test]
+    fn accessible_mode_writes_lines_and_steps_aside_without_a_console() {
+        // Verifies: FRN-SRS-070
+        let harness = Harness::new();
+        let mut plan = harness.plan(Stage::Initrd, Some(Duration::from_millis(100)));
+        let console = harness.dir.path().join("console");
+        std::fs::write(&console, b"").unwrap_or_else(|e| panic!("{e}"));
+        plan.text = Some(TextTarget::Console(console.clone()));
+        let outcome = harness.run(&plan, false, Vec::new(), memory);
+        assert_eq!(outcome.backend, Some("text"));
+        assert_eq!(outcome.reason, Reason::ExitAfter);
+        assert!(outcome.first_frame_ms.is_some());
+        let written = std::fs::read_to_string(&console).unwrap_or_default();
+        assert!(written.starts_with("Fairing "), "{written:?}");
+
+        plan.text = Some(TextTarget::Console(harness.dir.path().join("missing")));
+        let outcome = harness.run(&plan, false, Vec::new(), memory);
+        assert_eq!(outcome.reason, Reason::NoBackend);
+        assert!(harness.notifications().contains(&"READY=1".to_owned()));
     }
 
     #[test]

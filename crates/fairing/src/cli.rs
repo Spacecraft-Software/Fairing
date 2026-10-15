@@ -127,6 +127,12 @@ pub struct GlobalFlags {
     /// Skip confirmations and overwrite.
     #[arg(long, global = true)]
     pub force: bool,
+    /// Accessible mode (§18.1): the splash as plain console text, the high-contrast palette.
+    #[arg(long, global = true, conflicts_with = "no_accessible")]
+    pub accessible: bool,
+    /// Keep accessible mode off, whatever `SPACECRAFT_A11Y` or the kernel command line says.
+    #[arg(long, global = true)]
+    pub no_accessible: bool,
 }
 
 /// Output backend for `preview`.
@@ -187,6 +193,9 @@ pub struct PreviewArgs {
     /// Theme to preview: a compiled `.fairing` file, or a `.ncl` source compiled on the fly.
     #[arg(long, value_name = "path")]
     pub theme: Option<PathBuf>,
+    /// Reduced motion: the first frame of any sequence only.
+    #[arg(long)]
+    pub reduced_motion: bool,
 }
 
 /// Which boot stage a splash instance serves.
@@ -252,6 +261,12 @@ pub struct SplashArgs {
     /// Where the input device nodes are (test seam).
     #[arg(long, value_name = "dir", default_value = fairing_askpass::input::DEV_INPUT, hide = true)]
     pub input_dev: PathBuf,
+    /// Reduced motion: the bar jumps to its value and frame sequences show their first frame.
+    #[arg(long)]
+    pub reduced_motion: bool,
+    /// Where accessible mode writes its lines (test seam).
+    #[arg(long, value_name = "path", default_value = crate::splash::console::CONSOLE, hide = true)]
+    pub console: PathBuf,
 }
 
 /// Seconds as a finite number in `0.0..=3600.0`.

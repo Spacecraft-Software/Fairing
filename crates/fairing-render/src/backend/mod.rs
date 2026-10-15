@@ -14,6 +14,7 @@
 pub mod drm;
 pub mod fbdev;
 mod memory;
+pub mod text;
 
 use std::fmt;
 use std::time::{Duration, Instant};
