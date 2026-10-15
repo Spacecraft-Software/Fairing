@@ -35,7 +35,9 @@ use crate::diagnostic::{Diagnostic, Priority, Severity};
 use crate::splash::clock::BootClock;
 use crate::splash::console::{Sink, TextTarget};
 use crate::splash::events::{Event, Snapshot};
+use crate::splash::keys::{Nav, Navigation};
 use crate::splash::notify::Notifier;
+use crate::splash::overlay::Overlay;
 use crate::splash::progress::{Bar, Inputs, Stage, target};
 use crate::splash::state::{
     DURATIONS_FILE, Durations, HANDOFF_FILE, HANDOFF_MARKER, Handoff, read_durations, read_handoff,
@@ -87,6 +89,18 @@ pub struct AgentPaths {
     pub input_dev: PathBuf,
 }
 
+/// What the journal overlay reads: keyboards, without a grab, and the
+/// journal through journalctl (FRN-SRS-060).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverlayPaths {
+    /// `/sys/class/input`.
+    pub input_sysfs: PathBuf,
+    /// `/dev/input`.
+    pub input_dev: PathBuf,
+    /// `journalctl`.
+    pub journalctl: PathBuf,
+}
+
 /// Where the splash reads and writes its files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
@@ -122,6 +136,9 @@ pub struct Plan {
     /// Reduced motion: the bar jumps to its target and frame sequences show
     /// their first frame (FRN-SRS-052).
     pub reduced_motion: bool,
+    /// The journal overlay; `None` in accessible mode, where the console
+    /// already shows the log, and in tests.
+    pub overlay: Option<OverlayPaths>,
 }
 
 /// Why the loop ended.
@@ -315,6 +332,10 @@ pub fn run_with(
                 return finish(plan, env, output, &mut session, &timeline, outcome);
             }
         }
+    }
+    if let (Some(paths), Output::Pixels(_)) = (&plan.overlay, &output) {
+        session.keys = Some(Navigation::new(&paths.input_sysfs, &paths.input_dev));
+        session.overlay = Some(Overlay::new(paths.journalctl.clone()));
     }
     outcome.reason = loop {
         if let Some(reason) = session.tick(plan, env, &mut output, &timeline, &mut outcome) {
@@ -526,6 +547,12 @@ fn finish(
         agent.close();
         let _gone = std::fs::remove_file(plan.paths.runtime.join(AGENT_FLAG));
     }
+    if let Some(keys) = session.keys.as_mut() {
+        keys.close();
+    }
+    if let Some(overlay) = session.overlay.as_mut() {
+        overlay.close();
+    }
     outcome.bar = session.bar.shown();
     outcome.dbus = session.latest.is_some();
     // Release the output first: greetd is waiting for it (FRN-SRS-033).
@@ -605,6 +632,10 @@ struct Session {
     failed_baseline: Option<u32>,
     /// The password agent, while it is up.
     agent: Option<Agent<Keyboards>>,
+    /// The overlay's keys, read without a grab.
+    keys: Option<Navigation>,
+    /// The journal overlay.
+    overlay: Option<Overlay>,
 }
 
 impl Session {
@@ -624,6 +655,8 @@ impl Session {
             terminate_seen: None,
             failed_baseline: None,
             agent: None,
+            keys: None,
+            overlay: None,
         }
     }
 
@@ -678,8 +711,10 @@ impl Session {
             Ok(prompt) => prompt,
             Err(reason) => return Some(reason),
         };
+        let overlay = self.navigate(now, prompt.is_some());
         let scene = Scene::from_fraction(shown)
             .with_time(animation_time(plan.reduced_motion, running))
+            .with_overlay(overlay)
             .with_status(
                 self.latest
                     .as_ref()
@@ -816,6 +851,20 @@ impl Session {
             env.invocation,
         ));
         Some(Reason::FailedUnit)
+    }
+
+    /// The overlay's frame: its keys, read without a grab, and the journal's
+    /// new entries; what to draw, if it is shown.
+    fn navigate(
+        &mut self,
+        now: Duration,
+        prompt_open: bool,
+    ) -> Option<fairing_render::OverlayView> {
+        let (keys, overlay) = (self.keys.as_mut()?, self.overlay.as_mut()?);
+        keys.scan(now);
+        let mut pressed: Vec<Nav> = Vec::new();
+        keys.read(|key| pressed.push(key));
+        overlay.frame(&pressed, prompt_open)
     }
 
     /// Reports, once, that D-Bus missed its deadline (FRN-SRS-016).
@@ -1247,6 +1296,7 @@ mod tests {
                 agent: None,
                 text: None,
                 reduced_motion: false,
+                overlay: None,
             }
         }
 

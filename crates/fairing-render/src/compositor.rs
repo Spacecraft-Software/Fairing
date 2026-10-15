@@ -16,13 +16,22 @@ use crate::geometry::{Rect, Viewport, as_f32, round_u32};
 use crate::layout::{Layout, REFERENCE_SIZE};
 use crate::logo;
 use crate::palette::Palette;
-use crate::scene::{Field, PromptView, Scene};
+use crate::scene::{Field, OverlayView, PromptView, Scene};
 use crate::shapes;
 use crate::sprite::Sprite;
 use crate::text::{MIN_PX, TextRenderer};
 
 /// Marks a status line that had to be shortened to fit.
 const ELLIPSIS: &str = "...";
+
+/// The journal overlay's panel, in reference pixels: the frame less a margin.
+const OVERLAY_PANEL: Rect = Rect::new(80.0, 60.0, 1760.0, 960.0);
+
+/// Text size of the overlay, in reference pixels.
+const OVERLAY_TEXT: f32 = 22.0;
+
+/// The overlay's heading.
+const OVERLAY_TITLE: &str = "Journal - Esc closes; Up/Down, PgUp/PgDn, j/k scroll";
 
 /// Renders scenes for one theme selection and layout.
 pub struct Compositor {
@@ -172,6 +181,52 @@ impl Compositor {
         self.draw_status(frame, &viewport, scene);
         if let Some(prompt) = scene.prompt() {
             self.draw_prompt(frame, &viewport, prompt);
+        }
+        if let Some(overlay) = scene.overlay() {
+            self.draw_overlay(frame, &viewport, overlay);
+        }
+    }
+
+    /// The journal overlay over everything: a surface panel with a border,
+    /// its heading, and as many entries as fit, the newest at the bottom
+    /// unless scrolled (FRN-SRS-060, FRN-SRS-061). The text is the foreground
+    /// role on the surface, a verified pairing in every palette; each entry
+    /// carries its severity as a tag, never as colour alone.
+    ///
+    /// Implements: FRN-SRS-060, FRN-SRS-061
+    fn draw_overlay(&mut self, frame: &mut Frame, viewport: &Viewport, overlay: &OverlayView) {
+        let panel = viewport.rect(OVERLAY_PANEL);
+        if let Some(path) = shapes::rounded_rect(panel, viewport.length(12.0)) {
+            shapes::fill(frame, &path, self.palette.color(Role::Surface));
+            shapes::stroke(
+                frame,
+                &path,
+                self.palette.color(Role::Border),
+                viewport.length(2.0),
+            );
+        }
+        let px = round_u32(viewport.length(OVERLAY_TEXT)).max(MIN_PX);
+        let metrics = self.text.line_metrics(px);
+        let pitch = metrics.new_line_size.max(1.0);
+        let inset = viewport.length(24.0);
+        let width = (panel.width - 2.0 * inset).max(0.0);
+        let foreground = self.palette.color(Role::Foreground);
+        let title = self.fit(OVERLAY_TITLE, px, width);
+        let top = panel.y + inset + metrics.ascent;
+        self.text
+            .draw(frame, &title, panel.x + inset, top, px, foreground);
+        // Entries fill upwards from the bottom of the panel.
+        let first_baseline = top + 1.5 * pitch;
+        let mut baseline = panel.bottom() - inset + metrics.descent;
+        let end = overlay.lines.len().saturating_sub(overlay.scroll);
+        for line in overlay.lines[..end].iter().rev() {
+            if baseline < first_baseline {
+                break;
+            }
+            let text = self.fit(line, px, width);
+            self.text
+                .draw(frame, &text, panel.x + inset, baseline, px, foreground);
+            baseline -= pitch;
         }
     }
 
@@ -465,6 +520,57 @@ mod tests {
         assert_eq!(corner_at(0), Some(accent));
         assert_ne!(corner_at(100), Some(accent));
         assert_eq!(corner_at(200), Some(accent));
+    }
+
+    #[test]
+    fn the_overlay_draws_the_newest_entries_at_the_bottom_and_scrolls() {
+        // Verifies: FRN-SRS-060, FRN-SRS-061
+        let theme = Theme::family_default();
+        let overlay = |scroll| OverlayView {
+            lines: vec![
+                "   1.000 [INFO] one".to_owned(),
+                "   2.000 [WARN] two".to_owned(),
+                "   3.000 [ERROR] three".to_owned(),
+            ],
+            scroll,
+        };
+        let viewport = Viewport::fit(REFERENCE_SIZE, REFERENCE_SIZE);
+        let panel = viewport.rect(OVERLAY_PANEL);
+        // The last line's band, just above the panel's bottom inset.
+        let band = Rect::new(panel.x + 24.0, panel.bottom() - 60.0, 600.0, 40.0);
+        let foreground = theme.color(Role::Foreground);
+        let (newest, _) = render(
+            1920,
+            1080,
+            &Scene::new(50).with_overlay(Some(overlay(0))),
+            PixelFormat::Rgba8888,
+        );
+        assert_eq!(
+            newest.pixel(round_u32(panel.center_x()), round_u32(panel.center_y())),
+            Some(theme.color(Role::Surface)),
+            "the panel covers the splash"
+        );
+        assert!(
+            count(&newest, band, foreground) > 0,
+            "an entry at the bottom"
+        );
+        let (scrolled, _) = render(
+            1920,
+            1080,
+            &Scene::new(50).with_overlay(Some(overlay(3))),
+            PixelFormat::Rgba8888,
+        );
+        assert_eq!(
+            count(&scrolled, band, foreground),
+            0,
+            "scrolled past every entry"
+        );
+        let (none, _) = render(1920, 1080, &Scene::new(50), PixelFormat::Rgba8888);
+        assert_eq!(
+            none.pixel(round_u32(panel.x + 30.0), round_u32(panel.y + 30.0)),
+            Some(theme.color(Role::Background)),
+            "no overlay unless asked"
+        );
     }
 
     #[test]

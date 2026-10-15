@@ -305,6 +305,24 @@ pub fn keyboards(sysfs: &Path) -> Vec<Text<NODE_CAPACITY>> {
 ///
 /// A read error other than "nothing to read" or "device gone".
 pub fn drain(fd: BorrowedFd<'_>, map: &mut Keymap, f: &mut impl FnMut(Key)) -> io::Result<bool> {
+    key_events(fd, &mut |code, value| {
+        if let Some(key) = map.key(code, value) {
+            f(key);
+        }
+    })
+}
+
+/// Reads every pending event from `fd` without blocking and passes each
+/// `EV_KEY` event's code and value (1 press, 2 repeat, 0 release) to `f`.
+/// `Ok(false)` when the device has gone.
+///
+/// The read buffer is zeroised before this returns, on every path: while a
+/// question is open the key codes in it are the secret (FRN-SRS-024).
+///
+/// # Errors
+///
+/// A read error other than "nothing to read" or "device gone".
+pub fn key_events(fd: BorrowedFd<'_>, f: &mut impl FnMut(u16, i32)) -> io::Result<bool> {
     let mut buf = [0u8; EVENT_SIZE * EVENTS_PER_READ];
     let result = loop {
         match rustix::io::read(fd, &mut buf) {
@@ -321,10 +339,8 @@ pub fn drain(fd: BorrowedFd<'_>, map: &mut Keymap, f: &mut impl FnMut(Key)) -> i
                         event[at + 6],
                         event[at + 7],
                     ]);
-                    if kind == EV_KEY
-                        && let Some(key) = map.key(code, value)
-                    {
-                        f(key);
+                    if kind == EV_KEY {
+                        f(code, value);
                     }
                 }
             }

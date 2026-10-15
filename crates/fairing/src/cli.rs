@@ -264,6 +264,9 @@ pub struct SplashArgs {
     /// Reduced motion: the bar jumps to its value and frame sequences show their first frame.
     #[arg(long)]
     pub reduced_motion: bool,
+    /// The journalctl the overlay runs; found on `PATH` unless a path is given.
+    #[arg(long, value_name = "path", default_value = crate::splash::journal::JOURNALCTL, hide = true)]
+    pub journalctl: PathBuf,
     /// Where accessible mode writes its lines (test seam).
     #[arg(long, value_name = "path", default_value = crate::splash::console::CONSOLE, hide = true)]
     pub console: PathBuf,

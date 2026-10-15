@@ -19,7 +19,10 @@ pub mod dbus;
 #[path = "dbus_off.rs"]
 pub mod dbus;
 pub mod events;
+pub mod journal;
+pub mod keys;
 pub mod notify;
+pub mod overlay;
 pub mod progress;
 pub mod run;
 pub mod state;
@@ -45,7 +48,7 @@ use crate::splash::clock::Boottime;
 use crate::splash::console::TextTarget;
 use crate::splash::notify::Notifier;
 use crate::splash::progress::Stage;
-use crate::splash::run::{AgentPaths, Environment, Outcome, Paths, Plan, Reason};
+use crate::splash::run::{AgentPaths, Environment, Outcome, OverlayPaths, Paths, Plan, Reason};
 
 /// The runnable hint for splash failures.
 const HINT: &str = "fairing splash --stage system --dry-run";
@@ -224,11 +227,8 @@ pub fn run(
             sysroot_state: args.sysroot_state_dir.clone(),
         },
         exit_after: args.exit_after.map(Duration::from_secs_f64),
-        agent: (!args.no_agent).then(|| AgentPaths {
-            ask_dir: args.ask_dir.clone(),
-            input_sysfs: args.input_sysfs.clone(),
-            input_dev: args.input_dev.clone(),
-        }),
+        agent: agent_paths(args),
+        overlay: text.is_none().then(|| overlay_paths(args)),
         text,
         reduced_motion,
     };
@@ -245,6 +245,24 @@ pub fn run(
     let outcome = run::run(&plan, &environment);
     fill(&mut report, &outcome);
     emit(&report, context, invocation, flags)
+}
+
+/// The password agent's directories, unless `--no-agent`.
+fn agent_paths(args: &SplashArgs) -> Option<AgentPaths> {
+    (!args.no_agent).then(|| AgentPaths {
+        ask_dir: args.ask_dir.clone(),
+        input_sysfs: args.input_sysfs.clone(),
+        input_dev: args.input_dev.clone(),
+    })
+}
+
+/// What the journal overlay reads.
+fn overlay_paths(args: &SplashArgs) -> OverlayPaths {
+    OverlayPaths {
+        input_sysfs: args.input_sysfs.clone(),
+        input_dev: args.input_dev.clone(),
+        journalctl: args.journalctl.clone(),
+    }
 }
 
 /// A flag SIGTERM and SIGINT set.

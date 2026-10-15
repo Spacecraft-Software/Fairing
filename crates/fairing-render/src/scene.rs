@@ -27,6 +27,16 @@ pub struct Scene {
     prompt: Option<PromptView>,
     /// How far into its frame sequence the theme's animation is.
     time: Duration,
+    overlay: Option<OverlayView>,
+}
+
+/// The journal overlay as the compositor draws it (FRN-SRS-060).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OverlayView {
+    /// The entries, oldest first, each one line of plain text.
+    pub lines: Vec<String>,
+    /// How many lines the view is scrolled up from the newest (FRN-SRS-061).
+    pub scroll: usize,
 }
 
 /// What the input field of a prompt shows.
@@ -125,6 +135,7 @@ impl Scene {
             status: None,
             prompt: None,
             time: Duration::ZERO,
+            overlay: None,
         }
     }
 
@@ -145,6 +156,7 @@ impl Scene {
             status: None,
             prompt: None,
             time: Duration::ZERO,
+            overlay: None,
         }
     }
 
@@ -177,6 +189,19 @@ impl Scene {
     pub const fn with_time(mut self, time: Duration) -> Self {
         self.time = time;
         self
+    }
+
+    /// Shows the journal overlay, or none.
+    #[must_use]
+    pub fn with_overlay(mut self, overlay: Option<OverlayView>) -> Self {
+        self.overlay = overlay;
+        self
+    }
+
+    /// The journal overlay, if shown.
+    #[must_use]
+    pub const fn overlay(&self) -> Option<&OverlayView> {
+        self.overlay.as_ref()
     }
 
     /// The animation time.

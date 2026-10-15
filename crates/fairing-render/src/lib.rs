@@ -45,7 +45,7 @@ pub use backend::drm::DrmBackend;
 #[doc(inline)]
 pub use backend::fbdev::{FbInfo, FbdevBackend};
 #[doc(inline)]
-pub use backend::text::{TEXT_INTERVAL, TextConsole};
+pub use backend::text::{TEXT_INTERVAL, TextConsole, plain};
 #[doc(inline)]
 pub use backend::{
     Attempt, Backend, BackendKind, Choice, MemoryBackend, NoBackend, Opened, Surface, open,
@@ -67,4 +67,4 @@ pub use palette::Palette;
 #[doc(inline)]
 pub use presenter::{DEFAULT_REACQUIRE_BUDGET, Presenter, PresenterConfig, Reopen, Stats};
 #[doc(inline)]
-pub use scene::{ECHO_CAPACITY, EchoText, Field, PromptView, Scene};
+pub use scene::{ECHO_CAPACITY, EchoText, Field, OverlayView, PromptView, Scene};
