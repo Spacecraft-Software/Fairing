@@ -660,6 +660,51 @@ impl Session {
         }))
     }
 
+    /// What systemd's signals said since the last tick (P-045): a failed job,
+    /// a queued rescue or emergency target, or more failed units than at the
+    /// first reading. Signals arrive as the events happen, so the exit does
+    /// not wait for the next poll's answers (FRN-SRS-034). A failure while
+    /// the system is stopping is part of the shutdown, not of the boot.
+    ///
+    /// Implements: FRN-SRS-034
+    fn signalled(
+        &self,
+        env: &Environment<'_>,
+        failed_job: Option<String>,
+        maintenance_queued: bool,
+        failed_count: Option<u32>,
+    ) -> Option<Reason> {
+        if self.latest.as_ref().is_some_and(Snapshot::is_stopping) {
+            return None;
+        }
+        if maintenance_queued {
+            (env.emit)(Diagnostic::new(
+                Severity::Warn,
+                "MAINTENANCE",
+                "rescue or emergency mode was queued; leaving the screen to the console",
+                env.invocation,
+            ));
+            return Some(Reason::Maintenance);
+        }
+        let more_failed = failed_count
+            .zip(self.failed_baseline)
+            .is_some_and(|(count, baseline)| count > baseline);
+        if failed_job.is_none() && !more_failed {
+            return None;
+        }
+        let message = failed_job.map_or_else(
+            || "a unit failed during the boot; leaving the screen to the console".to_owned(),
+            |unit| format!("`{unit}` failed during the boot; leaving the screen to the console"),
+        );
+        (env.emit)(Diagnostic::new(
+            Severity::Warn,
+            "UNIT_FAILED",
+            message,
+            env.invocation,
+        ));
+        Some(Reason::FailedUnit)
+    }
+
     /// Reports, once, that D-Bus missed its deadline (FRN-SRS-016).
     fn check_dbus_deadline(&mut self, env: &Environment<'_>, running: Duration) {
         if self.connected || self.dbus_notice_sent || running < DBUS_DEADLINE {
@@ -771,9 +816,17 @@ impl Session {
     /// Takes every pending D-Bus message; returns a reason to stop, if any.
     fn drain(&mut self, env: &Environment<'_>) -> Option<Reason> {
         let rx = env.systemd.as_ref()?;
+        let mut failed_job = None;
+        let mut maintenance_queued = false;
+        let mut failed_count = None;
         while let Ok(event) = rx.try_recv() {
             match event {
                 Event::Connected => self.connected = true,
+                Event::JobFailed(unit) => {
+                    failed_job.get_or_insert(unit);
+                }
+                Event::MaintenanceQueued => maintenance_queued = true,
+                Event::FailedUnits(count) => failed_count = Some(count),
                 Event::Snapshot(snapshot) => {
                     self.connected = true;
                     let baseline = self.failed_baseline.unwrap_or(snapshot.failed_units);
@@ -793,6 +846,9 @@ impl Session {
                     self.connected = false;
                 }
             }
+        }
+        if let Some(reason) = self.signalled(env, failed_job, maintenance_queued, failed_count) {
+            return Some(reason);
         }
         let latest = self.latest.as_ref()?;
         let baseline = self.failed_baseline.unwrap_or(0);
@@ -1336,6 +1392,60 @@ mod tests {
             !plan.paths.state.join(DURATIONS_FILE).exists(),
             "a failed boot is not a measurement"
         );
+    }
+
+    #[test]
+    fn failure_signals_end_the_splash_without_a_poll() {
+        // Verifies: FRN-SRS-034
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::System, Some(Duration::from_mins(1)));
+        let failed = harness.run(
+            &plan,
+            false,
+            vec![
+                Event::Connected,
+                Event::JobFailed("nginx.service".to_owned()),
+            ],
+            memory,
+        );
+        assert_eq!(failed.reason, Reason::FailedUnit);
+        assert_eq!(failed.frames, 0, "the first tick ends it");
+        assert!(
+            harness
+                .diagnostics
+                .borrow()
+                .iter()
+                .any(|d| d.code == "UNIT_FAILED" && d.message.contains("`nginx.service`"))
+        );
+        let rescue = harness.run(&plan, false, vec![Event::MaintenanceQueued], memory);
+        assert_eq!(rescue.reason, Reason::Maintenance);
+        let counted = harness.run(
+            &plan,
+            false,
+            vec![snapshot(0.3, 1, "starting", None), Event::FailedUnits(2)],
+            memory,
+        );
+        assert_eq!(counted.reason, Reason::FailedUnit);
+    }
+
+    #[test]
+    fn signals_of_no_new_failure_change_nothing() {
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::System, Some(Duration::from_millis(100)));
+        // The count is the baseline's; a count before any reading has no
+        // baseline to rise above.
+        for events in [
+            vec![snapshot(0.3, 1, "starting", None), Event::FailedUnits(1)],
+            vec![Event::FailedUnits(4)],
+            // A stop job failing during a shutdown is the shutdown's.
+            vec![
+                snapshot(0.9, 0, "stopping", None),
+                Event::JobFailed("x.service".to_owned()),
+            ],
+        ] {
+            let outcome = harness.run(&plan, false, events, memory);
+            assert_eq!(outcome.reason, Reason::ExitAfter);
+        }
     }
 
     #[test]
