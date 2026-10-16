@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use fairing_render::{
-    Attempt, Choice, Compositor, PixelFormat, Presenter, PresenterConfig, Scene, Size, Surface,
-    open,
+    Attempt, Cadence, Choice, Compositor, PixelFormat, Presenter, PresenterConfig, Scene, Size,
+    Surface, TextConsole, open,
 };
 use fairing_theme::{CompiledTheme, Resolution};
 use serde::Serialize;
@@ -33,7 +33,7 @@ use crate::error::AppError;
 use crate::output::envelope::Response;
 use crate::output::mode::Context;
 use crate::output::write_line;
-use crate::selection::{PaletteSources, choose_backend, resolve_palette};
+use crate::selection::{PaletteSources, choose_backend, report_accessible, resolve_palette};
 
 /// The runnable hint for every "could not draw" failure.
 const MEMORY_HINT: &str = "fairing preview --backend memory --snapshot frame.ppm";
@@ -85,6 +85,10 @@ struct Report {
     measured_fps: Option<f64>,
     snapshot: Option<String>,
     fallbacks: Vec<FallbackReport>,
+    /// Accessible mode: the run was written as lines of text on stderr.
+    accessible: bool,
+    /// Reduced motion: no frame sequence played.
+    reduced_motion: bool,
     /// True under `--dry-run`: nothing was opened or drawn.
     planned: bool,
 }
@@ -96,6 +100,10 @@ struct Plan<'a> {
     resolution: Resolution,
     choice: Choice,
     memory_size: Size,
+    /// Accessible mode: the text backend, on stderr (FRN-SRS-070).
+    text: bool,
+    /// Accessible mode or `--reduced-motion` (FRN-SRS-052).
+    reduced_motion: bool,
 }
 
 /// The snapshot target, opened before any device so a bad path fails fast
@@ -222,12 +230,22 @@ pub fn run(
         None => CompiledTheme::builtin(),
         Some(path) => load_theme(path, invocation)?,
     };
+    let accessible = context.accessible;
+    report_accessible(accessible, context, invocation);
+    if accessible.on && args.snapshot.is_some() {
+        return Err(AppError::invalid_argument(
+            "`--snapshot` needs a frame, and accessible mode draws text",
+            "fairing preview --no-accessible --backend memory --snapshot frame.ppm",
+            invocation,
+        ));
+    }
     let resolution = resolve_palette(
         &PaletteSources {
             explicit: args.palette.as_deref(),
             declared_default: args.theme.as_ref().map(|_| theme.meta().palette.as_str()),
             verb: "preview",
             strict: true,
+            accessible: accessible.on,
             ..PaletteSources::default()
         },
         context,
@@ -251,9 +269,13 @@ pub fn run(
                 invocation,
             )
         })?,
+        text: accessible.on,
+        reduced_motion: accessible.on || args.reduced_motion,
     };
     let report = if flags.dry_run {
         planned_report(&plan)
+    } else if plan.text {
+        write_text(&plan, invocation, origin)?
     } else {
         draw(&plan, context, invocation, origin)?
     };
@@ -270,6 +292,9 @@ fn chain_names(choice: Choice) -> Vec<&'static str> {
 /// Only the memory backend has a size before it is opened; a device's mode is
 /// read from the device, so the plan leaves it null rather than guess.
 fn planned_report(plan: &Plan<'_>) -> Report {
+    if plan.text {
+        return text_report(plan, 0, None);
+    }
     let memory = plan.choice == Choice::Memory;
     Report {
         backend: plan.choice.as_str(),
@@ -288,7 +313,70 @@ fn planned_report(plan: &Plan<'_>) -> Report {
         measured_fps: None,
         snapshot: plan.args.snapshot.as_ref().map(|p| p.display().to_string()),
         fallbacks: Vec::new(),
+        accessible: false,
+        reduced_motion: plan.reduced_motion,
         planned: true,
+    }
+}
+
+/// The report of a text run: `frames` ticks, the first after `first`; a
+/// plan when `first` is `None` and nothing ran.
+fn text_report(plan: &Plan<'_>, frames: u64, first: Option<Duration>) -> Report {
+    Report {
+        backend: "text",
+        chain: vec!["text"],
+        device: None,
+        width: None,
+        height: None,
+        format: None,
+        theme: plan.theme.meta().name.clone(),
+        palette: palette_report(&plan.resolution),
+        seconds: plan.args.seconds,
+        fps: plan.args.fps,
+        frames,
+        dropped: 0,
+        first_frame_ms: first.map(|d| d.as_secs_f64() * 1000.0),
+        measured_fps: None,
+        snapshot: None,
+        fallbacks: Vec::new(),
+        accessible: true,
+        reduced_motion: plan.reduced_motion,
+        planned: frames == 0,
+    }
+}
+
+/// Accessible mode: the simulated run as lines of text on stderr, the
+/// terminal the preview runs in (FRN-SRS-070, FRN-SRS-071). stdout keeps the
+/// report alone.
+fn write_text(plan: &Plan<'_>, invocation: &str, origin: Instant) -> Result<Report, AppError> {
+    let mut console = TextConsole::new(io::stderr());
+    let mut cadence = Cadence::new(plan.args.fps);
+    let duration = Duration::from_secs_f64(plan.args.seconds);
+    let start = Instant::now();
+    let mut frames = 0;
+    let mut first = None;
+    loop {
+        let elapsed = start.elapsed();
+        let done = elapsed >= duration;
+        let percent = if done {
+            100
+        } else {
+            simulated_percent(elapsed, duration)
+        };
+        console
+            .present(
+                &Scene::new(percent).with_status(plan.args.status.as_str()),
+                elapsed,
+            )
+            .map_err(|e| {
+                AppError::internal(format!("writing the text backend's line: {e}"), invocation)
+            })?;
+        frames += 1;
+        first.get_or_insert_with(|| origin.elapsed());
+        if done {
+            return Ok(text_report(plan, frames, first));
+        }
+        cadence.wait();
     }
 }
 
@@ -322,7 +410,7 @@ fn draw(
     let mut presenter = Presenter::new(opened.surface, compositor, config)
         .map_err(|e| AppError::from_render(&e, MEMORY_HINT, invocation))?;
 
-    let outcome = animate(&mut presenter, plan.args, invocation).and_then(|run_time| {
+    let outcome = animate(&mut presenter, plan, invocation).and_then(|run_time| {
         let written = match snapshot {
             Some(file) => Some(file.write(&presenter, context, invocation)?),
             None => None,
@@ -373,6 +461,8 @@ fn draw(
         measured_fps,
         snapshot,
         fallbacks,
+        accessible: false,
+        reduced_motion: plan.reduced_motion,
         planned: false,
     })
 }
@@ -406,9 +496,10 @@ fn report_fallbacks(
 /// Presents the simulated bar for the requested duration; returns the wall time taken.
 fn animate(
     presenter: &mut Presenter,
-    args: &PreviewArgs,
+    plan: &Plan<'_>,
     invocation: &str,
 ) -> Result<Duration, AppError> {
+    let args = plan.args;
     let duration = Duration::from_secs_f64(args.seconds);
     let start = Instant::now();
     loop {
@@ -419,8 +510,13 @@ fn animate(
         } else {
             simulated_percent(elapsed, duration)
         };
+        let time = crate::splash::run::animation_time(plan.reduced_motion, elapsed);
         presenter
-            .present(&Scene::new(percent).with_status(args.status.as_str()))
+            .present(
+                &Scene::new(percent)
+                    .with_status(args.status.as_str())
+                    .with_time(time),
+            )
             .map_err(|e| AppError::from_render(&e, MEMORY_HINT, invocation))?;
         if done {
             return Ok(start.elapsed());

@@ -12,13 +12,17 @@
 //! with the console restored and the reason in the journal.
 
 pub mod clock;
+pub mod console;
 #[cfg(feature = "dbus")]
 pub mod dbus;
 #[cfg(not(feature = "dbus"))]
 #[path = "dbus_off.rs"]
 pub mod dbus;
 pub mod events;
+pub mod journal;
+pub mod keys;
 pub mod notify;
+pub mod overlay;
 pub mod progress;
 pub mod run;
 pub mod state;
@@ -37,16 +41,24 @@ use crate::cli::{GlobalFlags, SplashArgs, StageArg};
 use crate::diagnostic::{Diagnostic, Priority, Severity};
 use crate::error::AppError;
 use crate::output::envelope::Response;
-use crate::output::mode::Context;
+use crate::output::mode::{Accessible, Context};
 use crate::output::write_line;
-use crate::selection::{PaletteSources, choose_backend, resolve_palette};
+use crate::selection::{PaletteSources, choose_backend, report_accessible, resolve_palette};
 use crate::splash::clock::Boottime;
+use crate::splash::console::TextTarget;
 use crate::splash::notify::Notifier;
 use crate::splash::progress::Stage;
-use crate::splash::run::{AgentPaths, Environment, Outcome, Paths, Plan, Reason};
+use crate::splash::run::{AgentPaths, Environment, Outcome, OverlayPaths, Paths, Plan, Reason};
 
 /// The runnable hint for splash failures.
 const HINT: &str = "fairing splash --stage system --dry-run";
+
+/// The kernel parameter that turns accessible mode on (`1`) or keeps it off
+/// (`0`), below `--accessible` and `SPACECRAFT_A11Y` (FRN-SRS-070).
+pub const KERNEL_ACCESSIBLE: &str = "fairing.accessible";
+
+/// The kernel parameter that turns reduced motion on (`1`, FRN-SRS-052).
+pub const KERNEL_REDUCED_MOTION: &str = "fairing.reduced_motion";
 
 /// The longest kernel command line read (the kernel's own limit is 4 KiB on
 /// x86-64, `COMMAND_LINE_SIZE`; anything longer is not a command line).
@@ -79,7 +91,41 @@ struct Report {
     release_ms: Option<f64>,
     agent: bool,
     answered: u32,
+    accessible: bool,
+    reduced_motion: bool,
     planned: bool,
+}
+
+impl Report {
+    /// A report for `stage` with nothing drawn, decided or planned yet.
+    fn new(stage: Stage) -> Self {
+        Self {
+            stage: stage.as_str(),
+            reason: None,
+            chain: Vec::new(),
+            backend: None,
+            theme: String::new(),
+            palette: PaletteReport {
+                slug: "",
+                base: "",
+                source: "",
+                overlay: "",
+            },
+            frames: 0,
+            dropped: 0,
+            first_frame_ms: None,
+            bar: 0.0,
+            carried_bar: None,
+            dbus: false,
+            last_status: None,
+            release_ms: None,
+            agent: false,
+            answered: 0,
+            accessible: false,
+            reduced_motion: false,
+            planned: false,
+        }
+    }
 }
 
 /// Runs `fairing splash`.
@@ -102,8 +148,8 @@ pub fn run(
     let stage = match args.stage {
         StageArg::Initrd => Stage::Initrd,
         StageArg::System => Stage::System,
+        StageArg::Shutdown => Stage::Shutdown,
     };
-    let choice = choose_backend(args.backend, HINT, context, invocation, flags.dry_run)?;
     let memory_size = Size::new(args.size.0, args.size.1)
         .map_err(|e| AppError::invalid_argument(e.to_string(), HINT, invocation))?;
     dbus::check_bus(&args.bus).map_err(|why| AppError::invalid_argument(why, HINT, invocation))?;
@@ -123,6 +169,17 @@ pub fn run(
         Some(text) => Some(text.clone()),
         None => read_cmdline(Path::new("/proc/cmdline")),
     };
+    let Modes {
+        accessible,
+        reduced_motion,
+        text,
+    } = modes(args, context, cmdline.as_deref(), invocation);
+    // The text backend opens no VT, so the agent rule has nothing to decide.
+    let choice = if text.is_some() {
+        fairing_render::Choice::Memory
+    } else {
+        choose_backend(args.backend, HINT, context, invocation, flags.dry_run)?
+    };
     let resolution = resolve_palette(
         &PaletteSources {
             explicit: args.palette.as_deref(),
@@ -130,45 +187,33 @@ pub fn run(
             declared_default: Some(theme.meta().palette.as_str()),
             verb: "splash",
             strict: false,
+            accessible: accessible.on,
         },
         context,
         invocation,
     )?;
     let mut report = Report {
-        stage: stage.as_str(),
-        reason: None,
-        chain: choice.chain().iter().map(|k| k.as_str()).collect(),
-        backend: None,
+        chain: if text.is_some() {
+            vec!["text"]
+        } else {
+            choice.chain().iter().map(|k| k.as_str()).collect()
+        },
         theme: theme.meta().name.clone(),
         palette: palette_report(&resolution),
-        frames: 0,
-        dropped: 0,
-        first_frame_ms: None,
-        bar: 0.0,
-        carried_bar: None,
-        dbus: false,
-        last_status: None,
-        release_ms: None,
-        agent: !args.no_agent,
-        answered: 0,
+        agent: !args.no_agent && stage != Stage::Shutdown,
+        accessible: accessible.on,
+        reduced_motion,
         planned: flags.dry_run,
+        ..Report::new(stage)
     };
     if flags.dry_run {
         return emit(&report, context, invocation, flags);
     }
 
-    let terminate = Arc::new(AtomicBool::new(false));
-    for signal in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
-        signal_hook::flag::register(signal, Arc::clone(&terminate)).map_err(|e| {
-            AppError::internal(
-                format!("cannot install the signal handler: {e}"),
-                invocation,
-            )
-        })?;
-    }
+    let terminate = termination_flag(invocation)?;
     let notifier = Notifier::new(std::env::var_os("NOTIFY_SOCKET").as_deref());
     let systemd = match (stage, args.bus.as_str()) {
-        (Stage::Initrd, _) | (_, "none") => None,
+        (Stage::Initrd | Stage::Shutdown, _) | (_, "none") => None,
         (Stage::System, bus) => Some(dbus::spawn(bus)),
     };
     let plan = Plan {
@@ -183,11 +228,12 @@ pub fn run(
             sysroot_state: args.sysroot_state_dir.clone(),
         },
         exit_after: args.exit_after.map(Duration::from_secs_f64),
-        agent: (!args.no_agent).then(|| AgentPaths {
-            ask_dir: args.ask_dir.clone(),
-            input_sysfs: args.input_sysfs.clone(),
-            input_dev: args.input_dev.clone(),
-        }),
+        // Nothing asks for a password while the system shuts down; a question
+        // that does is the console agent's.
+        agent: agent_paths(args).filter(|_| stage != Stage::Shutdown),
+        overlay: text.is_none().then(|| overlay_paths(args)),
+        text,
+        reduced_motion,
     };
     let emit_diagnostic = |diagnostic: Diagnostic| diagnostic.emit(context);
     let environment = Environment {
@@ -202,6 +248,64 @@ pub fn run(
     let outcome = run::run(&plan, &environment);
     fill(&mut report, &outcome);
     emit(&report, context, invocation, flags)
+}
+
+/// The password agent's directories, unless `--no-agent`.
+fn agent_paths(args: &SplashArgs) -> Option<AgentPaths> {
+    (!args.no_agent).then(|| AgentPaths {
+        ask_dir: args.ask_dir.clone(),
+        input_sysfs: args.input_sysfs.clone(),
+        input_dev: args.input_dev.clone(),
+    })
+}
+
+/// What the journal overlay reads.
+fn overlay_paths(args: &SplashArgs) -> OverlayPaths {
+    OverlayPaths {
+        input_sysfs: args.input_sysfs.clone(),
+        input_dev: args.input_dev.clone(),
+        journalctl: args.journalctl.clone(),
+    }
+}
+
+/// A flag SIGTERM and SIGINT set.
+fn termination_flag(invocation: &str) -> Result<Arc<AtomicBool>, AppError> {
+    let terminate = Arc::new(AtomicBool::new(false));
+    for signal in [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT] {
+        signal_hook::flag::register(signal, Arc::clone(&terminate)).map_err(|e| {
+            AppError::internal(
+                format!("cannot install the signal handler: {e}"),
+                invocation,
+            )
+        })?;
+    }
+    Ok(terminate)
+}
+
+/// Accessible mode, reduced motion and the text target, from the flags, the
+/// environment and the kernel command line.
+struct Modes {
+    accessible: Accessible,
+    reduced_motion: bool,
+    text: Option<TextTarget>,
+}
+
+/// Resolves [`Modes`] and reports accessible mode under `--verbose`.
+fn modes(args: &SplashArgs, context: &Context, cmdline: Option<&str>, invocation: &str) -> Modes {
+    let kernel = |key: &str| cmdline.and_then(|line| fairing_theme::kernel_value(line, key));
+    let accessible = context.accessible.with_kernel(kernel(KERNEL_ACCESSIBLE));
+    report_accessible(accessible, context, invocation);
+    Modes {
+        accessible,
+        // Accessible mode has no animation (§18); the other two triggers are
+        // reduced motion alone, for a graphical splash that keeps still.
+        reduced_motion: accessible.on
+            || args.reduced_motion
+            || kernel(KERNEL_REDUCED_MOTION) == Some("1"),
+        text: accessible
+            .on
+            .then(|| TextTarget::choose(&args.console, context.is_agent_environment())),
+    }
 }
 
 /// Logs why the splash will not draw, tells systemd it started, and exits 0.
@@ -231,28 +335,8 @@ fn step_aside(
         .emit(context);
     }
     let report = Report {
-        stage: stage.as_str(),
         reason: Some("theme-unreadable"),
-        chain: Vec::new(),
-        backend: None,
-        theme: String::new(),
-        palette: PaletteReport {
-            slug: "",
-            base: "",
-            source: "",
-            overlay: "",
-        },
-        frames: 0,
-        dropped: 0,
-        first_frame_ms: None,
-        bar: 0.0,
-        carried_bar: None,
-        dbus: false,
-        last_status: None,
-        release_ms: None,
-        agent: false,
-        answered: 0,
-        planned: false,
+        ..Report::new(stage)
     };
     emit(&report, context, invocation, flags)
 }

@@ -9,6 +9,21 @@ Fine-grained tasks for the milestone in progress. `PLAN.md` holds the milestone 
 this file holds the steps behind them and is rewritten as milestones open. Ticked means
 done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 
+## M4 — Operator and accessibility
+
+- [x] T-068 Event-driven failure detection (P-045, T-052): systemd's `JobRemoved` and `JobNew` signals and the `NFailedUnits` change end the splash within 1 s however slowly PID 1 answers property reads
+- [x] T-069 Accessible mode resolved once: `--accessible`/`--no-accessible`, `SPACECRAFT_A11Y`, kernel `fairing.accessible=1`; off unless a trigger is present; reported with its source
+- [x] T-070 Text backend: `Fairing <NN>% <status>` at most once a second, prompts as plain text, no ANSI sequences, on the console
+- [x] T-071 Frame sequences played in a loop at the theme's rate; reduced motion (accessible mode, `--reduced-motion`, `fairing.reduced_motion=1`) draws the first frame only and moves the bar without easing
+- [x] T-072 Journal overlay: Esc toggles the last 40 entries at notice or higher from `journalctl -o json --follow`; Up/Down, PgUp/PgDn and j/k scroll; keyboards read without a grab while no prompt is open
+- [x] T-073 Shutdown splash: `fairing splash --stage shutdown` draws the shutdown layout until killed; `fairing-shutdown.service` from shutdown.target to the final kill
+- [x] T-074 M3 follow-ups: the Caps Lock state read from the keyboard's LED when a grab starts; glyphs rasterised for an echoed answer dropped when its prompt closes
+- [x] T-075 Module, module-eval and VM tests for the shutdown unit, the overlay's `journalctl` in the initrd and accessible mode
+- [x] T-076 Manual (overlay, accessible mode, reduced motion, shutdown), README, AGENTS, SKILL, CHANGELOG
+- [x] T-077 Adversarial review folded in
+- [ ] T-078 M4 pull request reviewed and merged
+- [ ] T-079 Screen-reader run on the console with the text backend (Orca or espeakup, brltty), dated note in README.md (maintainer, P-044)
+
 ## M3 — Unlocks a LUKS root
 
 - [x] T-053 `ask.*` parser in fairing-askpass: 64 KiB and UTF-8 checked before any field, fixed-capacity fields, `Id=`, `Message=`, `Socket=`, `NotAfter=`, `Echo=`, `PID=`
@@ -25,7 +40,7 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-064 Adversarial review folded in
 - [x] T-066 A key the parser reads that appears twice in `[Ask]` refuses the file: systemd 260 writes `Message=` raw after `Socket=` and `Echo=`, so a newline in a device label could smuggle in a second `Socket=`; fixture from the file systemd 260 wrote on the T490s (folded in from PR #6)
 - [x] T-067 Reply only to a `Socket=` directly inside the question directory, never through a link (maintainer decision 2026-10-14, secure by design; folded in from PR #6)
-- [ ] T-065 M3 pull request reviewed and merged
+- [x] T-065 M3 pull request reviewed and merged
 
 ## M2 — Boots on Bravais
 
@@ -47,7 +62,7 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-049 Adversarial review and research critique folded in: explicit handoff marker, READY=1 on every path, stage 2 timed from its own start, one re-open per frame, bounded D-Bus handshake, job start order for the status line, failed-unit baseline, emergency and rescue conflicts, private socket refused by identity, palette skipped not fatal in the splash, tint and image limits checked early, Nickel nesting bound, `fairing-handoff.service` (greetd is `Type=idle`), `boot-finished` exit, `release_ms` in the report, named missing arguments; from the TCG VM runs, the handoff held until logins are allowed (`After=systemd-user-sessions.service`) and a late page flip left in flight, its frames dropped until it lands (2 s stall bound); from the Codex review, flips queued without waiting so SIGTERM never waits on the display
 - [ ] T-050 Evaluate Nickel in a child process under memory and stack limits, so any runaway theme (unbounded recursion, a deep import) exits 2 instead of aborting; M2's mitigation is the 5 s deadline and the 256-level nesting bound on the theme file
 - [ ] T-051 A stage-2 splash with no D-Bus connection on a boot without greetd has nothing to end it but shutdown; decide a module-side stop (a oneshot after `multi-user.target`) or a time bound
-- [ ] T-052 (scheduled for M4 as P-045) Event-driven failure detection (systemd's `JobRemoved` and `PropertiesChanged` signals) so FRN-SRS-034's 1 s holds when PID 1 is slow: polled, a failure shows within 250 ms plus five property reads, inside 1 s only while each read takes under about 140 ms
+- [x] T-052 (scheduled for M4 as P-045) Event-driven failure detection (systemd's `JobRemoved` and `PropertiesChanged` signals) so FRN-SRS-034's 1 s holds when PID 1 is slow: polled, a failure shows within 250 ms plus five property reads, inside 1 s only while each read takes under about 140 ms
 - [ ] T-046 G1 decisions: the FRN-SRS-032 amendment (handoff by stop, not `Conflicts=`); the FRN-SRS-010 wording and carrier; FRN-SRS-034 as a transition (failures already present at the first reading do not count); `PrivateTmp=disconnected` for FRN-SRS-093 (`yes` orders the splash after tmpfiles setup); the third unit of FRN-SRS-090 at M4; nickel-lang-core's licence and advisory; the stage-2 binary over 2.5 MiB (maintainer)
 - [ ] T-047 Hardware run on the T490s with the module enabled: first frame, 30 Hz, added boot time (maintainer)
 - [x] T-048 M2 pull request reviewed and merged

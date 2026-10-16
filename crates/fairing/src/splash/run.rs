@@ -25,16 +25,19 @@ use fairing_askpass::agent::{Activity, Agent};
 use fairing_askpass::input::Keyboards;
 use fairing_askpass::watch::monotonic_us;
 use fairing_render::{
-    Choice, Compositor, EchoText, Field, NoBackend, Opened, Presenter, PresenterConfig, PromptView,
-    RenderErrorKind, Scene, Size, open,
+    Cadence, Choice, Compositor, EchoText, Field, NoBackend, Opened, Presenter, PresenterConfig,
+    PromptView, RenderErrorKind, Scene, Size, TextConsole, open,
 };
 use fairing_theme::{CompiledTheme, Selection};
 use serde::Serialize;
 
 use crate::diagnostic::{Diagnostic, Priority, Severity};
 use crate::splash::clock::BootClock;
+use crate::splash::console::{Sink, TextTarget};
 use crate::splash::events::{Event, Snapshot};
+use crate::splash::keys::{Nav, Navigation};
 use crate::splash::notify::Notifier;
+use crate::splash::overlay::Overlay;
 use crate::splash::progress::{Bar, Inputs, Stage, target};
 use crate::splash::state::{
     DURATIONS_FILE, Durations, HANDOFF_FILE, HANDOFF_MARKER, Handoff, read_durations, read_handoff,
@@ -67,6 +70,12 @@ pub const FLIP_STALL_LIMIT: Duration = Duration::from_secs(2);
 /// longer than a simpledrm-to-native swap, short of a user typing.
 pub const BLIND_PROMPT_LIMIT: Duration = Duration::from_secs(2);
 
+/// How long a failed-unit count from systemd's signals must stay above the
+/// baseline before it ends the splash: a service restarted after a failed
+/// start is counted failed for an instant. Signal, settle and one frame stay
+/// well inside FRN-SRS-034's second.
+pub const SIGNAL_SETTLE: Duration = Duration::from_millis(200);
+
 /// The file in the runtime directory that exists while the password agent
 /// is up; systemd's console agent is conditioned on its absence.
 pub const AGENT_FLAG: &str = "agent";
@@ -84,6 +93,18 @@ pub struct AgentPaths {
     pub input_sysfs: PathBuf,
     /// `/dev/input`.
     pub input_dev: PathBuf,
+}
+
+/// What the journal overlay reads: keyboards, without a grab, and the
+/// journal through journalctl (FRN-SRS-060).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverlayPaths {
+    /// `/sys/class/input`.
+    pub input_sysfs: PathBuf,
+    /// `/dev/input`.
+    pub input_dev: PathBuf,
+    /// `journalctl`.
+    pub journalctl: PathBuf,
 }
 
 /// Where the splash reads and writes its files.
@@ -116,6 +137,14 @@ pub struct Plan {
     pub exit_after: Option<Duration>,
     /// The password agent; `None` under `--no-agent`.
     pub agent: Option<AgentPaths>,
+    /// Accessible mode: lines of text here instead of graphics (FRN-SRS-070).
+    pub text: Option<TextTarget>,
+    /// Reduced motion: the bar jumps to its target and frame sequences show
+    /// their first frame (FRN-SRS-052).
+    pub reduced_motion: bool,
+    /// The journal overlay; `None` in accessible mode, where the console
+    /// already shows the log, and in tests.
+    pub overlay: Option<OverlayPaths>,
 }
 
 /// Why the loop ended.
@@ -247,7 +276,7 @@ pub fn run_with(
     let carried = match plan.stage {
         Stage::System => read_handoff(&plan.paths.runtime.join(HANDOFF_FILE))
             .filter(|handoff| handoff.initrd_end <= started),
-        Stage::Initrd => None,
+        Stage::Initrd | Stage::Shutdown => None,
     };
     // Stage 2 counts from its own start, not from the handoff's initrd end: an
     // initrd splash stopped by a passphrase prompt left long before switch-root,
@@ -256,7 +285,7 @@ pub fn run_with(
         started,
         stage_origin: match plan.stage {
             Stage::Initrd => Duration::ZERO,
-            Stage::System => started,
+            Stage::System | Stage::Shutdown => started,
         },
         carried,
     };
@@ -275,15 +304,15 @@ pub fn run_with(
         agent: false,
         answered: 0,
     };
-    let mut presenter = match start(plan, env, open_chain) {
-        Ok(presenter) => presenter,
+    let mut output = match start(plan, env, open_chain) {
+        Ok(output) => output,
         Err(reason) => {
             outcome.reason = reason;
             notify(env, Notifier::ready, "READY=1");
             return outcome;
         }
     };
-    outcome.backend = Some(presenter.backend().as_str());
+    outcome.backend = Some(output.kind());
 
     let mut session = Session::new(outcome.bar);
     if let Some(paths) = &plan.agent {
@@ -306,17 +335,98 @@ pub fn run_with(
                     .with_priority(Priority::Notice),
                 );
                 outcome.reason = Reason::AgentFailed;
-                return finish(plan, env, presenter, &mut session, &timeline, outcome);
+                return finish(plan, env, output, &mut session, &timeline, outcome);
             }
         }
     }
+    if let (Some(paths), Output::Pixels(_)) = (&plan.overlay, &output) {
+        session.keys = Some(Navigation::new(&paths.input_sysfs, &paths.input_dev));
+        session.overlay = Some(Overlay::new(paths.journalctl.clone()));
+    }
     outcome.reason = loop {
-        if let Some(reason) = session.tick(plan, env, &mut presenter, &timeline, &mut outcome) {
+        if let Some(reason) = session.tick(plan, env, &mut output, &timeline, &mut outcome) {
             break reason;
         }
-        presenter.pace();
+        output.pace();
     };
-    finish(plan, env, presenter, &mut session, &timeline, outcome)
+    finish(plan, env, output, &mut session, &timeline, outcome)
+}
+
+/// Where the splash draws: pixels through the presenter, or lines of text on
+/// the console in accessible mode.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one per run, owned by the loop; the pixel case is the usual one"
+)]
+enum Output {
+    /// DRM/KMS, fbdev or memory.
+    Pixels(Presenter),
+    /// The text backend (FRN-SRS-070).
+    Text(TextOutput),
+}
+
+/// The text backend and the loop's own pacing, which the presenter keeps for
+/// the pixel backends.
+struct TextOutput {
+    console: TextConsole<Sink>,
+    cadence: Cadence,
+    origin: Instant,
+    first: Option<Duration>,
+    frames: u64,
+}
+
+impl Output {
+    /// The backend's name for the report.
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Pixels(presenter) => presenter.backend().as_str(),
+            Self::Text(_) => "text",
+        }
+    }
+
+    /// Process start to the first frame or line.
+    fn first_frame(&self) -> Option<Duration> {
+        match self {
+            Self::Pixels(presenter) => presenter.stats().first_frame(),
+            Self::Text(text) => text.first,
+        }
+    }
+
+    /// Waits for the next frame deadline.
+    fn pace(&mut self) {
+        match self {
+            Self::Pixels(presenter) => {
+                presenter.pace();
+            }
+            Self::Text(text) => {
+                text.cadence.wait();
+            }
+        }
+    }
+
+    /// Releases the output; frames presented and dropped.
+    fn close(self) -> Result<(u64, u64), String> {
+        match self {
+            Self::Pixels(presenter) => presenter
+                .close()
+                .map(|stats| (stats.frames(), stats.dropped()))
+                .map_err(|error| error.to_string()),
+            Self::Text(text) => Ok((text.frames, text.cadence.dropped())),
+        }
+    }
+}
+
+/// How far the theme's frame sequence has played: since this process
+/// started, or not at all under reduced motion, which keeps the first frame
+/// (FRN-SRS-052).
+///
+/// Implements: FRN-SRS-052
+pub fn animation_time(reduced_motion: bool, running: Duration) -> Duration {
+    if reduced_motion {
+        Duration::ZERO
+    } else {
+        running
+    }
 }
 
 /// Marks the agent up, so systemd's console agent stands aside.
@@ -345,12 +455,38 @@ struct Timeline {
     carried: Option<Handoff>,
 }
 
-/// Opens the first backend that works and builds the presenter on it.
+/// Opens the console in accessible mode, or else the first backend that
+/// works and builds the presenter on it.
 fn start(
     plan: &Plan,
     env: &Environment<'_>,
     open_chain: fn(Choice, Size) -> Result<Opened, NoBackend>,
-) -> Result<Presenter, Reason> {
+) -> Result<Output, Reason> {
+    if let Some(target) = &plan.text {
+        return match Sink::open(target) {
+            Ok(sink) => Ok(Output::Text(TextOutput {
+                console: TextConsole::new(sink),
+                cadence: Cadence::new(SPLASH_HZ),
+                origin: env.origin,
+                first: None,
+                frames: 0,
+            })),
+            Err(error) => {
+                (env.emit)(
+                    Diagnostic::new(
+                        Severity::Warn,
+                        "NO_BACKEND",
+                        format!(
+                            "accessible mode cannot write to the console ({error}); the console stays as it is"
+                        ),
+                        env.invocation,
+                    )
+                    .with_priority(Priority::Notice),
+                );
+                Err(Reason::NoBackend)
+            }
+        };
+    }
     let opened = open_chain(plan.choice, plan.memory_size).map_err(|failure| {
         (env.emit)(
             Diagnostic::new(
@@ -374,7 +510,11 @@ fn start(
             env.invocation,
         ));
     }
-    Compositor::with_theme(plan.selection, &plan.theme)
+    let compositor = match plan.stage {
+        Stage::Shutdown => Compositor::with_shutdown(plan.selection, &plan.theme),
+        Stage::Initrd | Stage::System => Compositor::with_theme(plan.selection, &plan.theme),
+    };
+    compositor
         .and_then(|compositor| {
             Presenter::new(
                 opened.surface,
@@ -390,6 +530,7 @@ fn start(
                 },
             )
         })
+        .map(Output::Pixels)
         .map_err(|error| {
             (env.emit)(Diagnostic::new(
                 Severity::Warn,
@@ -405,7 +546,7 @@ fn start(
 fn finish(
     plan: &Plan,
     env: &Environment<'_>,
-    presenter: Presenter,
+    output: Output,
     session: &mut Session,
     timeline: &Timeline,
     mut outcome: Outcome,
@@ -416,17 +557,24 @@ fn finish(
         agent.close();
         let _gone = std::fs::remove_file(plan.paths.runtime.join(AGENT_FLAG));
     }
+    if let Some(keys) = session.keys.as_mut() {
+        keys.close();
+    }
     outcome.bar = session.bar.shown();
     outcome.dbus = session.latest.is_some();
     // Release the output first: greetd is waiting for it (FRN-SRS-033).
-    let closed = presenter.close();
+    let closed = output.close();
+    // Then the overlay's journalctl, whose reaping has no bound of its own.
+    if let Some(overlay) = session.overlay.as_mut() {
+        overlay.close();
+    }
     outcome.release_ms = session
         .terminate_seen
         .map(|seen| seen.elapsed().as_secs_f64() * 1000.0);
     match closed {
-        Ok(stats) => {
-            outcome.frames = stats.frames();
-            outcome.dropped = stats.dropped();
+        Ok((frames, dropped)) => {
+            outcome.frames = frames;
+            outcome.dropped = dropped;
         }
         Err(error) => (env.emit)(Diagnostic::new(
             Severity::Warn,
@@ -493,8 +641,16 @@ struct Session {
     /// could see them (the initrd's, or any before the bus came up) are not a
     /// unit entering the failed state now (FRN-SRS-034).
     failed_baseline: Option<u32>,
+    /// The unit of the last job systemd's signals reported failed.
+    failed_job: Option<String>,
+    /// The last `NFailedUnits` systemd's signals reported, and since when.
+    failed_count: Option<(u32, Duration)>,
     /// The password agent, while it is up.
     agent: Option<Agent<Keyboards>>,
+    /// The overlay's keys, read without a grab.
+    keys: Option<Navigation>,
+    /// The journal overlay.
+    overlay: Option<Overlay>,
 }
 
 impl Session {
@@ -513,7 +669,11 @@ impl Session {
             ready_sent: false,
             terminate_seen: None,
             failed_baseline: None,
+            failed_job: None,
+            failed_count: None,
             agent: None,
+            keys: None,
+            overlay: None,
         }
     }
 
@@ -522,14 +682,14 @@ impl Session {
         &mut self,
         plan: &Plan,
         env: &Environment<'_>,
-        presenter: &mut Presenter,
+        output: &mut Output,
         timeline: &Timeline,
         outcome: &mut Outcome,
     ) -> Option<Reason> {
         let now = env.clock.now();
         let running = now.saturating_sub(timeline.started);
         self.look_for_cache(plan, now);
-        if let Some(reason) = self.drain(env) {
+        if let Some(reason) = self.drain(env, now) {
             return Some(reason);
         }
         if plan.stage == Stage::System {
@@ -551,6 +711,7 @@ impl Session {
             cached: self.durations.and_then(|d| match plan.stage {
                 Stage::Initrd => d.initrd,
                 Stage::System => d.stage2,
+                Stage::Shutdown => None,
             }),
             systemd_progress: self
                 .latest
@@ -559,22 +720,32 @@ impl Session {
                 .map(|s| s.progress),
             handoff: handed_over,
         };
-        let shown = self
-            .bar
-            .advance(target(plan.stage, &inputs), now, terminating);
+        let shown = self.bar.advance(
+            target(plan.stage, &inputs),
+            now,
+            terminating || plan.reduced_motion,
+        );
         let prompt = match self.ask(env, outcome) {
             Ok(prompt) => prompt,
             Err(reason) => return Some(reason),
         };
-        let scene = Scene::from_fraction(shown)
-            .with_status(
+        let overlay = self.navigate(now, prompt.is_some());
+        let scene = match plan.stage {
+            // The shutdown layout: the logo and its one line (FRN-SRS-035).
+            Stage::Shutdown => Scene::new(0)
+                .without_progress()
+                .with_status(plan.theme.meta().shutdown.message.as_str()),
+            Stage::Initrd | Stage::System => Scene::from_fraction(shown).with_status(
                 self.latest
                     .as_ref()
                     .and_then(|s| s.job.clone())
                     .unwrap_or_default(),
-            )
-            .with_prompt(prompt);
-        if let Err(reason) = self.present(env, presenter, &scene, outcome, now) {
+            ),
+        }
+        .with_time(animation_time(plan.reduced_motion, running))
+        .with_overlay(overlay)
+        .with_prompt(prompt);
+        if let Err(reason) = self.present(env, output, &scene, outcome, now) {
             return Some(reason);
         }
         // Ready after the first attempt: after the first frame, or at once when
@@ -586,7 +757,7 @@ impl Session {
             self.ready_sent = true;
         }
         if outcome.first_frame_ms.is_none()
-            && let Some(first) = presenter.stats().first_frame()
+            && let Some(first) = output.first_frame()
         {
             outcome.first_frame_ms = Some(first.as_secs_f64() * 1000.0);
             (env.emit)(Diagnostic::new(
@@ -602,7 +773,7 @@ impl Session {
         terminating.then_some(match (exit_after, plan.stage, stopping, handed_over) {
             (true, _, _, _) => Reason::ExitAfter,
             (false, Stage::Initrd, _, _) => Reason::SwitchRoot,
-            (false, Stage::System, true, _) => Reason::Shutdown,
+            (false, Stage::Shutdown, _, _) | (false, Stage::System, true, _) => Reason::Shutdown,
             (false, Stage::System, false, true) => Reason::Handoff,
             (false, Stage::System, false, false) => Reason::Stopped,
         })
@@ -660,6 +831,74 @@ impl Session {
         }))
     }
 
+    /// What systemd's signals said (P-045): a queued rescue or emergency
+    /// target, or more failed units than at the first reading for
+    /// [`SIGNAL_SETTLE`]. Signals arrive as the events happen, so the exit
+    /// does not wait for the next poll's answers (FRN-SRS-034).
+    ///
+    /// A failed job alone is not a failed unit: a service that fails its
+    /// start and is restarted (`Restart=`) ends its job `failed` and is
+    /// counted failed for an instant, and a device job that times out leaves
+    /// no unit failed. So only a count that stays above the baseline ends
+    /// the splash; the last failed job only names the unit. A failure while
+    /// the system is stopping is part of the shutdown, not of the boot.
+    ///
+    /// Implements: FRN-SRS-034
+    fn signalled(
+        &self,
+        env: &Environment<'_>,
+        now: Duration,
+        maintenance_queued: bool,
+    ) -> Option<Reason> {
+        if self.latest.as_ref().is_some_and(Snapshot::is_stopping) {
+            return None;
+        }
+        if maintenance_queued {
+            (env.emit)(Diagnostic::new(
+                Severity::Warn,
+                "MAINTENANCE",
+                "rescue or emergency mode was queued; leaving the screen to the console",
+                env.invocation,
+            ));
+            return Some(Reason::Maintenance);
+        }
+        let (count, since) = self.failed_count?;
+        let baseline = self.failed_baseline?;
+        if count <= baseline || now.saturating_sub(since) < SIGNAL_SETTLE {
+            return None;
+        }
+        let message = self.failed_job.as_ref().map_or_else(
+            || "a unit failed during the boot; leaving the screen to the console".to_owned(),
+            |unit| format!("`{unit}` failed during the boot; leaving the screen to the console"),
+        );
+        (env.emit)(Diagnostic::new(
+            Severity::Warn,
+            "UNIT_FAILED",
+            message,
+            env.invocation,
+        ));
+        Some(Reason::FailedUnit)
+    }
+
+    /// The overlay's frame: its keys, read without a grab, and the journal's
+    /// new entries; what to draw, if it is shown.
+    fn navigate(
+        &mut self,
+        now: Duration,
+        prompt_open: bool,
+    ) -> Option<fairing_render::OverlayView> {
+        let (keys, overlay) = (self.keys.as_mut()?, self.overlay.as_mut()?);
+        keys.scan(now);
+        let mut pressed: Vec<Nav> = Vec::new();
+        keys.read(|key| pressed.push(key));
+        if prompt_open {
+            // The agent's grab hides every release from the overlay: a
+            // modifier let go during the prompt would read as held after it.
+            keys.release_modifiers();
+        }
+        overlay.frame(&pressed, prompt_open)
+    }
+
     /// Reports, once, that D-Bus missed its deadline (FRN-SRS-016).
     fn check_dbus_deadline(&mut self, env: &Environment<'_>, running: Duration) {
         if self.connected || self.dbus_notice_sent || running < DBUS_DEADLINE {
@@ -687,11 +926,15 @@ impl Session {
     fn present(
         &mut self,
         env: &Environment<'_>,
-        presenter: &mut Presenter,
+        output: &mut Output,
         scene: &Scene,
         outcome: &mut Outcome,
         now: Duration,
     ) -> Result<(), Reason> {
+        let presenter = match output {
+            Output::Pixels(presenter) => presenter,
+            Output::Text(text) => return self.write(env, text, scene, outcome, now),
+        };
         match presenter.present(scene) {
             Ok(()) => {
                 self.stall.clear();
@@ -752,6 +995,58 @@ impl Session {
         }
     }
 
+    /// Writes one scene as text (FRN-SRS-071). A console that cannot be
+    /// written ends the run, and so does one that has not taken an open
+    /// question for [`BLIND_PROMPT_LIMIT`] (a tty stopped with Scroll Lock,
+    /// which the agent's grab keeps stopped): a question is never asked
+    /// where nobody sees it.
+    fn write(
+        &mut self,
+        env: &Environment<'_>,
+        text: &mut TextOutput,
+        scene: &Scene,
+        outcome: &mut Outcome,
+        now: Duration,
+    ) -> Result<(), Reason> {
+        match text.console.present(scene, now) {
+            Ok(_lines) => {
+                text.frames += 1;
+                if text.console.bytes_written() > 0 {
+                    text.first.get_or_insert_with(|| text.origin.elapsed());
+                }
+                outcome.first_bar.get_or_insert(self.bar.shown());
+                outcome.last_status = scene.status().map(str::to_owned);
+                if scene.prompt().is_none() || text.console.prompt_written() {
+                    self.lost_since = None;
+                    return Ok(());
+                }
+                let since = *self.lost_since.get_or_insert(now);
+                if now.saturating_sub(since) > BLIND_PROMPT_LIMIT {
+                    (env.emit)(
+                        Diagnostic::new(
+                            Severity::Warn,
+                            "ASK_BLIND",
+                            "a password question is open but the console takes nothing; leaving it to the console agent",
+                            env.invocation,
+                        )
+                        .with_priority(Priority::Notice),
+                    );
+                    return Err(Reason::AgentFailed);
+                }
+                Ok(())
+            }
+            Err(error) => {
+                (env.emit)(Diagnostic::new(
+                    Severity::Warn,
+                    "RENDER_FAILED",
+                    format!("writing to the console failed: {error}"),
+                    env.invocation,
+                ));
+                Err(Reason::RenderFailed)
+            }
+        }
+    }
+
     /// Reads the duration cache once it exists; looks again every second until then.
     fn look_for_cache(&mut self, plan: &Plan, now: Duration) {
         if self.durations.is_some() || now < self.next_cache_look {
@@ -761,6 +1056,7 @@ impl Session {
         let dir = match plan.stage {
             Stage::Initrd => &plan.paths.sysroot_state,
             Stage::System => &plan.paths.state,
+            Stage::Shutdown => return,
         };
         let path = dir.join(DURATIONS_FILE);
         if path.exists() {
@@ -769,11 +1065,20 @@ impl Session {
     }
 
     /// Takes every pending D-Bus message; returns a reason to stop, if any.
-    fn drain(&mut self, env: &Environment<'_>) -> Option<Reason> {
+    fn drain(&mut self, env: &Environment<'_>, now: Duration) -> Option<Reason> {
         let rx = env.systemd.as_ref()?;
+        let mut maintenance_queued = false;
         while let Ok(event) = rx.try_recv() {
             match event {
                 Event::Connected => self.connected = true,
+                Event::JobFailed(unit) => self.failed_job = Some(unit),
+                Event::MaintenanceQueued => maintenance_queued = true,
+                Event::FailedUnits(count) => {
+                    // Kept from its first arrival while it stays the same.
+                    if self.failed_count.is_none_or(|(last, _)| last != count) {
+                        self.failed_count = Some((count, now));
+                    }
+                }
                 Event::Snapshot(snapshot) => {
                     self.connected = true;
                     let baseline = self.failed_baseline.unwrap_or(snapshot.failed_units);
@@ -793,6 +1098,9 @@ impl Session {
                     self.connected = false;
                 }
             }
+        }
+        if let Some(reason) = self.signalled(env, now, maintenance_queued) {
+            return Some(reason);
         }
         let latest = self.latest.as_ref()?;
         let baseline = self.failed_baseline.unwrap_or(0);
@@ -1042,6 +1350,9 @@ mod tests {
                 paths: self.paths(),
                 exit_after,
                 agent: None,
+                text: None,
+                reduced_motion: false,
+                overlay: None,
             }
         }
 
@@ -1339,6 +1650,62 @@ mod tests {
     }
 
     #[test]
+    fn failure_signals_end_the_splash_without_a_poll() {
+        // Verifies: FRN-SRS-034
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::System, Some(Duration::from_mins(1)));
+        let failed = harness.run(
+            &plan,
+            false,
+            vec![
+                snapshot(0.3, 1, "starting", None),
+                Event::JobFailed("nginx.service".to_owned()),
+                Event::FailedUnits(2),
+            ],
+            memory,
+        );
+        assert_eq!(failed.reason, Reason::FailedUnit);
+        assert!(
+            harness
+                .diagnostics
+                .borrow()
+                .iter()
+                .any(|d| d.code == "UNIT_FAILED" && d.message.contains("`nginx.service`"))
+        );
+        let rescue = harness.run(&plan, false, vec![Event::MaintenanceQueued], memory);
+        assert_eq!(rescue.reason, Reason::Maintenance);
+    }
+
+    #[test]
+    fn signals_of_no_lasting_failure_change_nothing() {
+        // Verifies: FRN-SRS-034
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::System, Some(Duration::from_millis(400)));
+        for events in [
+            // A service restarted after a failed start: its job failed, it
+            // was counted failed for an instant.
+            vec![
+                snapshot(0.3, 1, "starting", None),
+                Event::JobFailed("flaky.service".to_owned()),
+                Event::FailedUnits(2),
+                Event::FailedUnits(1),
+            ],
+            // A device that timed out: a failed job, no failed unit.
+            vec![
+                snapshot(0.3, 0, "starting", None),
+                Event::JobFailed("dev-sdz.device".to_owned()),
+            ],
+            // No baseline to rise above.
+            vec![Event::FailedUnits(4)],
+            // A failure during a shutdown is the shutdown's.
+            vec![snapshot(0.9, 0, "stopping", None), Event::FailedUnits(3)],
+        ] {
+            let outcome = harness.run(&plan, false, events, memory);
+            assert_eq!(outcome.reason, Reason::ExitAfter);
+        }
+    }
+
+    #[test]
     fn units_that_failed_before_the_first_reading_do_not_end_the_splash() {
         // Verifies: FRN-SRS-034
         let harness = Harness::new();
@@ -1350,6 +1717,129 @@ mod tests {
             memory,
         );
         assert_eq!(outcome.reason, Reason::ExitAfter);
+    }
+
+    #[test]
+    fn reduced_motion_holds_the_first_frame() {
+        // Verifies: FRN-SRS-052
+        for running in [
+            Duration::ZERO,
+            Duration::from_millis(40),
+            Duration::from_mins(3),
+        ] {
+            assert_eq!(animation_time(true, running), Duration::ZERO);
+            assert_eq!(animation_time(false, running), running);
+        }
+    }
+
+    #[test]
+    fn reduced_motion_moves_the_bar_without_easing() {
+        // Verifies: FRN-SRS-052
+        let harness = Harness::new();
+        let mut plan = harness.plan(Stage::Initrd, Some(Duration::from_millis(100)));
+        let eased = harness.run(&plan, false, Vec::new(), memory);
+        plan.reduced_motion = true;
+        let jumped = harness.run(&plan, false, Vec::new(), memory);
+        // Five seconds into a first boot the target is about 0.19: the
+        // eased bar starts from zero, the reduced one is there at once.
+        let eased = eased.first_bar.unwrap_or(1.0);
+        let jumped = jumped.first_bar.unwrap_or(0.0);
+        assert!(eased < 0.01, "{eased}");
+        assert!(jumped > 0.15, "{jumped}");
+    }
+
+    #[test]
+    fn accessible_mode_writes_lines_and_steps_aside_without_a_console() {
+        // Verifies: FRN-SRS-070
+        let harness = Harness::new();
+        let mut plan = harness.plan(Stage::Initrd, Some(Duration::from_millis(100)));
+        let console = harness.dir.path().join("console");
+        std::fs::write(&console, b"").unwrap_or_else(|e| panic!("{e}"));
+        plan.text = Some(TextTarget::Console(console.clone()));
+        let outcome = harness.run(&plan, false, Vec::new(), memory);
+        assert_eq!(outcome.backend, Some("text"));
+        assert_eq!(outcome.reason, Reason::ExitAfter);
+        assert!(outcome.first_frame_ms.is_some());
+        let written = std::fs::read_to_string(&console).unwrap_or_default();
+        assert!(written.starts_with("Fairing "), "{written:?}");
+
+        plan.text = Some(TextTarget::Console(harness.dir.path().join("missing")));
+        let outcome = harness.run(&plan, false, Vec::new(), memory);
+        assert_eq!(outcome.reason, Reason::NoBackend);
+        assert!(harness.notifications().contains(&"READY=1".to_owned()));
+    }
+
+    #[test]
+    fn the_shutdown_splash_holds_its_line_until_killed() {
+        // Verifies: FRN-SRS-035
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::Shutdown, Some(Duration::from_millis(300)));
+        let held = harness.run(&plan, false, Vec::new(), memory);
+        assert_eq!(
+            held.reason,
+            Reason::ExitAfter,
+            "nothing ends it but a signal"
+        );
+        assert!(held.frames > 1);
+        assert_eq!(held.last_status.as_deref(), Some("Shutting down"));
+        assert!((held.bar - 0.0).abs() < f32::EPSILON);
+        let killed = harness.run(&plan, true, Vec::new(), memory);
+        assert_eq!(killed.reason, Reason::Shutdown);
+        assert_eq!(killed.frames, 1, "drawn, then gone");
+        assert!(!plan.paths.runtime.join(HANDOFF_FILE).exists());
+        assert!(!plan.paths.state.join(DURATIONS_FILE).exists());
+        assert_eq!(
+            harness.notifications(),
+            ["READY=1", "STOPPING=1", "READY=1", "STOPPING=1"]
+        );
+    }
+
+    #[test]
+    fn a_question_the_console_never_takes_goes_to_the_console_agent() {
+        use std::io::Write as _;
+        let harness = Harness::new();
+        let mut plan = harness.plan(Stage::Initrd, Some(Duration::from_mins(1)));
+        // A console that takes nothing: a FIFO whose buffer is already full,
+        // as a tty stopped with Scroll Lock.
+        let console = harness.dir.path().join("console");
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            &console,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::from_raw_mode(0o600),
+            0,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let _reader = rustix::fs::open(
+            &console,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK,
+            rustix::fs::Mode::empty(),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let mut filler = crate::splash::console::Sink::open(&TextTarget::Console(console.clone()))
+            .unwrap_or_else(|e| panic!("{e}"));
+        while filler.write(&[b'x'; 4096]).is_ok() {}
+        plan.text = Some(TextTarget::Console(console));
+        let paths = harness.agent_paths();
+        std::fs::create_dir_all(&paths.ask_dir).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(
+            paths.ask_dir.join("ask.1"),
+            format!(
+                "[Ask]\nSocket={}/sck.1\nMessage=Passphrase\nId=cryptsetup:x\n",
+                paths.ask_dir.display()
+            ),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        plan.agent = Some(paths);
+        std::fs::create_dir_all(&plan.paths.runtime).unwrap_or_else(|e| panic!("{e}"));
+        let outcome = harness.run(&plan, false, Vec::new(), memory);
+        assert_eq!(outcome.reason, Reason::AgentFailed);
+        assert!(
+            harness.codes().contains(&"ASK_BLIND"),
+            "{:?}",
+            harness.codes()
+        );
+        assert_eq!(outcome.first_frame_ms, None, "nothing reached the console");
     }
 
     #[test]

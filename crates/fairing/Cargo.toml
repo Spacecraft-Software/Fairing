@@ -36,8 +36,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 jiff = { workspace = true }
 # CLOCK_BOOTTIME for the boot-time progress estimate (the `time` feature's
-# clock_gettime is a safe call); rustix is already qualified for the renderer.
-rustix = { workspace = true, features = ["time"] }
+# clock_gettime is a safe call) and the text backend's console opened with
+# O_NOCTTY|O_NONBLOCK (`fs`); rustix is already qualified for the renderer.
+rustix = { workspace = true, features = ["fs", "time"] }
 signal-hook = { workspace = true }
 zbus = { workspace = true, optional = true }
 

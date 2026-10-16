@@ -7,7 +7,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 a Rust boot splash for Steelbore OS Bravais that shows real boot progress, prompts for disk passphrases in-theme, and holds the screen until greetd takes over.
 
-**Status:** pre-release. Milestones M0 (repository and posture) and M1 (draws a frame) are merged. Milestone M2 (boots on Bravais) is implemented: Nickel themes compiled into a compact artefact, the hybrid progress model, `fairing splash` for the initrd and stage 2, and the NixOS module `steelbore.fairing` with its units. Its NixOS VM tests pass under QEMU's emulator (TCG), and its figures on the reference machine are the maintainer's to take. The password agent (M3) is implemented on its branch: LUKS passphrases are typed into the splash itself. Accessibility (M4) is not started.
+**Status:** pre-release. Milestones M0 (repository and posture) and M1 (draws a frame) are merged. Milestone M2 (boots on Bravais) is implemented: Nickel themes compiled into a compact artefact, the hybrid progress model, `fairing splash` for the initrd and stage 2, and the NixOS module `steelbore.fairing` with its units. Its NixOS VM tests pass under QEMU's emulator (TCG), and its figures on the reference machine are the maintainer's to take. The password agent (M3) is merged: LUKS passphrases are typed into the splash itself. Milestone M4 (operator and accessibility) is implemented on its branch: the Escape journal overlay, accessible mode with its text backend, frame sequences and reduced motion, the shutdown splash, and exit on systemd's failure signals.
 
 Conforms to The Steelbore Standard v2.12 — Category B (password agent and initrd unit raised to A), tailored (§6.1, §10, §13, §18.3, §20.1; see [COMPLIANCE.md](COMPLIANCE.md)).
 
@@ -26,7 +26,7 @@ The full requirement set lives in the manual: `doc/fairing.texi` (Needs and Requ
 | Path | What it is |
 |---|---|
 | `crates/fairing` | The binary: `splash` (the boot splash, systemd notify, the D-Bus progress client), `theme`, `preview`, `describe`, `schema` (Category B) |
-| `crates/fairing-render` | Frame compositor, DRM/KMS and fbdev backends, memory backend for tests; the text backend arrives at M4 (B) |
+| `crates/fairing-render` | Frame compositor, DRM/KMS and fbdev backends, memory backend for tests, the text backend of accessible mode (B) |
 | `crates/fairing-theme` | Steelbore palette tokens and §11.6 variant resolution; the compiled theme artefact and the theme compiler (B) |
 | `contracts/`, `themes/` | The Nickel theme contract and the reference theme |
 | `crates/fairing-askpass` | systemd ask-password agent (**Category A**) |
@@ -99,7 +99,7 @@ Fairing is a personal hobby project of Spacecraft Software (Steelbore Standard �
 
 - **Assurance category (§19):** B — Significant. Two subsystems are raised to A: the password agent (`fairing-askpass`) and the initrd lifecycle unit (`fairing-initrd.service`).
 - **Component system (§13):** not applicable. Fairing draws to a raw DRM/fbdev surface and ships no widget toolkit; the §11 Steelbore palette still applies through the theme.
-- **Accessibility (§18):** the text backend is the accessible mode (arrives in M4). The project is pre-release and has declared itself usable to nobody, so no §18.4 remediation entry is owed yet.
+- **Accessibility (§18):** accessible mode (`--accessible`, `SPACECRAFT_A11Y=1` or `fairing.accessible=1`; off otherwise) replaces the graphics with plain lines on the console, with no ANSI sequences, and has no animation. The §18.4 screen-reader run on the console is the maintainer's (T-079). The project is pre-release and has declared itself usable to nobody, so no §18.4 remediation entry is owed yet.
 - **Privacy (§9):** no network access at all, at build or at run time; no telemetry.
 - **Support window (§26.4):** best effort on the latest release only; no backports.
 

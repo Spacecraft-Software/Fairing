@@ -7,10 +7,14 @@
 # Two units carry the splash. `fairing-initrd.service` draws from early boot
 # until switch-root and leaves the bar value in /run/fairing/state;
 # `fairing.service` picks it up after switch-root and holds the screen until
-# greetd starts, when `fairing-handoff.service` stops it. The shutdown splash
-# arrives with `fairing splash --stage shutdown` at milestone M4.
+# greetd starts, when `fairing-handoff.service` stops it. A third,
+# `fairing-shutdown.service`, draws the theme's shutdown layout from
+# shutdown.target until the final kill (FRN-SRS-035).
 #
-# Neither unit is required by anything: a splash that fails, hangs or is
+# Escape shows the journal over any of the three; each runs journalctl for
+# it, from the initrd's systemd or the system's.
+#
+# No Fairing unit is required by anything: a splash that fails, hangs or is
 # missing never stops a boot (FRN-SRS-031).
 #
 # Both instances answer systemd's password questions in the splash (M3). While
@@ -40,9 +44,10 @@ let
     inherit (cfg) theme;
   };
 
-  # The command line of one splash instance.
+  # The command line of one splash instance; `systemd` provides the
+  # journalctl the overlay runs.
   splash =
-    package: stage:
+    package: systemd: stage:
     lib.escapeShellArgs (
       [
         (lib.getExe package)
@@ -51,6 +56,8 @@ let
         stage
         "--theme"
         "${artefact}/theme.fairing"
+        "--journalctl"
+        "${systemd}/bin/journalctl"
       ]
       ++ lib.optionals (cfg.palette != null) [
         "--palette"
@@ -234,19 +241,22 @@ in
       "quiet"
       "splash"
     ];
-    # evdev: the agent reads keyboards through /dev/input/event*, and NixOS
-    # builds evdev as a module that nothing else loads in the initrd.
+    # evdev: the agent and the journal overlay read keyboards through
+    # /dev/input/event*, and NixOS builds evdev as a module that nothing else
+    # loads in the initrd.
     boot.initrd.kernelModules = [
       "simpledrm"
+      "evdev"
     ]
-    ++ cfg.kmsModules
-    ++ lib.optional cfg.agent.enable "evdev";
+    ++ cfg.kmsModules;
 
     environment.systemPackages = [ cfg.package ];
 
     boot.initrd.systemd.storePaths = [
       (lib.getExe cfg.initrdPackage)
       "${artefact}/theme.fairing"
+      # The journal overlay's reader (FRN-SRS-060).
+      "${config.boot.initrd.systemd.package}/bin/journalctl"
     ]
     ++ lib.optional cfg.agent.enable "${pkgs.coreutils}/bin/rm";
 
@@ -282,7 +292,7 @@ in
       ]
       ++ lib.optional (!cfg.agent.enable) consoleAgent;
       serviceConfig = common // {
-        ExecStart = splash cfg.initrdPackage "initrd";
+        ExecStart = splash cfg.initrdPackage config.boot.initrd.systemd.package "initrd";
         ExecStartPost = lib.mkIf cfg.agent.enable (agentStartPost config.boot.initrd.systemd.package);
         ExecStopPost = lib.mkIf cfg.agent.enable (
           agentStopPost config.boot.initrd.systemd.package pkgs.coreutils
@@ -330,7 +340,7 @@ in
       restartIfChanged = false;
       stopIfChanged = false;
       serviceConfig = common // {
-        ExecStart = splash cfg.splashPackage "system";
+        ExecStart = splash cfg.splashPackage config.systemd.package "system";
         ExecStartPost = lib.mkIf cfg.agent.enable (agentStartPost config.systemd.package);
         ExecStopPost = lib.mkIf cfg.agent.enable (agentStopPost config.systemd.package pkgs.coreutils);
         RuntimeDirectory = "fairing";
@@ -370,6 +380,59 @@ in
     boot.initrd.systemd.paths.systemd-ask-password-console =
       lib.mkIf cfg.agent.enable initrdConsoleAgentDropIn;
     systemd.paths.systemd-ask-password-console = lib.mkIf cfg.agent.enable consoleAgentDropIn;
+
+    # The shutdown splash (FRN-SRS-035). Every shutdown, reboot and power-off
+    # activates shutdown.target, which pulls this in. It starts once the
+    # sessions, greetd and any boot splash have let the screen go: systemd
+    # runs a stop before a start whenever the two units are ordered either
+    # way. Nothing stops it, since it neither conflicts with shutdown.target
+    # nor has default dependencies: it draws until systemd-shutdown's final
+    # SIGTERM. The halt, power-off, reboot and kexec services wait for its
+    # READY=1, sent after the first frame, so the screen is drawn before the
+    # machine goes down.
+    # Implements: FRN-SRS-035
+    systemd.services.fairing-shutdown = {
+      description = "Fairing shutdown splash";
+      unitConfig.DefaultDependencies = "no";
+      wantedBy = [ "shutdown.target" ];
+      after = [
+        "fairing.service"
+        "greetd.service"
+        "user.slice"
+        "getty@tty1.service"
+      ];
+      before = [
+        "systemd-halt.service"
+        "systemd-poweroff.service"
+        "systemd-reboot.service"
+        "systemd-kexec.service"
+      ];
+      restartIfChanged = false;
+      stopIfChanged = false;
+      serviceConfig = common // {
+        ExecStart = splash cfg.splashPackage config.systemd.package "shutdown";
+        # As fairing.service, less the directories a shutdown never writes.
+        CapabilityBoundingSet = "CAP_SYS_ADMIN CAP_SYS_TTY_CONFIG";
+        ProtectSystem = "strict";
+        ProtectHome = "yes";
+        PrivateTmp = "yes";
+        NoNewPrivileges = true;
+        PrivateNetwork = true;
+        RestrictAddressFamilies = [ "AF_UNIX" ];
+        ProtectKernelModules = true;
+        ProtectKernelLogs = true;
+        ProtectControlGroups = true;
+        ProtectClock = true;
+        ProtectHostname = true;
+        RestrictNamespaces = true;
+        RestrictRealtime = true;
+        RestrictSUIDSGID = true;
+        LockPersonality = true;
+        MemoryDenyWriteExecute = true;
+        SystemCallArchitectures = "native";
+        UMask = "0077";
+      };
+    };
 
     # The handoff (FRN-SRS-017, FRN-SRS-032): greetd's start pulls this in and
     # waits for it. It marks the handoff, then stops the splash and waits for

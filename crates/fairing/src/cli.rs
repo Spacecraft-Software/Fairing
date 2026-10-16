@@ -127,6 +127,12 @@ pub struct GlobalFlags {
     /// Skip confirmations and overwrite.
     #[arg(long, global = true)]
     pub force: bool,
+    /// Accessible mode (§18.1): the splash as plain console text, the high-contrast palette.
+    #[arg(long, global = true, conflicts_with = "no_accessible")]
+    pub accessible: bool,
+    /// Keep accessible mode off, whatever `SPACECRAFT_A11Y` or the kernel command line says.
+    #[arg(long, global = true)]
+    pub no_accessible: bool,
 }
 
 /// Output backend for `preview`.
@@ -187,6 +193,9 @@ pub struct PreviewArgs {
     /// Theme to preview: a compiled `.fairing` file, or a `.ncl` source compiled on the fly.
     #[arg(long, value_name = "path")]
     pub theme: Option<PathBuf>,
+    /// Reduced motion: the first frame of any sequence only.
+    #[arg(long)]
+    pub reduced_motion: bool,
 }
 
 /// Which boot stage a splash instance serves.
@@ -197,12 +206,14 @@ pub enum StageArg {
     Initrd,
     /// `fairing.service`: from switch-root until greetd takes the screen.
     System,
+    /// `fairing-shutdown.service`: from shutdown.target until the final kill.
+    Shutdown,
 }
 
 /// Arguments of `fairing splash`.
 #[derive(Debug, Args)]
 pub struct SplashArgs {
-    /// Which instance this is: `initrd` before switch-root, `system` after it.
+    /// Which instance this is: `initrd` before switch-root, `system` after it, `shutdown` at the end.
     #[arg(long, value_enum, value_name = "stage")]
     pub stage: StageArg,
     /// Compiled theme (`fairing theme compile`); the built-in theme without it.
@@ -252,6 +263,15 @@ pub struct SplashArgs {
     /// Where the input device nodes are (test seam).
     #[arg(long, value_name = "dir", default_value = fairing_askpass::input::DEV_INPUT, hide = true)]
     pub input_dev: PathBuf,
+    /// Reduced motion: the bar jumps to its value and frame sequences show their first frame.
+    #[arg(long)]
+    pub reduced_motion: bool,
+    /// The journalctl the overlay runs; found on `PATH` unless a path is given.
+    #[arg(long, value_name = "path", default_value = crate::splash::journal::JOURNALCTL, hide = true)]
+    pub journalctl: PathBuf,
+    /// Where accessible mode writes its lines (test seam).
+    #[arg(long, value_name = "path", default_value = crate::splash::console::CONSOLE, hide = true)]
+    pub console: PathBuf,
 }
 
 /// Seconds as a finite number in `0.0..=3600.0`.
@@ -284,7 +304,7 @@ fn parse_size(text: &str) -> Result<(u32, u32), String> {
     Ok((width, height))
 }
 
-/// The verb tree. The shutdown splash arrives with M4.
+/// The verb tree.
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Emit the capability manifest (safe, no side effects).

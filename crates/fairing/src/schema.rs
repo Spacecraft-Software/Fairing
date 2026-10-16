@@ -250,6 +250,7 @@ pub const DIAGNOSTIC_CODES: &[&str] = &[
     "AGENT_DEVICE_PLAN_ONLY",
     "BACKEND_FALLBACK",
     "PALETTE_RESOLVED",
+    "ACCESSIBLE_RESOLVED",
     "PALETTE_SKIPPED",
     "BOOT_FINISHED",
     "SNAPSHOT_WRITTEN",
@@ -511,12 +512,12 @@ fn preview_data() -> Value {
             "theme": { "type": "string", "description": "The theme drawn: its name, `builtin` without --theme" },
             "backend": {
                 "type": "string",
-                "enum": ["auto", "drm", "fbdev", "memory"],
-                "description": "The backend that drew; `auto` only in a plan, where the chain decides at run time"
+                "enum": ["auto", "drm", "fbdev", "memory", "text"],
+                "description": "The backend that drew; `auto` only in a plan, where the chain decides at run time; `text` in accessible mode"
             },
             "chain": {
                 "type": "array",
-                "items": { "type": "string", "enum": ["drm", "fbdev", "memory"] },
+                "items": { "type": "string", "enum": ["drm", "fbdev", "memory", "text"] },
                 "description": "The backends tried, in order"
             },
             "device": { "type": ["string", "null"] },
@@ -541,6 +542,8 @@ fn preview_data() -> Value {
             "measured_fps": { "type": ["number", "null"] },
             "snapshot": { "type": ["string", "null"] },
             "fallbacks": { "type": "array", "items": { "type": "object" } },
+            "accessible": { "type": "boolean", "description": "Accessible mode: lines of text on stderr instead of frames" },
+            "reduced_motion": { "type": "boolean", "description": "Reduced motion: no frame sequence played" },
             "planned": { "type": "boolean" }
         }
     })
@@ -552,7 +555,7 @@ fn splash_data() -> Value {
         "type": "object",
         "required": ["stage", "reason", "chain", "theme", "palette", "frames", "bar", "planned"],
         "properties": {
-            "stage": { "type": "string", "enum": ["initrd", "system"] },
+            "stage": { "type": "string", "enum": ["initrd", "system", "shutdown"] },
             "reason": {
                 "type": ["string", "null"],
                 "enum": ["handoff", "stopped", "boot-finished", "switch-root", "shutdown", "failed-unit", "maintenance",
@@ -573,6 +576,8 @@ fn splash_data() -> Value {
             "release_ms": { "type": ["number", "null"], "description": "From the tick that first saw SIGTERM to the output released; the signal can arrive up to one frame period (33 ms) earlier" },
             "agent": { "type": "boolean", "description": "Whether the password agent was up (in a plan: whether it would be)" },
             "answered": { "type": "integer", "minimum": 0, "description": "Password questions answered" },
+            "accessible": { "type": "boolean", "description": "Accessible mode: lines of text on the console instead of frames" },
+            "reduced_motion": { "type": "boolean", "description": "Reduced motion: the bar jumps and frame sequences hold their first frame" },
             "planned": { "type": "boolean" }
         }
     })

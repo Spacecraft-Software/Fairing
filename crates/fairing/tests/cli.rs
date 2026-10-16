@@ -29,6 +29,7 @@ fn fairing() -> Command {
         "CLICOLOR",
         "TERM",
         "SPACECRAFT_THEME",
+        "SPACECRAFT_A11Y",
         "NOTIFY_SOCKET",
         "JOURNAL_STREAM",
     ] {
@@ -1276,7 +1277,7 @@ fn schema_types_preview_parameters_and_hides_the_test_seams() {
     assert_eq!(properties["theme"]["type"], "string");
     assert_eq!(
         document["output_schema"]["properties"]["data"]["properties"]["backend"]["enum"],
-        serde_json::json!(["auto", "drm", "fbdev", "memory"])
+        serde_json::json!(["auto", "drm", "fbdev", "memory", "text"])
     );
     fairing()
         .args(["preview", "--help"])
@@ -1569,4 +1570,146 @@ fn splash_under_an_agent_never_opens_a_vt() {
         .args(["splash", "--stage", "system", "--backend", "drm", "--json"])
         .assert()
         .code(2);
+}
+
+/// A splash run with accessible mode's lines going to a file in `dir`, and
+/// `cmdline` as the kernel command line.
+fn accessible_splash(dir: &std::path::Path, cmdline: &str) -> (Command, std::path::PathBuf) {
+    let console = dir.join("console");
+    std::fs::write(&console, b"").unwrap_or_else(|e| panic!("{e}"));
+    let mut args = splash_args(dir, "initrd");
+    if let Some(at) = args.iter().position(|a| a == "--cmdline") {
+        args[at + 1] = cmdline.into();
+    }
+    let mut cmd = fairing();
+    cmd.args(args);
+    cmd.args(["--no-agent", "--exit-after", "1.2", "--json"])
+        .arg("--console")
+        .arg(&console);
+    (cmd, console)
+}
+
+#[test]
+fn every_accessible_trigger_selects_the_text_backend() {
+    // Verifies: FRN-SRS-070, FRN-SRS-071, FRN-SRS-073
+    for trigger in ["flag", "environment", "kernel"] {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let cmdline = if trigger == "kernel" {
+            "quiet fairing.accessible=1"
+        } else {
+            ""
+        };
+        let (mut cmd, console) = accessible_splash(dir.path(), cmdline);
+        match trigger {
+            "flag" => {
+                cmd.arg("--accessible");
+            }
+            "environment" => {
+                cmd.env("SPACECRAFT_A11Y", "1");
+            }
+            _ => {}
+        }
+        let out = cmd.assert().success().get_output().stdout.clone();
+        let data = json(&out)["data"].clone();
+        assert_eq!(data["backend"], "text", "{trigger}: {data}");
+        assert_eq!(data["chain"], serde_json::json!(["text"]), "{trigger}");
+        assert_eq!(data["accessible"], true, "{trigger}");
+        assert_eq!(data["reduced_motion"], true, "{trigger}: no animation");
+        let written = std::fs::read_to_string(&console).unwrap_or_default();
+        let lines: Vec<&str> = written.lines().collect();
+        assert!(
+            !lines.is_empty()
+                && lines
+                    .iter()
+                    .all(|l| l.starts_with("Fairing ") && l.contains('%')),
+            "{trigger}: {written:?}"
+        );
+        // 1.2 s of run: two lines at most, a second apart.
+        assert!(lines.len() <= 2, "{trigger}: {written:?}");
+        assert!(!written.contains('\u{1b}'), "{trigger}: no ANSI");
+    }
+}
+
+#[test]
+fn accessible_mode_is_off_without_a_trigger_or_when_refused() {
+    // Verifies: FRN-SRS-072
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (mut cmd, console) = accessible_splash(dir.path(), "");
+    let out = cmd.assert().success().get_output().stdout.clone();
+    let data = json(&out)["data"].clone();
+    assert_eq!(data["backend"], "memory");
+    assert_eq!(data["accessible"], false);
+    assert_eq!(data["reduced_motion"], false);
+    assert_eq!(std::fs::read_to_string(&console).unwrap_or_default(), "");
+    // An explicit off wins over every source below it.
+    let (mut cmd, _console) = accessible_splash(dir.path(), "fairing.accessible=1");
+    let out = cmd
+        .env("SPACECRAFT_A11Y", "1")
+        .arg("--no-accessible")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(json(&out)["data"]["backend"], "memory");
+    let (mut cmd, _console) = accessible_splash(dir.path(), "fairing.accessible=1");
+    let out = cmd
+        .env("SPACECRAFT_A11Y", "0")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(json(&out)["data"]["accessible"], false);
+}
+
+#[test]
+fn accessible_preview_writes_text_to_stderr_and_the_report_to_stdout() {
+    // Verifies: FRN-SRS-070, FRN-SRS-073
+    let output = fairing()
+        .args([
+            "preview",
+            "--accessible",
+            "--seconds",
+            "0.2",
+            "--json",
+            "--verbose",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let data = json(&output.stdout)["data"].clone();
+    assert_eq!(data["backend"], "text");
+    assert_eq!(data["width"], serde_json::Value::Null);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Fairing 0% Starting Steelbore OS Bravais"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("ACCESSIBLE_RESOLVED"), "{stderr}");
+    assert!(!stderr.contains(ANSI), "{stderr}");
+    fairing()
+        .args(["preview", "--accessible", "--snapshot", "x.ppm", "--json"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn the_shutdown_stage_draws_until_it_is_stopped() {
+    // Verifies: FRN-SRS-035
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let out = splash_in(dir.path(), "shutdown")
+        .args(["--exit-after", "0.3", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let data = json(&out)["data"].clone();
+    assert_eq!(data["stage"], "shutdown");
+    assert_eq!(data["reason"], "exit-after");
+    assert_eq!(data["agent"], false, "nothing is asked at shutdown");
+    assert_eq!(data["last_status"], "Shutting down");
+    assert!(!dir.path().join("run/state").exists());
 }

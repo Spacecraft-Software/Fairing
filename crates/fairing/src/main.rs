@@ -10,8 +10,7 @@
 //! structured errors and diagnostics, `schema` and `describe`; and, from
 //! milestone M1, `preview`, which draws the splash with a simulated bar; and,
 //! from M2, `splash` (the boot splash the units run) and `theme` (check,
-//! compile, inspect). The shutdown stage arrives with M4 and is not advertised
-//! until it exists.
+//! compile, inspect); and, from M4, the shutdown stage of `splash`.
 
 #![forbid(unsafe_code)]
 

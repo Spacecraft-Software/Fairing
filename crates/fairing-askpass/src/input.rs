@@ -25,6 +25,7 @@ use std::io;
 use std::os::fd::{AsFd, BorrowedFd};
 use std::path::{Path, PathBuf};
 
+use evdev::LedCode;
 use evdev::raw_stream::RawDevice;
 use rustix::fs::{Mode, OFlags};
 use rustix::io::Errno;
@@ -174,6 +175,11 @@ impl Keymap {
         self.alt = 0;
     }
 
+    /// Sets Caps Lock, as the keyboard's LED shows it when a grab starts.
+    pub const fn set_caps_lock(&mut self, on: bool) {
+        self.caps_lock = on;
+    }
+
     /// Forgets every held modifier, as when a grab starts: keys held before
     /// it were never seen going down.
     pub const fn reset(&mut self) {
@@ -305,6 +311,24 @@ pub fn keyboards(sysfs: &Path) -> Vec<Text<NODE_CAPACITY>> {
 ///
 /// A read error other than "nothing to read" or "device gone".
 pub fn drain(fd: BorrowedFd<'_>, map: &mut Keymap, f: &mut impl FnMut(Key)) -> io::Result<bool> {
+    key_events(fd, &mut |code, value| {
+        if let Some(key) = map.key(code, value) {
+            f(key);
+        }
+    })
+}
+
+/// Reads every pending event from `fd` without blocking and passes each
+/// `EV_KEY` event's code and value (1 press, 2 repeat, 0 release) to `f`.
+/// `Ok(false)` when the device has gone.
+///
+/// The read buffer is zeroised before this returns, on every path: while a
+/// question is open the key codes in it are the secret (FRN-SRS-024).
+///
+/// # Errors
+///
+/// A read error other than "nothing to read" or "device gone".
+pub fn key_events(fd: BorrowedFd<'_>, f: &mut impl FnMut(u16, i32)) -> io::Result<bool> {
     let mut buf = [0u8; EVENT_SIZE * EVENTS_PER_READ];
     let result = loop {
         match rustix::io::read(fd, &mut buf) {
@@ -321,10 +345,8 @@ pub fn drain(fd: BorrowedFd<'_>, map: &mut Keymap, f: &mut impl FnMut(Key)) -> i
                         event[at + 6],
                         event[at + 7],
                     ]);
-                    if kind == EV_KEY
-                        && let Some(key) = map.key(code, value)
-                    {
-                        f(key);
+                    if kind == EV_KEY {
+                        f(code, value);
                     }
                 }
             }
@@ -355,6 +377,8 @@ pub struct Keyboards {
     /// The last keyboard the most recent [`Keyboards::grab`] could not take,
     /// and why.
     refused: Option<(Text<NODE_CAPACITY>, io::ErrorKind)>,
+    /// Caps Lock was read from a keyboard's LED since the grab started.
+    caps_read: bool,
 }
 
 impl core::fmt::Debug for Keyboards {
@@ -381,6 +405,7 @@ impl Keyboards {
             grabbed: false,
             map: Keymap::new(),
             refused: None,
+            caps_read: false,
         }
     }
 
@@ -409,6 +434,17 @@ impl Keyboards {
             match Self::take(&self.dev.join(name.as_str())) {
                 Ok(device) => self.open.push(Keyboard { name, device }),
                 Err(error) => self.refused = Some((name, error.kind())),
+            }
+        }
+        // Caps Lock may have been on before the grab: its LED says so. Read
+        // once per grab, from the first keyboard taken; a keyboard that
+        // cannot say leaves it off.
+        if !self.caps_read
+            && let Some(keyboard) = self.open.first()
+        {
+            self.caps_read = true;
+            if let Ok(leds) = keyboard.device.get_led_state() {
+                self.map.set_caps_lock(leds.contains(LedCode::LED_CAPSL));
             }
         }
         self.open.len()
@@ -446,6 +482,7 @@ impl Keyboards {
             let _ignored = keyboard.device.ungrab();
         }
         self.grabbed = false;
+        self.caps_read = false;
         self.map.reset();
     }
 
@@ -535,6 +572,19 @@ mod tests {
         // A held Enter does not answer twice.
         assert_eq!(map.key(KEY_ENTER, 2), None);
         assert_eq!(map.key(30, 0), None);
+    }
+
+    #[test]
+    fn caps_lock_from_the_led_shifts_letters() {
+        let mut map = Keymap::new();
+        map.set_caps_lock(true);
+        assert_eq!(typed(&mut map, &[30]), "A");
+        press(&mut map, KEY_CAPSLOCK);
+        assert_eq!(
+            typed(&mut map, &[30]),
+            "a",
+            "and Caps Lock still toggles it"
+        );
     }
 
     #[test]

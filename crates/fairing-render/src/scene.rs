@@ -5,6 +5,7 @@
 //! What a frame shows: progress, the status line and a password prompt.
 
 use std::fmt;
+use std::time::Duration;
 
 use zeroize::Zeroize;
 
@@ -24,6 +25,20 @@ pub struct Scene {
     steps: u16,
     status: Option<String>,
     prompt: Option<PromptView>,
+    /// How far into its frame sequence the theme's animation is.
+    time: Duration,
+    overlay: Option<OverlayView>,
+    /// Whether the bar and the percentage are drawn: not at shutdown.
+    progress: bool,
+}
+
+/// The journal overlay as the compositor draws it (FRN-SRS-060).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OverlayView {
+    /// The entries, oldest first, each one line of plain text.
+    pub lines: Vec<String>,
+    /// How many lines the view is scrolled up from the newest (FRN-SRS-061).
+    pub scroll: usize,
 }
 
 /// What the input field of a prompt shows.
@@ -121,6 +136,9 @@ impl Scene {
             steps: u16::from(percent.min(100)) * (STEPS / 100),
             status: None,
             prompt: None,
+            time: Duration::ZERO,
+            overlay: None,
+            progress: true,
         }
     }
 
@@ -140,6 +158,9 @@ impl Scene {
             steps: steps.min(STEPS),
             status: None,
             prompt: None,
+            time: Duration::ZERO,
+            overlay: None,
+            progress: true,
         }
     }
 
@@ -163,6 +184,48 @@ impl Scene {
     pub fn with_prompt(mut self, prompt: Option<PromptView>) -> Self {
         self.prompt = prompt;
         self
+    }
+
+    /// Sets the animation time: how long the theme's frame sequence has been
+    /// playing. Zero, the default, is its first frame; reduced motion keeps
+    /// it there (FRN-SRS-052).
+    #[must_use]
+    pub const fn with_time(mut self, time: Duration) -> Self {
+        self.time = time;
+        self
+    }
+
+    /// Hides the bar and the percentage: the shutdown layout has neither
+    /// (FRN-SRS-035).
+    #[must_use]
+    pub const fn without_progress(mut self) -> Self {
+        self.progress = false;
+        self
+    }
+
+    /// Whether the bar and the percentage are drawn.
+    #[must_use]
+    pub const fn shows_progress(&self) -> bool {
+        self.progress
+    }
+
+    /// Shows the journal overlay, or none.
+    #[must_use]
+    pub fn with_overlay(mut self, overlay: Option<OverlayView>) -> Self {
+        self.overlay = overlay;
+        self
+    }
+
+    /// The journal overlay, if shown.
+    #[must_use]
+    pub const fn overlay(&self) -> Option<&OverlayView> {
+        self.overlay.as_ref()
+    }
+
+    /// The animation time.
+    #[must_use]
+    pub const fn time(&self) -> Duration {
+        self.time
     }
 
     /// The prompt, if one is open.

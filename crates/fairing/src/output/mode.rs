@@ -73,6 +73,76 @@ impl Profile {
     }
 }
 
+/// What decided accessible mode (Steelbore Standard §18.1, FRN-SRS-070).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessibleSource {
+    /// `--accessible` or `--no-accessible`.
+    Flag,
+    /// `SPACECRAFT_A11Y=1` or `=0`.
+    Environment,
+    /// The kernel command line's `fairing.accessible=1` or `=0` (the splash).
+    Kernel,
+    /// No trigger: off (FRN-SRS-072).
+    Default,
+}
+
+impl AccessibleSource {
+    /// Stable lowercase name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Flag => "flag",
+            Self::Environment => "environment",
+            Self::Kernel => "kernel",
+            Self::Default => "default",
+        }
+    }
+}
+
+/// Accessible mode and the source that decided it.
+///
+/// Off unless a trigger turns it on (FRN-SRS-072); an explicit off at a
+/// higher source wins over an on below it (§18.1). There are no auto-detect
+/// hints: a splash cannot ask the reader, so only an explicit trigger counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Accessible {
+    /// Whether accessible mode is on.
+    pub on: bool,
+    /// What decided it.
+    pub source: AccessibleSource,
+}
+
+impl Accessible {
+    /// Off, with nothing deciding it.
+    pub const DEFAULT: Self = Self {
+        on: false,
+        source: AccessibleSource::Default,
+    };
+
+    /// The kernel's `fairing.accessible=` value consulted when no higher
+    /// source decided: `1` turns accessible mode on, `0` keeps it off, and
+    /// anything else is no trigger.
+    ///
+    /// Implements: FRN-SRS-070, FRN-SRS-072
+    #[must_use]
+    pub fn with_kernel(self, value: Option<&str>) -> Self {
+        if self.source != AccessibleSource::Default {
+            return self;
+        }
+        match value {
+            Some("1") => Self {
+                on: true,
+                source: AccessibleSource::Kernel,
+            },
+            Some("0") => Self {
+                on: false,
+                source: AccessibleSource::Kernel,
+            },
+            _ => self,
+        }
+    }
+}
+
 /// The resolved rendering context, computed once at entry and threaded everywhere.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Context {
@@ -96,6 +166,9 @@ pub struct Context {
     /// stderr is the systemd journal (`JOURNAL_STREAM` names stderr's device and
     /// inode): diagnostics and errors are written as `<N>`-prefixed text lines.
     pub journal: bool,
+    /// Accessible mode from the flag and `SPACECRAFT_A11Y`; the splash adds
+    /// the kernel command line with [`Accessible::with_kernel`].
+    pub accessible: Accessible,
 }
 
 impl Context {
@@ -112,13 +185,20 @@ impl Context {
         } else {
             flags.color
         };
-        Self::compute(
+        let mut context = Self::compute(
             explicit,
             color_flag,
             flags.quiet,
             flags.verbose,
             &Env::read(),
-        )
+        );
+        if flags.accessible || flags.no_accessible {
+            context.accessible = Accessible {
+                on: flags.accessible,
+                source: AccessibleSource::Flag,
+            };
+        }
+        context
     }
 
     /// Best-effort context before clap has parsed anything (used to render parse errors).
@@ -208,6 +288,10 @@ impl Context {
             explore_requested,
             no_color: env.no_color || color_flag == Some(ColorChoice::Never),
             journal: env.journal,
+            accessible: env.a11y.map_or(Accessible::DEFAULT, |on| Accessible {
+                on,
+                source: AccessibleSource::Environment,
+            }),
         }
     }
 
@@ -230,6 +314,8 @@ struct Env {
     clicolor_zero: bool,
     dumb_term: bool,
     journal: bool,
+    /// `SPACECRAFT_A11Y`: `1` on, `0` off, anything else unset.
+    a11y: Option<bool>,
 }
 
 impl Env {
@@ -258,6 +344,11 @@ impl Env {
             journal: std::env::var("JOURNAL_STREAM")
                 .ok()
                 .is_some_and(|value| stderr_is(&value)),
+            a11y: match std::env::var("SPACECRAFT_A11Y").as_deref() {
+                Ok("1") => Some(true),
+                Ok("0") => Some(false),
+                _ => None,
+            },
         }
     }
 }
@@ -412,6 +503,51 @@ mod tests {
         assert!(!stderr_is("1:2:3"));
         assert!(!stderr_is("x:y"));
         assert!(!stderr_is("0:0"), "no real stream has device 0 inode 0");
+    }
+
+    #[test]
+    fn accessible_mode_is_off_without_a_trigger() {
+        // Verifies: FRN-SRS-072
+        let off = Context::compute(None, None, false, false, &env()).accessible;
+        assert_eq!(off, Accessible::DEFAULT);
+        assert!(!off.with_kernel(None).on);
+        assert!(!off.with_kernel(Some("yes")).on, "only `1` is a trigger");
+    }
+
+    #[test]
+    fn accessible_mode_follows_the_highest_source() {
+        // Verifies: FRN-SRS-070
+        let from_env = Context::compute(
+            None,
+            None,
+            false,
+            false,
+            &Env {
+                a11y: Some(true),
+                ..env()
+            },
+        )
+        .accessible;
+        assert_eq!(
+            from_env,
+            Accessible {
+                on: true,
+                source: AccessibleSource::Environment
+            }
+        );
+        // `SPACECRAFT_A11Y=0` wins over the kernel's `1`.
+        let env_off = Accessible {
+            on: false,
+            source: AccessibleSource::Environment,
+        };
+        assert_eq!(env_off.with_kernel(Some("1")), env_off);
+        assert_eq!(
+            Accessible::DEFAULT.with_kernel(Some("1")),
+            Accessible {
+                on: true,
+                source: AccessibleSource::Kernel
+            }
+        );
     }
 
     #[test]

@@ -17,18 +17,31 @@
 //! systemd, so the proxies never cache properties: a cached value would never
 //! be refreshed and the bar would freeze.
 //!
-//! The thread lives until the process exits; the splash exits by returning
-//! from `main`, which ends it.
+//! Polling alone ties FRN-SRS-034's second to PID 1's answer time: a failure
+//! shows within one poll interval plus the time of five calls. So a second
+//! thread on the same connection subscribes to the manager's signals and
+//! forwards, the moment each arrives, a change of `NFailedUnits`
+//! (`PropertiesChanged`), a queued `rescue.target` or `emergency.target`
+//! (`JobNew`) and, to name the unit, a job that ended `failed` or `timeout`
+//! (`JobRemoved`). systemd sends a signal when the event happens, without
+//! being asked, so a slow reply to a property read no longer delays the exit
+//! (P-045). Only signals from the connection that owns
+//! `org.freedesktop.systemd1` are taken.
+//!
+//! The threads live until the process exits; the splash exits by returning
+//! from `main`, which ends them.
 
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
 
-use zbus::blocking::Connection;
+use zbus::blocking::{Connection, MessageIterator};
+use zbus::message::Type;
 use zbus::proxy;
 use zbus::proxy::CacheProperties;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
+use zbus::{MatchRule, Message};
 
 use crate::splash::events::{Event, Snapshot};
 
@@ -91,7 +104,29 @@ trait Manager {
 
     /// The job queue.
     fn list_jobs(&self) -> zbus::Result<Vec<Job>>;
+
+    /// Asks the manager to send its job and unit signals to this client.
+    fn subscribe(&self) -> zbus::Result<()>;
 }
+
+/// The manager's object path.
+const MANAGER_PATH: &str = "/org/freedesktop/systemd1";
+
+/// The manager's interface name.
+const MANAGER_INTERFACE: &str = "org.freedesktop.systemd1.Manager";
+
+/// The manager's bus name.
+const MANAGER_SERVICE: &str = "org.freedesktop.systemd1";
+
+/// Signals queued for the watcher before older ones are dropped. A boot
+/// emits a few hundred job signals in all; the watcher reads each as it comes.
+const SIGNAL_QUEUE: usize = 256;
+
+/// `JobRemoved` results that leave the job's unit failed.
+const FAILED_RESULTS: [&str; 2] = ["failed", "timeout"];
+
+/// Targets whose start means rescue or emergency mode.
+const MAINTENANCE_TARGETS: [&str; 2] = ["rescue.target", "emergency.target"];
 
 #[proxy(
     interface = "org.freedesktop.systemd1.Unit",
@@ -247,16 +282,130 @@ fn poll(connection: &Connection, tx: &Sender<Event>) -> bool {
         Ok(manager) => manager,
         Err(error) => return tx.send(Event::Lost(error.to_string())).is_ok(),
     };
+    watch_signals(connection, &manager, tx);
     let mut jobs = JobOrder::default();
-    loop {
+    let alive = loop {
         let event = match snapshot(connection, &manager, &mut jobs) {
             Ok(snapshot) => Event::Snapshot(snapshot),
-            Err(error) => return tx.send(Event::Lost(error.to_string())).is_ok(),
+            Err(error) => break tx.send(Event::Lost(error.to_string())).is_ok(),
         };
         if tx.send(event).is_err() {
-            return false;
+            break false;
         }
         std::thread::sleep(POLL_INTERVAL);
+    };
+    // The signal thread holds a clone of the connection: closing the socket
+    // ends its iterator, so a reconnect never leaves a second watcher behind.
+    let closing = connection.inner().clone();
+    let _closed = block_on_until(closing.close(), Instant::now() + CONNECT_TIMEOUT);
+    alive
+}
+
+/// Subscribes to the manager's signals and forwards those that end a boot
+/// from a thread of their own, until the connection closes.
+///
+/// A manager that refuses the subscription leaves the polls to catch
+/// failures, as before signals were read.
+///
+/// Implements: FRN-SRS-034
+fn watch_signals(connection: &Connection, manager: &ManagerProxy<'_>, tx: &Sender<Event>) {
+    let Ok(rule) = signal_rule(connection.is_bus()) else {
+        return;
+    };
+    // The match is registered before the subscription, so no signal sent in
+    // between is missed.
+    let Ok(messages) = MessageIterator::for_match_rule(rule, connection, Some(SIGNAL_QUEUE)) else {
+        return;
+    };
+    // On the bus, the daemon filters broadcasts by the well-known name, but a
+    // signal sent to this connection directly passes every match rule and
+    // zbus cannot compare a well-known sender itself: the owner's unique
+    // name is what each signal is checked against. A bus that cannot name
+    // the owner leaves the polls.
+    let owner = if connection.is_bus() {
+        let owner = zbus::blocking::fdo::DBusProxy::new(connection).and_then(|bus| {
+            bus.get_name_owner(zbus::names::BusName::try_from(MANAGER_SERVICE)?)
+                .map_err(zbus::Error::from)
+        });
+        match owner {
+            Ok(owner) => Some(owner),
+            Err(_e) => return,
+        }
+    } else {
+        None
+    };
+    if manager.subscribe().is_err() {
+        return;
+    }
+    let tx = tx.clone();
+    // A failure to spawn leaves the polls, as for a refused subscription.
+    let _ = std::thread::Builder::new()
+        .name("fairing-dbus-signals".to_owned())
+        .spawn(move || {
+            for message in messages {
+                let Ok(message) = message else { return };
+                let header = message.header();
+                if let Some(owner) = &owner
+                    && header.sender().map(zbus::names::UniqueName::as_str) != Some(owner.as_str())
+                {
+                    continue;
+                }
+                if let Some(event) = signal_event(&message)
+                    && tx.send(event).is_err()
+                {
+                    return;
+                }
+            }
+        });
+}
+
+/// Every signal of the manager object. On the system bus the daemon is asked
+/// for systemd's broadcasts only; [`watch_signals`] also checks each sender.
+fn signal_rule(bus: bool) -> zbus::Result<MatchRule<'static>> {
+    let rule = MatchRule::builder()
+        .msg_type(Type::Signal)
+        .path(MANAGER_PATH)?;
+    let rule = if bus {
+        rule.sender(MANAGER_SERVICE)?
+    } else {
+        rule
+    };
+    Ok(rule.build())
+}
+
+/// What one manager signal means to the splash, if anything.
+fn signal_event(message: &Message) -> Option<Event> {
+    let header = message.header();
+    let member = header.member()?.as_str();
+    let interface = header.interface()?.as_str();
+    match (interface, member) {
+        (MANAGER_INTERFACE, "JobRemoved") => {
+            let (_id, _job, unit, result): (u32, ObjectPath<'_>, String, String) =
+                message.body().deserialize().ok()?;
+            FAILED_RESULTS
+                .contains(&result.as_str())
+                .then_some(Event::JobFailed(unit))
+        }
+        (MANAGER_INTERFACE, "JobNew") => {
+            let (_id, _job, unit): (u32, ObjectPath<'_>, String) =
+                message.body().deserialize().ok()?;
+            MAINTENANCE_TARGETS
+                .contains(&unit.as_str())
+                .then_some(Event::MaintenanceQueued)
+        }
+        ("org.freedesktop.DBus.Properties", "PropertiesChanged") => {
+            let (changed_interface, changed, _invalidated): (
+                String,
+                std::collections::HashMap<String, OwnedValue>,
+                Vec<String>,
+            ) = message.body().deserialize().ok()?;
+            if changed_interface != MANAGER_INTERFACE {
+                return None;
+            }
+            let count = changed.get("NFailedUnits")?;
+            u32::try_from(count).ok().map(Event::FailedUnits)
+        }
+        _ => None,
     }
 }
 
@@ -325,12 +474,17 @@ fn snapshot(
 mod tests {
     use std::os::unix::net::UnixListener;
 
+    use std::borrow::Cow;
+    use std::collections::HashMap;
+
     use zbus::blocking::connection;
+    use zbus::fdo::Properties;
+    use zbus::names::InterfaceName;
+    use zbus::object_server::SignalEmitter;
+    use zbus::zvariant::Value;
     use zbus::{Guid, interface};
 
     use super::*;
-
-    const MANAGER_PATH: &str = "/org/freedesktop/systemd1";
     const UDEV_PATH: &str = "/org/freedesktop/systemd1/unit/systemd_2dudevd_2eservice";
     const NETWORK_PATH: &str = "/org/freedesktop/systemd1/unit/network_2etarget";
 
@@ -338,6 +492,8 @@ mod tests {
         progress: f64,
         failed: u32,
         state: &'static str,
+        /// Whether `Subscribe` is answered with a burst of signals.
+        signals: bool,
     }
 
     #[interface(name = "org.freedesktop.systemd1.Manager")]
@@ -375,6 +531,49 @@ mod tests {
                 job(23, "waiting", NETWORK_PATH),
             ]
         }
+
+        /// Sends what a boot that goes wrong sends, then answers.
+        async fn subscribe(
+            &self,
+            #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+        ) -> zbus::fdo::Result<()> {
+            if !self.signals {
+                return Ok(());
+            }
+            let job = ObjectPath::from_static_str_unchecked("/org/freedesktop/systemd1/job/40");
+            Self::job_removed(&emitter, 40, job.clone(), "fine.service", "done").await?;
+            Self::job_removed(&emitter, 41, job.clone(), "skipped.service", "dependency").await?;
+            Self::job_removed(&emitter, 42, job.clone(), "nginx.service", "failed").await?;
+            Self::job_new(&emitter, 43, job.clone(), "multi-user.target").await?;
+            Self::job_new(&emitter, 44, job, "emergency.target").await?;
+            let mut changed = HashMap::new();
+            changed.insert("NFailedUnits", Value::U32(3));
+            Properties::properties_changed(
+                &emitter,
+                InterfaceName::from_static_str_unchecked(MANAGER_INTERFACE),
+                changed,
+                Cow::Borrowed(&[]),
+            )
+            .await?;
+            Ok(())
+        }
+
+        #[zbus(signal)]
+        async fn job_removed(
+            emitter: &SignalEmitter<'_>,
+            id: u32,
+            job: ObjectPath<'_>,
+            unit: &str,
+            result: &str,
+        ) -> zbus::Result<()>;
+
+        #[zbus(signal)]
+        async fn job_new(
+            emitter: &SignalEmitter<'_>,
+            id: u32,
+            job: ObjectPath<'_>,
+            unit: &str,
+        ) -> zbus::Result<()>;
     }
 
     struct FakeUnit(&'static str);
@@ -388,7 +587,7 @@ mod tests {
     }
 
     /// Serves a fake manager on a listening socket in `dir`; returns its address.
-    fn serve(dir: &std::path::Path, failed: u32, state: &'static str) -> String {
+    fn serve(dir: &std::path::Path, failed: u32, state: &'static str, signals: bool) -> String {
         let path = dir.join("systemd");
         let listener = UnixListener::bind(&path).unwrap_or_else(|e| panic!("{e}"));
         std::thread::spawn(move || {
@@ -406,6 +605,7 @@ mod tests {
                             progress: 0.42,
                             failed,
                             state,
+                            signals,
                         },
                     )
                 })
@@ -435,7 +635,7 @@ mod tests {
     fn reads_progress_failures_state_and_the_running_job() {
         // Verifies: FRN-SRS-012, FRN-SRS-050
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let rx = spawn(&serve(dir.path(), 2, "degraded"));
+        let rx = spawn(&serve(dir.path(), 2, "degraded", false));
         let snapshot = first_snapshot(&rx);
         assert!((snapshot.progress - 0.42).abs() < f64::EPSILON);
         assert_eq!(snapshot.failed_units, 2);
@@ -445,6 +645,47 @@ mod tests {
             Some("Rule-based Manager for Device Events"),
             "the running job, not the newer waiting one"
         );
+    }
+
+    #[test]
+    fn failures_arrive_as_signals_without_waiting_for_a_poll() {
+        // Verifies: FRN-SRS-034
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let rx = spawn(&serve(dir.path(), 1, "starting", true));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut signalled = Vec::new();
+        while signalled.len() < 3 && Instant::now() < deadline {
+            if let Ok(
+                event @ (Event::JobFailed(_) | Event::MaintenanceQueued | Event::FailedUnits(_)),
+            ) = rx.recv_timeout(Duration::from_secs(1))
+            {
+                signalled.push(event);
+            }
+        }
+        // Only the failed job, only the emergency target, in the order sent.
+        assert_eq!(
+            signalled,
+            [
+                Event::JobFailed("nginx.service".to_owned()),
+                Event::MaintenanceQueued,
+                Event::FailedUnits(3),
+            ]
+        );
+    }
+
+    #[test]
+    fn foreign_signals_are_not_systemds() {
+        let bus = signal_rule(true).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            bus.sender().map(zbus::names::BusName::as_str),
+            Some(MANAGER_SERVICE)
+        );
+        let p2p = signal_rule(false).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            p2p.sender().is_none(),
+            "a peer-to-peer message has no sender"
+        );
+        assert!(p2p.to_string().contains(MANAGER_PATH), "{p2p}");
     }
 
     #[test]

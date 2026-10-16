@@ -45,13 +45,15 @@ pub use backend::drm::DrmBackend;
 #[doc(inline)]
 pub use backend::fbdev::{FbInfo, FbdevBackend};
 #[doc(inline)]
+pub use backend::text::{TEXT_INTERVAL, TextConsole, plain};
+#[doc(inline)]
 pub use backend::{
     Attempt, Backend, BackendKind, Choice, MemoryBackend, NoBackend, Opened, Surface, open,
 };
 #[doc(inline)]
 pub use cadence::{Cadence, Clock, SystemClock};
 #[doc(inline)]
-pub use compositor::Compositor;
+pub use compositor::{Compositor, sequence_frame};
 #[doc(inline)]
 pub use fault::{RenderError, RenderErrorKind};
 #[doc(inline)]
@@ -65,4 +67,4 @@ pub use palette::Palette;
 #[doc(inline)]
 pub use presenter::{DEFAULT_REACQUIRE_BUDGET, Presenter, PresenterConfig, Reopen, Stats};
 #[doc(inline)]
-pub use scene::{ECHO_CAPACITY, EchoText, Field, PromptView, Scene};
+pub use scene::{ECHO_CAPACITY, EchoText, Field, OverlayView, PromptView, Scene};

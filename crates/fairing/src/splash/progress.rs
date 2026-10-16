@@ -55,6 +55,9 @@ pub enum Stage {
     Initrd,
     /// `fairing.service`, after switch-root until greetd.
     System,
+    /// `fairing-shutdown.service`, from shutdown.target until the final kill:
+    /// no bar (FRN-SRS-035).
+    Shutdown,
 }
 
 impl Stage {
@@ -64,6 +67,7 @@ impl Stage {
         match self {
             Self::Initrd => "initrd",
             Self::System => "system",
+            Self::Shutdown => "shutdown",
         }
     }
 }
@@ -102,6 +106,7 @@ pub fn target(stage: Stage, inputs: &Inputs) -> f32 {
             };
             share.mul_add(progress, INITRD_SHARE)
         }
+        Stage::Shutdown => 0.0,
     };
     value.clamp(0.0, BEFORE_HANDOFF)
 }

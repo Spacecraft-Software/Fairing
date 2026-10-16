@@ -55,6 +55,14 @@ pub enum Event {
     Connected,
     /// A fresh reading.
     Snapshot(Snapshot),
+    /// A job ended with `failed` or `timeout` (`JobRemoved`). Not proof of a
+    /// failed unit, which a restarted service or a device timeout is not:
+    /// it names the unit when the failed-unit count confirms one.
+    JobFailed(String),
+    /// A job for `rescue.target` or `emergency.target` was queued (`JobNew`).
+    MaintenanceQueued,
+    /// `NFailedUnits` changed, from the manager's `PropertiesChanged` signal.
+    FailedUnits(u32),
     /// The connection failed or dropped; the thread keeps retrying.
     Lost(String),
 }
