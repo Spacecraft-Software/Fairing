@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Mutation testing (Steelbore Standard §21) of the Category A code: the
+# password agent (crates/fairing-askpass) and the splash lifecycle
+# (crates/fairing/src/splash). It is too slow for every pull request, so it
+# runs weekly and on demand, sharded. Every surviving mutant is triaged in
+# doc/mutants.toml: killed by a new test, or recorded as equivalent with the
+# reason. `cargo xtask mutants` fails on a survivor the file does not name.
+
+name: mutants
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  mutants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        scope: [askpass, splash]
+        shard: [0, 1, 2, 3]
+        include:
+          - scope: askpass
+            args: --package fairing-askpass
+          - scope: splash
+            args: --package fairing --file 'crates/fairing/src/splash/**'
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - name: mutants ${{ matrix.scope }} ${{ matrix.shard }}/4
+        run: |
+          cargo mutants ${{ matrix.args }} --shard ${{ matrix.shard }}/4 \
+            --no-shuffle --output target/mutants || true
+          test -f target/mutants/mutants.out/outcomes.json
+      - run: cargo xtask mutants --outcomes target/mutants/mutants.out/outcomes.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants-${{ matrix.scope }}-${{ matrix.shard }}
+          path: target/mutants/mutants.out

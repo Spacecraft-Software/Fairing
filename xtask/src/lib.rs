@@ -24,11 +24,16 @@
 
 pub mod args;
 pub mod budgets;
+pub mod coverage;
+pub mod dist;
 pub mod eol;
+pub mod manifest;
+pub mod mutants;
 pub mod paths;
 pub mod progress;
 pub mod report;
 pub mod requirements;
+pub mod sbom;
 pub mod trace;
 
 use crate::args::Args;
@@ -45,6 +50,11 @@ verbs:
   check-eol
   budgets      [--measured id=value,...] [--release]
   budgets-texi [--check]
+  dist         [--ref <commit>] [--out <dir>] [--check]
+  coverage     [--report <json>] [--min <percent>]
+  mutants      --outcomes <json> [--triage <toml>]
+  sbom         [--ref <commit>] [--out <dir>]
+  manifest     [--coverage <json>] [--mutants <json>,...] [--out <dir>] [--check]
   help
 
 exit codes: 0 ok, 1 gate failed, 2 usage error, 3 input not found
@@ -68,6 +78,11 @@ where
         "check-eol" => eol::run(&parsed),
         "budgets" => budgets::run(&parsed),
         "budgets-texi" => budgets::run_texi(&parsed),
+        "dist" => dist::run_dist(&parsed),
+        "coverage" => coverage::run(&parsed),
+        "mutants" => mutants::run(&parsed),
+        "sbom" => sbom::run(&parsed),
+        "manifest" => manifest::run(&parsed),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
             Ok(())

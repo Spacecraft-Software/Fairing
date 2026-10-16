@@ -137,7 +137,9 @@ in
       defaultText = lib.literalExpression "pkgs.callPackage ./packaging/default.nix { }";
       description = ''
         The full Fairing build. It compiles the theme at build time and is
-        installed for `fairing theme check` and `fairing preview`.
+        installed for `fairing theme check` and `fairing preview`. The
+        default builds the release archive; the flake's `nixosModules.fairing`
+        sets it to the flake's own build of its tree.
       '';
     };
 

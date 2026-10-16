@@ -14,6 +14,20 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 
 ### Added
 
+- M5 release 0.1. `cargo xtask dist` builds the release archive: the tree at a commit with
+  every crate vendored, bit-reproducible, built offline by all three package definitions,
+  `packaging/default.nix` (now the §5.5 release form; the flake still builds its own
+  tree), the new `packaging/guix.scm` and the new `packaging/PKGBUILD`, into which it
+  writes the version and SHA-256. `cargo xtask sbom` writes a reproducible CycloneDX 1.5
+  SBOM and `cargo xtask manifest` the §25.3 release manifest; a release workflow on `v*`
+  tags rebuilds and checks both from the tag and drafts the release. The budget register
+  (`doc/budgets.toml`, `cargo xtask budgets`) gives each ceiling its requirement, method
+  and margin, with the initrd binary's 2.5 MiB as FRN-SRS-105 and a Budgets chapter in
+  the manual. CI holds every product crate at 80 % line coverage (`cargo xtask
+  coverage`) and builds the three packages from the archive; a weekly cargo-mutants run
+  over the password agent and the splash lifecycle fails on any survivor not triaged in
+  `doc/mutants.toml`. `RELEASING.md` is the release procedure, `SECURITY.md` states the
+  support window, and the dev shell carries pdfTeX for `make pdf`.
 - M4 operator and accessibility. Escape shows the journal over the splash: the boot's last
   40 entries at notice or higher from `journalctl -o json --follow`, newest at the bottom,
   scrolled with Up/Down, PgUp/PgDn and j/k; keyboards are read without a grab and the

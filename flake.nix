@@ -28,7 +28,23 @@
         system:
         let
           pkgs = pkgsFor system;
-          fairing = pkgs.callPackage ./packaging/default.nix { };
+          # The working tree, not the release archive: only what the build
+          # and its tests read, never `target/` or `doc/build/`.
+          fairing = pkgs.callPackage ./packaging/default.nix {
+            workingTree = pkgs.lib.fileset.toSource {
+              root = ./.;
+              fileset = pkgs.lib.fileset.difference (pkgs.lib.fileset.unions [
+                ./.cargo
+                ./Cargo.toml
+                ./Cargo.lock
+                ./crates
+                ./xtask
+                ./contracts
+                ./themes
+                ./doc
+              ]) (pkgs.lib.fileset.maybeMissing ./doc/build);
+            };
+          };
         in
         {
           inherit fairing;
@@ -49,7 +65,17 @@
       );
 
       nixosModules = {
-        fairing = ./packaging/nixos/module.nix;
+        # The module as the flake ships it: its default package is this
+        # flake's build of the tree, not the release archive module.nix
+        # fetches on its own.
+        fairing =
+          { lib, pkgs, ... }:
+          {
+            imports = [ ./packaging/nixos/module.nix ];
+            steelbore.fairing.package =
+              lib.mkDefault
+                self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
         default = self.nixosModules.fairing;
       };
 
@@ -75,6 +101,12 @@
               pkgs.nickel
               pkgs.nixfmt
               pkgs.gnumake
+              # `make pdf` (texi2pdf): pdfTeX and texinfo.tex.
+              (pkgs.texliveBasic.withPackages (ps: [ ps.texinfo ]))
+              # The release verbs: `cargo xtask coverage`, `mutants` and `sbom`.
+              pkgs.cargo-llvm-cov
+              pkgs.cargo-mutants
+              pkgs.cargo-cyclonedx
             ];
             # The repository pins the toolchain in rust-toolchain.toml for rustup
             # users; inside this shell nixpkgs' rustc is used, which must satisfy

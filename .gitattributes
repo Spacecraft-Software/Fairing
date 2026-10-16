@@ -8,3 +8,11 @@
 *.ttf binary
 *.otf binary
 *.ppm binary
+
+# The release archive (`cargo xtask dist`) leaves out the files that record
+# its checksum, and the release manifests, so recording it changes nothing
+# the archive holds.
+/packaging/default.nix export-ignore
+/packaging/guix.scm export-ignore
+/packaging/PKGBUILD export-ignore
+/doc/releases/ export-ignore

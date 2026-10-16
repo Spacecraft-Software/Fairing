@@ -12,15 +12,16 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 ## M5 — Release 0.1
 
 - [x] T-080 Budget register: the initrd binary ceiling as a draft requirement; `doc/budgets.toml` (ceilings, requirements, reference machine and workload) and `doc/measurements.toml` (dated figures); `cargo xtask budgets` computes margins and §22.3 bands, blocks a red or exceeded margin, and generates `doc/budgets.texi`; CI measures binary and artefact size on every build
-- [ ] T-081 Coverage: a `cargo-llvm-cov` CI job holding every product crate at 80 % line coverage or more, hardware-only modules excluded by an explicit list
+- [x] T-081 Coverage: a `cargo-llvm-cov` CI job holding every product crate at 80 % line coverage or more, hardware-only modules excluded by an explicit list
 - [ ] T-082 Mutation testing: a scheduled `cargo-mutants` run on `fairing-askpass` and the splash lifecycle, every surviving mutant killed or justified in `doc/mutants.toml`
 - [ ] T-083 Release packaging: `cargo xtask dist` builds the source and vendored archives with `git archive` (packaging and manifest export-ignored, so their checksums break no cycle) and writes version and SHA-256 into `packaging/default.nix`, `packaging/guix.scm` and `packaging/PKGBUILD`; CI builds the PKGBUILD and the Guix package from the archive
-- [ ] T-084 SBOM and release manifest: CycloneDX from the locked inputs; `cargo xtask manifest` (identity, artifacts and checksums, provenance, verification summary, budgets, known issues, conformance); a release workflow on `v*` tags drafts the release with every asset
+- [x] T-084 SBOM and release manifest: CycloneDX from the locked inputs; `cargo xtask manifest` (identity, artifacts and checksums, provenance, verification summary, budgets, known issues, conformance); a release workflow on `v*` tags drafts the release with every asset
 - [ ] T-085 SECURITY.md support window, RELEASING.md (clean-environment installs from all three packages, the signed tag), CHANGELOG `[0.1.0]` ready to date; `make pdf` from the dev shell (P-055)
-- [ ] T-086 Manual (Releasing, Budgets chapter), README, AGENTS, SKILL, CHANGELOG
+- [x] T-086 Manual (Releasing, Budgets chapter), README, AGENTS, SKILL, CHANGELOG
 - [ ] T-087 Adversarial review folded in
 - [ ] T-088 M5 pull request reviewed and merged
 - [ ] T-089 Time budgets measured on the T490s into `doc/measurements.toml` (maintainer)
+- [ ] T-091 Decide which build the initrd-binary budget binds: CI's `cargo build --release --no-default-features` measures 1,954,776 B (25.4 %, green), but nixpkgs' build of `fairing-initrd`, the copy the module puts in the initrd, measured 2,335,792 B locally on 2026-10-16 (10.9 %, amber) (maintainer)
 - [ ] T-090 v0.1.0: G1 and G3 passed, installs verified, signed tag pushed, release published (maintainer)
 
 ## M4 — Operator and accessibility

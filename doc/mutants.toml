@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: CC-BY-SA-4.0
+#
+# Mutation-testing triage (Steelbore Standard §21) for the Category A code:
+# crates/fairing-askpass and crates/fairing/src/splash. `cargo xtask
+# mutants` fails on any mutant cargo-mutants reports as missed that is not
+# listed here. A survivor is killed with a test where one can tell it apart,
+# and then it is not listed; it stays only with a verdict and the argument:
+#
+#   equivalent    no input makes the mutant behave differently
+#   unobservable  the difference shows only on a device no test has, or in
+#                 memory a safe test cannot read (after a drop)
+#
+# Entries match by file, function and replacement, not by line.

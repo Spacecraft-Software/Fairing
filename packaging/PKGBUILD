@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Arch Linux package for Fairing (Steelbore Standard §5.5). It builds the
+# release archive `cargo xtask dist` writes, whose crates are vendored, so the
+# build needs no network. `cargo xtask dist` writes pkgver and sha256sums;
+# never edit them by hand.
+#
+# Fairing's boot integration is the Steelbore OS Bravais NixOS module; this
+# package installs the CLI (`fairing preview`, `fairing theme`, `fairing
+# splash`) and the Info manual, not systemd units.
+#
+# Maintainer: Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+
+pkgname=fairing
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Boot splash for Steelbore OS Bravais: real systemd progress, in-splash LUKS prompt, greetd handoff'
+arch=('x86_64' 'aarch64')
+url='https://Fairing.SpacecraftSoftware.org/'
+# The default build links LGPL-3.0-only malachite through the Nickel
+# evaluator, so it is conveyed under GPL-3.0 (DEPENDENCIES.md).
+license=('GPL-3.0-only AND LGPL-3.0-only')
+depends=('gcc-libs' 'glibc')
+makedepends=('cargo' 'make' 'texinfo')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/Spacecraft-Software/Fairing/releases/download/v$pkgver/fairing-$pkgver.tar.gz")
+sha256sums=('075465fa7ab5ce9a7112bb82287500bb7fdc10054114585a258ffd8d5d3d44a7')
+
+build() {
+  cd "$pkgname-$pkgver"
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release --package fairing
+  make -C doc info
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export CARGO_TARGET_DIR=target
+  # xtask's tests read the repository itself, which the archive leaves out.
+  cargo test --frozen --workspace --exclude xtask
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 target/release/fairing "$pkgdir/usr/bin/fairing"
+  install -Dm644 doc/build/fairing.info "$pkgdir/usr/share/info/fairing.info"
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" LICENSES/*
+}

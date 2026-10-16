@@ -55,6 +55,106 @@ jobs:
       - run: cargo test -p fairing --no-default-features --features dbus --locked
       - run: cargo test -p fairing --no-default-features --locked
 
+  # Line coverage of every product crate is at least 80 % (§21); the files
+  # that only run against a device are listed, with reasons, in
+  # xtask/src/coverage.rs and nowhere else.
+  coverage:
+    runs-on: ubuntu-latest
+    needs: fmt
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install && rustup component add llvm-tools
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - run: cargo llvm-cov --workspace --exclude xtask --locked --json --summary-only --output-path target/llvm-cov.json
+      - run: cargo xtask coverage | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # The release archive (§5.5): `cargo xtask dist` builds it, vendored and
+  # reproducible, and writes its checksum into the three package
+  # definitions, which the jobs below then build from it, offline.
+  dist:
+    runs-on: ubuntu-latest
+    needs: fmt
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-cyclonedx@0.5.9
+      - run: cargo xtask dist
+      - name: the same tree archives to the same bytes
+        run: cargo xtask dist --check
+      # The SBOM is reproducible too, so the manifest committed at a tag can
+      # carry its checksum (§24.3).
+      - name: the same tree describes itself in the same bytes
+        run: |
+          cargo xtask sbom
+          sha256sum target/dist/*.cdx.json > target/sbom.sum
+          cargo xtask sbom
+          sha256sum --check target/sbom.sum
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            target/dist/*.tar.gz
+            target/dist/*.cdx.json
+            packaging/default.nix
+            packaging/guix.scm
+            packaging/PKGBUILD
+
+  package-nix:
+    runs-on: ubuntu-latest
+    needs: dist
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+      - uses: cachix/install-nix-action@v31
+      # The archive is not published yet: it goes into the store under the
+      # fixed-output path the definition's fetchurl names.
+      - run: nix-store --add-fixed sha256 target/dist/fairing-*.tar.gz
+      - run: |
+          nix build -L --impure --expr '
+            let pkgs = (builtins.getFlake (toString ./.)).inputs.nixpkgs.legacyPackages.x86_64-linux;
+            in pkgs.callPackage ./packaging/default.nix { }'
+
+  package-arch:
+    runs-on: ubuntu-latest
+    needs: dist
+    container: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+      - run: pacman -Syu --noconfirm --needed cargo make texinfo
+      # makepkg refuses to run as root; the archive sits beside the PKGBUILD,
+      # so nothing is downloaded and its sha256sums entry is checked.
+      - run: |
+          useradd --create-home builder
+          install -d -o builder /home/builder/pkg
+          install -o builder packaging/PKGBUILD target/dist/fairing-*.tar.gz /home/builder/pkg/
+          cd /home/builder/pkg
+          su builder -c 'makepkg --noconfirm'
+          pacman -Qip fairing-*.pkg.tar.zst
+
+  package-guix:
+    runs-on: ubuntu-latest
+    needs: dist
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+      - uses: PromyLOPh/guix-install-action@v1
+      # As for Nix: the archive goes into the store under the name and hash
+      # the origin names, so the build fetches nothing.
+      - run: guix download "file://$PWD/$(ls target/dist/fairing-*.tar.gz)"
+      - run: guix build -f packaging/guix.scm
+
   # The size budgets (§22, doc/budgets.toml): the stripped release binary the
   # initrd carries is at most 2.5 MiB (FRN-SRS-105) and the compiled reference
   # theme at most 4 MiB (FRN-SRS-047); `cargo xtask budgets` fails a red or
