@@ -22,6 +22,12 @@ env:
   CARGO_INCREMENTAL: "0"
   RUSTFLAGS: "-D warnings"
 
+# `bash` with pipefail: GitHub's default for an unnamed shell is `bash -e`,
+# under which `gate | tee` takes tee's status and a failed gate passes.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   fmt:
     runs-on: ubuntu-latest

@@ -12,10 +12,16 @@
 //! listed) or by recording why no test can tell it apart. A mutant that
 //! makes the tests time out is detected: the suite would hang, not pass.
 //! A baseline that did not pass fails the gate, since then every mutant
-//! looks caught.
+//! looks caught, and so does a run that stopped early (no `end_time`, or
+//! fewer outcomes than mutants): what it did not test it cannot vouch for.
+//! A shard with no mutants writes no outcomes and passes.
 //!
-//! Survivors are matched by file, function and replacement, never by line,
-//! so an edit elsewhere in the file does not stale the triage.
+//! Each entry names the survivors it covers by file, function, replacement
+//! and position (`at`, `line:column`), so it never covers a mutant it was
+//! not written for. When the code moves, the gate names the survivor's new
+//! position, and the entry is re-checked and updated. An entry none of whose
+//! positions survived in this run is reported, since a shard may not have
+//! covered it.
 //!
 //! `cargo xtask mutants --outcomes <outcomes.json> [--triage <toml>]`
 
@@ -59,6 +65,8 @@ pub struct Survivor {
     /// What cargo-mutants put in its place, empty for a deletion.
     #[serde(default)]
     pub replacement: String,
+    /// The positions it covers, `line:column` of each mutant.
+    pub at: Vec<String>,
     /// Why it stays.
     pub verdict: Verdict,
     /// The argument for the verdict.
@@ -76,6 +84,8 @@ pub struct Missed {
     pub function: String,
     /// The replacement.
     pub replacement: String,
+    /// Where it starts, `line:column`.
+    pub at: String,
 }
 
 impl Missed {
@@ -83,6 +93,7 @@ impl Missed {
         self.file == survivor.file
             && self.function == survivor.function
             && self.replacement == survivor.replacement
+            && survivor.at.contains(&self.at)
     }
 }
 
@@ -99,6 +110,20 @@ pub struct Outcomes {
     pub unviable: u64,
     /// Mutants the tests passed with.
     pub missed: Vec<Missed>,
+    /// Mutants the run set out to test.
+    pub total: u64,
+    /// Mutants it has an outcome for.
+    pub tested: u64,
+    /// Whether it finished: cargo-mutants writes `end_time` last.
+    pub finished: bool,
+}
+
+impl Outcomes {
+    /// Whether every mutant was tested and the run finished.
+    #[must_use]
+    pub const fn complete(&self) -> bool {
+        self.finished && self.tested == self.total
+    }
 }
 
 /// Reads cargo-mutants' `outcomes.json`.
@@ -124,6 +149,7 @@ pub fn outcomes(value: &serde_json::Value) -> Result<Outcomes, Failure> {
     };
     let mut baseline = None;
     let mut missed = Vec::new();
+    let mut tested = 0u64;
     for outcome in list {
         let summary = outcome.get("summary").and_then(serde_json::Value::as_str);
         let scenario = outcome.get("scenario");
@@ -131,6 +157,7 @@ pub fn outcomes(value: &serde_json::Value) -> Result<Outcomes, Failure> {
             baseline = Some(summary == Some("Success"));
             continue;
         }
+        tested += 1;
         if summary != Some("MissedMutant") {
             continue;
         }
@@ -142,6 +169,19 @@ pub fn outcomes(value: &serde_json::Value) -> Result<Outcomes, Failure> {
             file: text(mutant.get("file")),
             function: text(mutant.get("function").and_then(|f| f.get("function_name"))),
             replacement: text(mutant.get("replacement")),
+            at: mutant
+                .get("span")
+                .and_then(|span| span.get("start"))
+                .map(|start| {
+                    let field = |key: &str| {
+                        start
+                            .get(key)
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(0)
+                    };
+                    format!("{}:{}", field("line"), field("column"))
+                })
+                .unwrap_or_default(),
         });
     }
     Ok(Outcomes {
@@ -152,7 +192,21 @@ pub fn outcomes(value: &serde_json::Value) -> Result<Outcomes, Failure> {
         timeout: count("timeout"),
         unviable: count("unviable"),
         missed,
+        total: count("total_mutants"),
+        tested,
+        finished: value.get("end_time").is_some_and(|t| !t.is_null()),
     })
+}
+
+/// The entries none of whose positions survived in `outcomes`: killed since,
+/// or outside what this run (or shard) tested.
+#[must_use]
+pub fn unmatched<'a>(outcomes: &Outcomes, triage: &'a Triage) -> Vec<&'a Survivor> {
+    triage
+        .survivor
+        .iter()
+        .filter(|s| !outcomes.missed.iter().any(|m| m.matches(s)))
+        .collect()
 }
 
 /// The missed mutants the triage does not name.
@@ -178,6 +232,7 @@ pub fn load_triage(path: &std::path::Path) -> Result<Triage, Failure> {
         [&s.file, &s.function, &s.reason]
             .iter()
             .any(|f| f.trim().is_empty())
+            || s.at.is_empty()
     }) {
         return Err(Failure::gate(
             format!(
@@ -186,7 +241,7 @@ pub fn load_triage(path: &std::path::Path) -> Result<Triage, Failure> {
                 bad.replacement,
                 bad.file
             ),
-            "every survivor names file, function and reason",
+            "every survivor names file, function, positions (`at`) and reason",
         ));
     }
     Ok(triage)
@@ -213,9 +268,18 @@ pub fn run(args: &Args) -> Result<(), Failure> {
         ));
     };
     let path = paths::resolve(&root, path);
+    if !path.exists() && shard_was_empty(&path) {
+        println!("[INFO] MUTANTS: this shard has no mutants to test");
+        return Ok(());
+    }
     let document: serde_json::Value =
         serde_json::from_str(&paths::read_text(&path, "cargo mutants")?)?;
-    let outcomes = outcomes(&document)?;
+    let mut outcomes = outcomes(&document)?;
+    // `total_mutants` counts the outcomes written so far; the list of what
+    // the run set out to test is `mutants.json`, beside it.
+    if let Some(listed) = listed_mutants(&path) {
+        outcomes.total = listed;
+    }
     let triage = load_triage(&paths::resolve(
         &root,
         args.value("triage").unwrap_or(TRIAGE_PATH),
@@ -242,6 +306,29 @@ pub fn run(args: &Args) -> Result<(), Failure> {
         for name in &failed {
             println!("[ERROR] untriaged survivor: {name}");
         }
+        for entry in unmatched(&outcomes, &triage) {
+            println!(
+                "[WARN] no survivor at {} in {} ({}): killed since, or not in this run",
+                entry.at.join(", "),
+                entry.file,
+                entry.function
+            );
+        }
+    }
+    if !outcomes.complete() {
+        return Err(Failure::gate(
+            format!(
+                "the run is incomplete: {} of {} mutants tested{}",
+                outcomes.tested,
+                outcomes.total,
+                if outcomes.finished {
+                    ""
+                } else {
+                    ", and it never finished"
+                }
+            ),
+            "re-run cargo mutants; a full disk or an internal error stops it early",
+        ));
     }
     if !outcomes.baseline_passed {
         return Err(Failure::gate(
@@ -262,16 +349,34 @@ pub fn run(args: &Args) -> Result<(), Failure> {
     }
 }
 
+/// How many mutants the `mutants.json` beside `outcomes` lists, if it is
+/// there: what the run set out to test.
+fn listed_mutants(outcomes: &std::path::Path) -> Option<u64> {
+    outcomes
+        .parent()
+        .map(|dir| dir.join("mutants.json"))
+        .and_then(|list| std::fs::read_to_string(list).ok())
+        .and_then(|text| serde_json::from_str::<Vec<serde_json::Value>>(&text).ok())
+        .map(|list| u64::try_from(list.len()).unwrap_or(u64::MAX))
+}
+
+/// Whether the `mutants.json` beside `outcomes` lists no mutants: cargo-mutants
+/// writes no outcomes for a shard that has none.
+fn shard_was_empty(outcomes: &std::path::Path) -> bool {
+    listed_mutants(outcomes) == Some(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn mutant(summary: &str, function: &str) -> serde_json::Value {
+    fn mutant(summary: &str, function: &str, line: u64) -> serde_json::Value {
         serde_json::json!({
             "scenario": { "Mutant": {
-                "name": format!("crates/x/src/a.rs:3:5: replace {function} with ()"),
+                "name": format!("crates/x/src/a.rs:{line}:5: replace {function} with ()"),
                 "file": "crates/x/src/a.rs",
                 "function": { "function_name": function },
+                "span": { "start": { "line": line, "column": 5 }, "end": { "line": line, "column": 9 } },
                 "replacement": "()",
             }},
             "summary": summary,
@@ -281,7 +386,27 @@ mod tests {
     fn document(baseline: &str, outcomes: &[serde_json::Value]) -> serde_json::Value {
         let mut list = vec![serde_json::json!({ "scenario": "Baseline", "summary": baseline })];
         list.extend(outcomes.iter().cloned());
-        serde_json::json!({ "outcomes": list, "caught": 4, "timeout": 1, "unviable": 2 })
+        serde_json::json!({
+            "outcomes": list,
+            "total_mutants": outcomes.len(),
+            "caught": 4, "timeout": 1, "unviable": 2,
+            "end_time": "2026-10-16T00:00:00Z",
+        })
+    }
+
+    fn triage(at: &str) -> Triage {
+        toml::from_str(&format!(
+            r#"
+            [[survivor]]
+            file = "crates/x/src/a.rs"
+            function = "b"
+            replacement = "()"
+            at = [{at}]
+            verdict = "equivalent"
+            reason = "b has no effect a test can see"
+            "#
+        ))
+        .unwrap_or_else(|e| panic!("{e}"))
     }
 
     #[test]
@@ -289,30 +414,66 @@ mod tests {
         let doc = document(
             "Success",
             &[
-                mutant("CaughtMutant", "a"),
-                mutant("MissedMutant", "b"),
-                mutant("MissedMutant", "c"),
-                mutant("Timeout", "d"),
+                mutant("CaughtMutant", "a", 3),
+                mutant("MissedMutant", "b", 10),
+                mutant("MissedMutant", "c", 20),
+                mutant("Timeout", "d", 30),
             ],
         );
         let outcomes = outcomes(&doc).unwrap_or_else(|e| panic!("{e}"));
         assert!(outcomes.baseline_passed);
+        assert!(outcomes.complete());
         assert_eq!(outcomes.caught, 4);
         assert_eq!(outcomes.missed.len(), 2);
-        let triage: Triage = toml::from_str(
-            r#"
-            [[survivor]]
-            file = "crates/x/src/a.rs"
-            function = "b"
-            replacement = "()"
-            verdict = "equivalent"
-            reason = "b has no effect a test can see"
-            "#,
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
-        let left = untriaged(&outcomes, &triage);
+        let left = untriaged(&outcomes, &triage(r#""10:5""#));
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].function, "c");
+    }
+
+    #[test]
+    fn an_entry_covers_only_its_own_positions() {
+        // The same function and replacement at another position is a
+        // different mutant, and the entry does not cover it.
+        let doc = document(
+            "Success",
+            &[
+                mutant("MissedMutant", "b", 10),
+                mutant("MissedMutant", "b", 11),
+            ],
+        );
+        let outcomes = outcomes(&doc).unwrap_or_else(|e| panic!("{e}"));
+        let left = untriaged(&outcomes, &triage(r#""10:5""#));
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].at, "11:5");
+        assert!(untriaged(&outcomes, &triage(r#""10:5", "11:5""#)).is_empty());
+        // An entry whose positions no longer survive is reported.
+        let none = outcomes_of(&[mutant("CaughtMutant", "b", 10)]);
+        assert_eq!(unmatched(&none, &triage(r#""10:5""#)).len(), 1);
+    }
+
+    fn outcomes_of(list: &[serde_json::Value]) -> Outcomes {
+        outcomes(&document("Success", list)).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn a_run_that_stopped_early_is_incomplete() {
+        let mut doc = document("Success", &[mutant("CaughtMutant", "a", 3)]);
+        doc["end_time"] = serde_json::Value::Null;
+        assert!(!outcomes(&doc).unwrap_or_else(|e| panic!("{e}")).complete());
+        let mut doc = document("Success", &[mutant("CaughtMutant", "a", 3)]);
+        doc["total_mutants"] = 2.into();
+        assert!(!outcomes(&doc).unwrap_or_else(|e| panic!("{e}")).complete());
+    }
+
+    #[test]
+    fn a_shard_without_mutants_writes_no_outcomes() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let outcomes = dir.path().join("outcomes.json");
+        assert!(!shard_was_empty(&outcomes), "no list at all");
+        std::fs::write(dir.path().join("mutants.json"), "[]").unwrap_or_else(|e| panic!("{e}"));
+        assert!(shard_was_empty(&outcomes));
+        std::fs::write(dir.path().join("mutants.json"), "[{}]").unwrap_or_else(|e| panic!("{e}"));
+        assert!(!shard_was_empty(&outcomes));
     }
 
     #[test]
@@ -326,16 +487,19 @@ mod tests {
     fn a_deletion_is_triaged_with_an_empty_replacement() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let path = dir.path().join("mutants.toml");
-        let entry = |reason: &str| {
+        let entry = |at: &str, reason: &str| {
             format!(
                 "[[survivor]]\nfile = \"a.rs\"\nfunction = \"f\"\nreplacement = \"\"\n\
-                 verdict = \"unobservable\"\nreason = \"{reason}\"\n"
+                 at = [{at}]\nverdict = \"unobservable\"\nreason = \"{reason}\"\n"
             )
         };
-        std::fs::write(&path, entry("needs a device")).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(&path, entry("\"4:12\"", "needs a device"))
+            .unwrap_or_else(|e| panic!("{e}"));
         assert!(load_triage(&path).is_ok());
-        std::fs::write(&path, entry(" ")).unwrap_or_else(|e| panic!("{e}"));
-        assert!(load_triage(&path).is_err());
+        std::fs::write(&path, entry("\"4:12\"", " ")).unwrap_or_else(|e| panic!("{e}"));
+        assert!(load_triage(&path).is_err(), "no reason");
+        std::fs::write(&path, entry("", "needs a device")).unwrap_or_else(|e| panic!("{e}"));
+        assert!(load_triage(&path).is_err(), "no position");
     }
 
     #[test]

@@ -169,7 +169,8 @@ impl Band {
     /// The band of `margin`, a fraction of the ceiling.
     #[must_use]
     pub fn of(margin: f64) -> Self {
-        if margin < 0.0 {
+        // A margin that is not a number has not been shown to fit.
+        if margin.is_nan() || margin < 0.0 {
             Self::Exceeded
         } else if margin < 0.10 {
             Self::Red
@@ -360,9 +361,10 @@ pub fn parse_overrides(text: &str) -> Result<BTreeMap<String, f64>, Failure> {
         let (id, value) = pair
             .split_once('=')
             .and_then(|(id, value)| Some((id.trim(), value.trim().parse::<f64>().ok()?)))
+            .filter(|(_, value)| value.is_finite() && *value >= 0.0)
             .ok_or_else(|| {
                 Failure::usage(
-                    format!("`{pair}` is not `budget=value`"),
+                    format!("`{pair}` is not `budget=value` with a finite, non-negative value"),
                     "cargo xtask budgets --measured initrd-binary=1954776",
                 )
             })?;
@@ -654,6 +656,10 @@ mod tests {
         let codes: Vec<&str> = findings.iter().map(|f| f.code.as_str()).collect();
         assert_eq!(codes, ["UNKNOWN_REQUIREMENT", "UNKNOWN_BUDGET"]);
         assert!(parse_overrides("a=1,b=x").is_err());
+        assert!(parse_overrides("a=NaN").is_err());
+        assert!(parse_overrides("a=-1").is_err());
+        assert!(parse_overrides("a=inf").is_err());
+        assert_eq!(Band::of(f64::NAN), Band::Exceeded);
         assert_eq!(parse_overrides("").map(|m| m.len()).ok(), Some(0));
     }
 

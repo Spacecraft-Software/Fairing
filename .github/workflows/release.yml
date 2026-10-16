@@ -21,6 +21,12 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+# `bash` with pipefail: GitHub's default for an unnamed shell is `bash -e`,
+# under which `gate | tee` takes tee's status and a failed gate passes.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -42,9 +48,16 @@ jobs:
       - run: cargo xtask sbom
       - run: cargo xtask manifest --check
       - run: cargo xtask trace
-      # A budget never measured on the reference machine blocks the release
-      # (§22.3): its figure goes into doc/measurements.toml before the tag.
-      - run: cargo xtask budgets --release
+      # The two sizes are measured on the tag's own build, as CI's size job
+      # does; a budget never measured on the reference machine blocks the
+      # release (§22.3): its figure goes into doc/measurements.toml first.
+      - name: budgets on this build
+        run: |
+          cargo build --release --locked -p fairing --no-default-features --target-dir target/size-initrd
+          cargo build --release --locked -p fairing --target-dir target/size-full
+          target/size-full/release/fairing theme compile themes/steelbore.ncl --output target/steelbore.fairing --json > /dev/null
+          measured="initrd-binary=$(stat -c %s target/size-initrd/release/fairing),theme-artefact=$(stat -c %s target/steelbore.fairing)"
+          cargo xtask budgets --release --measured "$measured"
       - name: checksums
         run: |
           cp "doc/releases/fairing-$VERSION.manifest.json" target/dist/

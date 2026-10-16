@@ -139,6 +139,30 @@ pub fn crates(report: &serde_json::Value, root: &str, min: f64) -> Result<Vec<Cr
         .collect())
 }
 
+/// Every product crate: each directory under `crates/` with a manifest.
+#[must_use]
+pub fn product_crates(root: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(root.join("crates"))
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().join("Cargo.toml").is_file())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect();
+    names.sort();
+    names
+}
+
+/// The crates in `expected` the report says nothing about.
+#[must_use]
+pub fn missing(crates: &[Crate], expected: &[String]) -> Vec<String> {
+    expected
+        .iter()
+        .filter(|name| !crates.iter().any(|c| &c.name == *name))
+        .cloned()
+        .collect()
+}
+
 #[derive(Debug, Serialize)]
 struct Output {
     min: f64,
@@ -173,6 +197,16 @@ pub fn run(args: &Args) -> Result<(), Failure> {
         "cargo llvm-cov --workspace --exclude xtask --json --summary-only --output-path target/llvm-cov.json",
     )?)?;
     let crates = crates(&report, &root.to_string_lossy(), min)?;
+    let absent = missing(&crates, &product_crates(&root));
+    if !absent.is_empty() {
+        return Err(Failure::gate(
+            format!(
+                "the report has no lines for crate(s) {}: they were not measured",
+                absent.join(", ")
+            ),
+            "cargo llvm-cov --workspace --exclude xtask --json --summary-only",
+        ));
+    }
     let failing: Vec<String> = crates
         .iter()
         .filter(|c| !c.ok)
@@ -256,6 +290,27 @@ mod tests {
         let report = report(&[file("crates/fairing/src/main.rs", 10, 10)]);
         assert!(crates(&report, "/src", 80.0).is_err());
         assert!(crates(&serde_json::json!({}), "/src", 80.0).is_err());
+    }
+
+    #[test]
+    fn a_crate_missing_from_the_report_is_named() {
+        let report = report(&[
+            file("crates/fairing/src/main.rs", 9, 10),
+            file(HARDWARE_ONLY[0].0, 0, 1),
+        ]);
+        let crates = crates(&report, "/src", 80.0).unwrap_or_else(|e| panic!("{e}"));
+        let expected = vec!["fairing".to_owned(), "fairing-askpass".to_owned()];
+        assert_eq!(missing(&crates, &expected), ["fairing-askpass"]);
+        let root = crate::paths::default_root();
+        assert_eq!(
+            product_crates(&root),
+            [
+                "fairing",
+                "fairing-askpass",
+                "fairing-render",
+                "fairing-theme"
+            ]
+        );
     }
 
     #[test]

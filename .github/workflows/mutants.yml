@@ -22,6 +22,12 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
 
+# `bash` with pipefail: GitHub's default for an unnamed shell is `bash -e`,
+# under which `gate | tee` takes tee's status and a failed gate passes.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   mutants:
     runs-on: ubuntu-latest
@@ -52,10 +58,18 @@ jobs:
         with:
           tool: cargo-mutants
       - name: mutants ${{ matrix.scope }} ${{ matrix.shard }}/4
+        # cargo-mutants exits 2 when mutants were missed and 3 on a timeout,
+        # which the triage gate below decides on; any other failure (a broken
+        # baseline, a full disk, an internal error) ends the job here.
         run: |
+          status=0
           cargo mutants ${{ matrix.args }} --shard ${{ matrix.shard }}/4 \
-            --no-shuffle --output target/mutants || true
-          test -f target/mutants/mutants.out/outcomes.json
+            --no-shuffle --output target/mutants || status=$?
+          case "$status" in
+            0 | 2 | 3) ;;
+            *) echo "cargo-mutants failed with status $status" >&2; exit "$status" ;;
+          esac
+      # Fails on an incomplete run as well as on an untriaged survivor.
       - run: cargo xtask mutants --outcomes target/mutants/mutants.out/outcomes.json
       - uses: actions/upload-artifact@v4
         if: always()
