@@ -34,6 +34,11 @@
     #:phases
     #~(modify-phases %standard-phases
         (delete 'configure)
+        ;; cargo checks every vendored file against its recorded checksum;
+        ;; rewriting their shebangs and Makefiles would fail that check, and
+        ;; nothing the build runs needs them rewritten.
+        (delete 'patch-source-shebangs)
+        (delete 'patch-generated-file-shebangs)
         (add-before 'build 'set-cargo-home
           (lambda _
             (setenv "CARGO_HOME" (string-append (getcwd) "/.cargo-home"))))
