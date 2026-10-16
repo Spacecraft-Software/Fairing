@@ -141,19 +141,26 @@ jobs:
           su builder -c 'makepkg --noconfirm'
           pacman -Qip fairing-*.pkg.tar.zst
 
+  # Guix comes from the Ubuntu archive, not the binary tarball on
+  # ci.guix.gnu.org (which an install action fetches and which was down when
+  # this job was written); that release is too old to build with, so the job
+  # pulls a current Guix first, from substitutes on either build farm.
   package-guix:
     runs-on: ubuntu-latest
     needs: dist
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: dist
-      - uses: PromyLOPh/guix-install-action@v1
+      - run: sudo apt-get update && sudo apt-get install --yes guix
+      - run: guix pull --substitute-urls="https://bordeaux.guix.gnu.org https://ci.guix.gnu.org"
+      - run: ~/.config/guix/current/bin/guix describe
       # As for Nix: the archive goes into the store under the name and hash
       # the origin names, so the build fetches nothing.
-      - run: guix download "file://$PWD/$(ls target/dist/fairing-*.tar.gz)"
-      - run: guix build -f packaging/guix.scm
+      - run: ~/.config/guix/current/bin/guix download "file://$PWD/$(ls target/dist/fairing-*.tar.gz)"
+      - run: ~/.config/guix/current/bin/guix build -f packaging/guix.scm
 
   # The size budgets (§22, doc/budgets.toml): the stripped release binary the
   # initrd carries is at most 2.5 MiB (FRN-SRS-105) and the compiled reference
