@@ -53,7 +53,7 @@ pub struct Notes {
 }
 
 /// One open anomaly.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct KnownIssue {
     /// Its identifier in the issue tracker.
@@ -104,6 +104,8 @@ pub struct Provenance {
     pub toolchain: String,
     /// The nixpkgs revision `flake.lock` pins.
     pub nixpkgs: String,
+    /// The tools whose versions the archive's bytes depend on.
+    pub tools: Vec<String>,
     /// The release profile's flags (§3.2.1).
     pub release_profile: BTreeMap<String, String>,
     /// How to rebuild, and whether the build is bit-reproducible.
@@ -222,6 +224,31 @@ pub fn artefacts(root: &Path, out: &Path, version: &str) -> Result<Vec<Artefact>
     Ok(vec![archive, sbom])
 }
 
+/// The maintainer's notes for `version`, `doc/releases/<version>.toml`.
+///
+/// # Errors
+///
+/// A missing or malformed notes file.
+pub fn load_notes(root: &Path, version: &str) -> Result<Notes, Failure> {
+    let path = root.join(format!("{}/{version}.toml", dist::RELEASES_DIR));
+    Ok(toml::from_str(&paths::read_text(
+        &path,
+        "write the release notes: category, validation, conformance, known issues",
+    )?)?)
+}
+
+/// The first line of `program --version`, for each tool the archive's bytes
+/// depend on: cargo (its `vendor` output), tar and gzip.
+fn tools(root: &Path) -> Result<Vec<String>, Failure> {
+    ["cargo", "tar", "gzip"]
+        .iter()
+        .map(|program| {
+            let printed = dist::run(root, program, &["--version"])?;
+            Ok(printed.lines().next().unwrap_or_default().trim().to_owned())
+        })
+        .collect()
+}
+
 fn toolchain(root: &Path) -> Result<String, Failure> {
     let text = paths::read_text(&root.join("rust-toolchain.toml"), "rust-toolchain.toml")?;
     let value: toml::Value = toml::from_str(&text)?;
@@ -311,11 +338,7 @@ pub fn assemble(
     mutation_reports: &[&str],
 ) -> Result<Manifest, Failure> {
     let version = dist::version(root)?;
-    let notes_path = root.join(format!("{}/{version}.toml", dist::RELEASES_DIR));
-    let notes: Notes = toml::from_str(&paths::read_text(
-        &notes_path,
-        "write the release notes: category, validation, conformance, known issues",
-    )?)?;
+    let notes = load_notes(root, &version)?;
     let commit = dist::run(root, "git", &["rev-parse", "HEAD"])?;
     let set = requirements::load(&root.join(requirements::DEFAULT_PATH))?;
     let mut counts = BTreeMap::new();
@@ -376,12 +399,14 @@ pub fn assemble(
             ),
             toolchain: toolchain(root)?,
             nixpkgs: nixpkgs(root)?,
+            tools: tools(root)?,
             release_profile: release_profile(root)?,
-            reproducibility: "The source archive and the SBOM are bit-reproducible: \
-                `cargo xtask dist --ref v<version>` and `cargo xtask sbom --ref v<version>` \
-                rebuild them byte for byte, and the release workflow does so before it \
-                publishes. Binaries are built by each package manager from the archive \
-                with the pinned toolchain and are not claimed bit-reproducible."
+            reproducibility: "The source archive and the SBOM are bit-reproducible: in a \
+                full clone checked out at the tag, with rustup's pinned cargo and the tools \
+                named here, `cargo xtask dist --check` and `cargo xtask sbom` rebuild them \
+                byte for byte, and the release workflow does so before it publishes. \
+                Binaries are built by each package manager from the archive and are not \
+                claimed bit-reproducible."
                 .to_owned(),
         },
         verification: Verification {
@@ -422,6 +447,22 @@ pub fn run(args: &Args) -> Result<(), Failure> {
                     manifest_path(&version)
                 ),
                 "cargo xtask dist && cargo xtask sbom && cargo xtask manifest",
+            ));
+        }
+        // The notes are export-ignored, so the archive's checksum does not
+        // cover them: the manifest must say what they say now.
+        let notes = load_notes(&root, &version)?;
+        if committed.identity.category != notes.category
+            || committed.validation != notes.validation
+            || committed.conformance != notes.conformance
+            || committed.known_issues != notes.known_issue
+        {
+            return Err(Failure::gate(
+                format!(
+                    "`{}` is older than doc/releases/{version}.toml",
+                    manifest_path(&version)
+                ),
+                "cargo xtask manifest, after the notes are final",
             ));
         }
         if args.json() {

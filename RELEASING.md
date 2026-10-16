@@ -21,8 +21,9 @@ sh; Nushell runs them unchanged.
 
 The three package definitions, `packaging/default.nix`, `packaging/guix.scm` and
 `packaging/PKGBUILD`, carry the archive's version and SHA-256 in their own notations.
-They and `doc/releases/` are `export-ignore`, so writing the checksum into them changes
-nothing the archive holds. Every timestamp in the archive and the SBOM is the commit time
+`packaging/`, `doc/releases/` and the flake are `export-ignore`, so writing the checksum
+into them changes nothing the archive holds; the package definitions are used from a
+checkout of the tag. Every timestamp in the archive and the SBOM is the commit time
 of the last commit that changed what the archive holds, so the commit that records the
 checksums archives to the same bytes as the one before it.
 
@@ -48,15 +49,15 @@ checksums archives to the same bytes as the one before it.
 
 ## Cutting the release
 
-On an up-to-date `main`, with nothing uncommitted:
+In a full clone (not shallow) of an up-to-date `main`, with nothing uncommitted, and
+**outside `nix develop`**: `cargo vendor`'s output differs between cargo releases, so the
+archive is built with rustup's cargo at the version `rust-toolchain.toml` pins, and
+`cargo xtask dist` refuses any other. cargo-cyclonedx must be 0.5.9.
 
 ```sh
 cargo xtask dist        # target/dist/fairing-<v>.tar.gz; stamps the three definitions
 cargo xtask sbom        # target/dist/fairing-<v>.cdx.json
 cargo xtask trace
-cargo xtask manifest --coverage target/llvm-cov.json \
-    --mutants mutants-askpass.json,mutants-splash.json
-git diff --stat         # only packaging/{default.nix,guix.scm,PKGBUILD} and doc/releases/
 ```
 
 ### Install from each definition (§25.3)
@@ -75,13 +76,18 @@ package manager is handed it under the name and checksum the definition expects.
   nix profile install ./result && fairing --version && nix profile remove fairing
   ```
 
-- **Arch Linux**, in a throwaway `archlinux:base-devel` container, as a non-root user,
-  with `PKGBUILD` and the archive in one directory:
+- **Arch Linux**, in a throwaway `archlinux:base-devel` container. makepkg will not run
+  as root, so it runs as a user, and pacman as root:
 
   ```sh
-  makepkg --syncdeps --install --noconfirm
+  pacman -Syu --noconfirm --needed cargo make texinfo
+  useradd --create-home builder
+  install -d -o builder /home/builder/pkg
+  install -o builder packaging/PKGBUILD target/dist/fairing-<v>.tar.gz /home/builder/pkg/
+  su builder -c 'cd /home/builder/pkg && makepkg --noconfirm'
+  pacman -U --noconfirm /home/builder/pkg/fairing-*.pkg.tar.zst
   fairing --version
-  sudo pacman --remove --noconfirm fairing
+  pacman -R --noconfirm fairing
   ```
 
 - **Guix**, on a Guix System or a foreign distribution with Guix:
@@ -93,7 +99,15 @@ package manager is handed it under the name and checksum the definition expects.
   guix package --remove=fairing
   ```
 
-Record the three results in the validation note if they are not there already.
+Record the three results in the validation note of `doc/releases/<v>.toml`, then write
+the manifest from the final notes (`cargo xtask manifest --check`, in the release
+workflow, fails if the notes change afterwards):
+
+```sh
+# --mutants: the outcomes.json of every shard of the mutants workflow, comma-separated
+cargo xtask manifest --coverage target/llvm-cov.json --mutants "$shards"
+git diff --stat         # only packaging/{default.nix,guix.scm,PKGBUILD} and doc/releases/
+```
 
 ### Commit, tag, push
 

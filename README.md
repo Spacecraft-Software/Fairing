@@ -55,10 +55,12 @@ cargo xtask dist               # reproducible, vendored release archive; stamps 
 
 Releases are cut as `RELEASING.md` describes: `cargo xtask dist`, `sbom` and `manifest`
 produce the archive, its CycloneDX SBOM and the §25.3 manifest, and the release workflow
-rebuilds and checks them from the signed tag before it drafts the release. From a release,
-`nix-build -E 'with import <nixpkgs> {}; callPackage ./packaging/default.nix {}'`,
-`guix build -f packaging/guix.scm` or `makepkg` beside `packaging/PKGBUILD` builds the
-`fairing` binary and its Info manual offline.
+rebuilds and checks them from the signed tag before it drafts the release. In a checkout of
+a release tag, `nix-build -E 'with import <nixpkgs> {}; callPackage ./packaging/default.nix {}'`,
+`guix build -f packaging/guix.scm` or `makepkg` beside `packaging/PKGBUILD` fetches the
+release archive by its checksum and builds the `fairing` binary and its Info manual
+offline. The archive itself carries the sources and their vendored crates, not the package
+definitions or the flake.
 
 `nix develop` provides every tool above, and `nix flake check` evaluates the NixOS module and, on x86_64 with KVM, boots it in two VM tests. The `fairing` binary offers `fairing splash`, `fairing theme check|compile|inspect`, `fairing preview`, `fairing describe`, `fairing schema [<command>]`, `--version` and the global flags of the Spacecraft Software CLI Standard; run `fairing describe --json` for the live capability manifest.
 

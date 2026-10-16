@@ -211,14 +211,18 @@ will not be green there.
   envelope but not the full CLI Standard flag set.
 - The release archive and the SBOM are bit-reproducible. Their timestamps are the commit
   time of the last commit that changed archived content (`dist::content_epoch`), and
-  `packaging/{default.nix,guix.scm,PKGBUILD}` and `doc/releases/` are `export-ignore`,
-  so stamping a checksum changes nothing archived. Never hand-edit a definition's
-  version or checksum line (`cargo xtask dist` writes them, matched by exact line
-  format in `dist::stamp`), and never put archived content in a release commit.
+  `dist::EXPORT_IGNORED` (`packaging/`, `flake.nix`, `flake.lock`, `doc/releases/`) is
+  `export-ignore` in `.gitattributes` (a test keeps the two in step), so stamping a
+  checksum changes nothing archived. `cargo xtask dist` runs only with rustup's pinned
+  cargo (`cargo vendor` output differs between releases; never from `nix develop`) and
+  only in a full clone. Never hand-edit a definition's version or checksum line (`cargo
+  xtask dist` writes them, matched by exact line format in `dist::stamp`), and never put
+  archived content in a release commit.
 - `packaging/default.nix` is the §5.5 release form: without `workingTree` it fetches the
   archive and builds from its `vendor/`. The flake passes its own tree as `workingTree`
-  and sets the module's default `package` to that build; `module.nix` alone defaults to
-  the release. `callPackage` would fill an argument named `src` from nixpkgs' `src`
+  and sets the module's default `package` to that tree built with the system's own
+  `pkgs` (never `self.packages`, which would bring a second nixpkgs into the closure);
+  `module.nix` alone defaults to the release. `callPackage` would fill an argument named `src` from nixpkgs' `src`
   alias, so never rename it to `src`.
 - The coverage floor leaves out only `coverage::HARDWARE_ONLY`, each file with its
   reason; a mutant survivor is killed by a test or triaged in `doc/mutants.toml` by

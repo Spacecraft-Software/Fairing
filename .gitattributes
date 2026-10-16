@@ -9,10 +9,11 @@
 *.otf binary
 *.ppm binary
 
-# The release archive (`cargo xtask dist`) leaves out the files that record
-# its checksum, and the release manifests, so recording it changes nothing
-# the archive holds.
-/packaging/default.nix export-ignore
-/packaging/guix.scm export-ignore
-/packaging/PKGBUILD export-ignore
+# The release archive (`cargo xtask dist`) leaves out the package
+# definitions and release manifests, which record its checksum, so recording
+# it changes nothing the archive holds, and the flake and NixOS module, which
+# build from a checkout. Keep in step with dist::EXPORT_IGNORED.
+/packaging/ export-ignore
+/flake.nix export-ignore
+/flake.lock export-ignore
 /doc/releases/ export-ignore

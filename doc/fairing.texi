@@ -895,17 +895,23 @@ from vendored under @file{vendor/} by @command{cargo vendor --locked} and
 as Nix and Guix require of a build.  It is bit-reproducible: entries sorted,
 owners and modes normalised, every timestamp the commit time of the last
 commit to change what the archive holds, and gzip without a name or a time.
+@command{cargo vendor} writes differently from one cargo release to the
+next, so @command{cargo xtask dist} runs only with the cargo
+@file{rust-toolchain.toml} pins, and only in a full clone.
 
 The three package definitions carry the archive's version and checksum, each
 in its own notation: an SRI hash in @file{packaging/default.nix}, Nix base-32
 in @file{packaging/guix.scm} and hexadecimal in @file{packaging/PKGBUILD}.
 @command{cargo xtask dist} writes them; @command{cargo xtask dist --check}
-fails unless they already carry the checksum of the archive it rebuilds.  The
-definitions and the release manifests are @code{export-ignore} in
-@file{.gitattributes}, so recording a checksum changes nothing the archive
-holds.
+fails unless they already carry the checksum of the archive it rebuilds.
+@file{packaging/}, the release manifests and the flake are
+@code{export-ignore} in @file{.gitattributes}, so recording a checksum
+changes nothing the archive holds; the archive carries the sources and their
+crates, and the package definitions are used from a checkout of the tag.
 
 @section Installing a release
+
+In a checkout of the release tag:
 
 @table @asis
 @item Nix
@@ -922,7 +928,8 @@ guix build -f packaging/guix.scm
 guix package --install-from-file=packaging/guix.scm
 @end example
 @item Arch Linux
-With @file{PKGBUILD} in an empty directory:
+With @file{PKGBUILD} in an empty directory, as a user who may run
+@command{sudo pacman}:
 @example
 makepkg --syncdeps --install
 @end example

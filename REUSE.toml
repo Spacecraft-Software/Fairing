@@ -10,3 +10,11 @@ path = ["Cargo.lock", "fuzz/Cargo.lock", "flake.lock", "SKILL.md"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
 SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# Release manifests (`cargo xtask manifest`): JSON carries no comment, so no
+# inline header.
+[[annotations]]
+path = "doc/releases/*.manifest.json"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"
+SPDX-License-Identifier = "CC-BY-SA-4.0"

@@ -97,7 +97,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: fmt
     steps:
+      # The full history: the archive's timestamps are those of the last
+      # commit to change what it holds, which a shallow clone cannot tell.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - run: rustup toolchain install
       - uses: taiki-e/install-action@v2
         with:

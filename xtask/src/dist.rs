@@ -51,6 +51,13 @@ pub const DEFINITIONS: [&str; 3] = [
 /// it records the archive's checksum.
 pub const RELEASES_DIR: &str = "doc/releases";
 
+/// What `.gitattributes` keeps out of the archive: the package definitions
+/// and release manifests, which record its checksum, and the flake and the
+/// NixOS module, which build from a checkout and would not work from it.
+/// The archive's timestamps come from the last commit to change anything
+/// else.
+pub const EXPORT_IGNORED: [&str; 4] = ["packaging", "flake.nix", "flake.lock", RELEASES_DIR];
+
 /// What cargo is told about the vendored crates.
 const VENDOR_CONFIG: &str = "
 # Added by `cargo xtask dist`: the release archive builds from the crates
@@ -171,8 +178,11 @@ pub fn stamp(
                 checksum.nix32.clone(),
             ),
         ],
+        // makepkg refuses `-` in pkgver, so a pre-release 0.2.0-rc.1 is
+        // written 0.2.0_rc.1, and a new version starts at pkgrel 1.
         Some("PKGBUILD") => &[
-            (r"(?m)^(pkgver=)\S*()$", version.to_owned()),
+            (r"(?m)^(pkgver=)\S*()$", version.replace('-', "_")),
+            (r"(?m)^(pkgrel=)\S*()$", "1".to_owned()),
             (r"(?m)^(sha256sums=\(')[^']*('\))$", checksum.hex.clone()),
         ],
         _ => {
@@ -218,6 +228,21 @@ pub(crate) fn run(dir: &Path, program: &str, args: &[&str]) -> Result<String, Fa
         .map_err(|e| Failure::internal(format!("`{program}` wrote non-UTF-8: {e}")))
 }
 
+/// The commit `reference` names.
+///
+/// # Errors
+///
+/// A name git does not know.
+pub fn resolve(root: &Path, reference: &str) -> Result<String, Failure> {
+    Ok(run(
+        root,
+        "git",
+        &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
+    )?
+    .trim()
+    .to_owned())
+}
+
 /// The workspace version, from `[workspace.package]`.
 ///
 /// # Errors
@@ -246,14 +271,56 @@ pub fn version(root: &Path) -> Result<String, Failure> {
 ///
 /// A failed `git log`.
 pub fn content_epoch(root: &Path, commit: &str) -> Result<String, Failure> {
-    let excluded: Vec<String> = DEFINITIONS
+    let excluded: Vec<String> = EXPORT_IGNORED
         .iter()
-        .chain(&[RELEASES_DIR])
         .map(|path| format!(":(exclude){path}"))
         .collect();
     let mut log = vec!["log", "-1", "--format=%ct", commit, "--", "."];
     log.extend(excluded.iter().map(String::as_str));
     Ok(run(root, "git", &log)?.trim().to_owned())
+}
+
+/// The workspace version at `commit`, from its `Cargo.toml`.
+///
+/// # Errors
+///
+/// A failed `git show`, or a manifest without a version.
+pub fn version_at(root: &Path, commit: &str) -> Result<String, Failure> {
+    let text = run(root, "git", &["show", &format!("{commit}:Cargo.toml")])?;
+    let manifest: toml::Value = toml::from_str(&text)?;
+    manifest
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("version"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| Failure::internal(format!("{commit}:Cargo.toml has no version")))
+}
+
+/// The toolchain channel `rust-toolchain.toml` in `tree` pins.
+fn pinned_channel(tree: &Path) -> Result<String, Failure> {
+    let value: toml::Value = toml::from_str(&paths::read_text(
+        &tree.join("rust-toolchain.toml"),
+        "rust-toolchain.toml",
+    )?)?;
+    value
+        .get("toolchain")
+        .and_then(|t| t.get("channel"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| Failure::internal("rust-toolchain.toml pins no channel"))
+}
+
+/// Refuses a shallow clone: the content time would be the shallow tip's,
+/// not that of the last commit to change what the archive holds.
+fn refuse_shallow(root: &Path) -> Result<(), Failure> {
+    if run(root, "git", &["rev-parse", "--is-shallow-repository"])?.trim() == "true" {
+        return Err(Failure::gate(
+            "this is a shallow clone, so the archive's timestamps cannot be known",
+            "git fetch --unshallow (or check out with fetch-depth: 0)",
+        ));
+    }
+    Ok(())
 }
 
 /// The archive built: where, how big, its checksum.
@@ -277,15 +344,10 @@ pub struct Archive {
 ///
 /// A failed `git`, `cargo vendor`, `tar`, `gzip` or `sha256sum`.
 pub fn build(root: &Path, reference: &str, out: &Path) -> Result<Archive, Failure> {
-    let version = version(root)?;
+    refuse_shallow(root)?;
+    let commit = resolve(root, reference)?;
+    let version = version_at(root, &commit)?;
     let name = format!("fairing-{version}");
-    let commit = run(
-        root,
-        "git",
-        &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
-    )?
-    .trim()
-    .to_owned();
     let epoch = content_epoch(root, &commit)?;
     let stage = out.join("stage");
     if stage.exists() {
@@ -308,6 +370,20 @@ pub fn build(root: &Path, reference: &str, out: &Path) -> Result<Archive, Failur
     run(&stage, "tar", &["-xf", "tree.tar"])?;
     std::fs::remove_file(&tarball)?;
     let tree = stage.join(&name);
+    // `cargo vendor`'s output differs between cargo releases, so only the
+    // pinned one may write it: in the tree, rustup's cargo is that one, and a
+    // cargo from elsewhere (`nix develop`'s, a distribution's) is refused.
+    let channel = pinned_channel(&tree)?;
+    let cargo = run(&tree, "cargo", &["--version"])?;
+    if !cargo.starts_with(&format!("cargo {channel} ")) {
+        return Err(Failure::gate(
+            format!(
+                "`{}` is not the pinned cargo {channel}; the archive would not be reproducible",
+                cargo.trim()
+            ),
+            "run it with rustup's cargo, outside `nix develop`",
+        ));
+    }
     run(
         &tree,
         "cargo",
@@ -359,8 +435,15 @@ pub fn run_dist(args: &Args) -> Result<(), Failure> {
     let root = args.root();
     let out = paths::resolve(&root, args.value("out").unwrap_or(DEFAULT_OUT));
     std::fs::create_dir_all(&out)?;
-    let archive = build(&root, args.value("ref").unwrap_or("HEAD"), &out)?;
+    let reference = args.value("ref").unwrap_or("HEAD");
     let check = args.flag("check");
+    if !check && resolve(&root, reference)? != resolve(&root, "HEAD")? {
+        return Err(Failure::usage(
+            format!("`--ref {reference}` is not HEAD, and the definitions here describe HEAD"),
+            "check out the commit to stamp, or add --check to compare only",
+        ));
+    }
+    let archive = build(&root, reference, &out)?;
     let mut stale = Vec::new();
     for name in DEFINITIONS {
         let path = root.join(name);
@@ -453,5 +536,33 @@ mod tests {
             );
         }
         assert!(stamp("packaging/PKGBUILD", "pkgver=1\n", "2", &sum).is_err());
+        let pkgbuild = "pkgver=0.1.0\npkgrel=3\nsha256sums=('x')\n";
+        let stamped = stamp("packaging/PKGBUILD", pkgbuild, "0.2.0-rc.1", &sum)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            stamped.contains("pkgver=0.2.0_rc.1\npkgrel=1\n"),
+            "{stamped}"
+        );
+    }
+
+    #[test]
+    fn gitattributes_keeps_out_what_the_epoch_leaves_out() {
+        let root = crate::paths::default_root();
+        let attributes =
+            std::fs::read_to_string(root.join(".gitattributes")).unwrap_or_else(|e| panic!("{e}"));
+        for path in EXPORT_IGNORED {
+            let dir = format!("/{path}/ export-ignore");
+            let file = format!("/{path} export-ignore");
+            assert!(
+                attributes.lines().any(|l| l == dir || l == file),
+                "{path} is not export-ignore in .gitattributes"
+            );
+        }
+        for name in DEFINITIONS {
+            assert!(
+                EXPORT_IGNORED.iter().any(|p| name.starts_with(p)),
+                "{name} would be archived"
+            );
+        }
     }
 }

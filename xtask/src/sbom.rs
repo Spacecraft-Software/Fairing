@@ -137,13 +137,17 @@ fn generated(root: &Path) -> Vec<PathBuf> {
 ///
 /// A failed `cargo cyclonedx`, or output it cannot normalise.
 pub fn build(root: &Path, reference: &str, out: &Path) -> Result<Sbom, Failure> {
-    let version = dist::version(root)?;
-    let commit = dist::run(
-        root,
-        "git",
-        &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
-    )?;
-    let epoch = dist::content_epoch(root, commit.trim())?;
+    // cargo-cyclonedx describes the checked-out tree, so only HEAD's SBOM
+    // can be written; to describe a release, check out its tag.
+    let commit = dist::resolve(root, reference)?;
+    if commit != dist::resolve(root, "HEAD")? {
+        return Err(Failure::usage(
+            format!("`--ref {reference}` is not HEAD, and the SBOM describes the checkout"),
+            "check out the commit first",
+        ));
+    }
+    let version = dist::version_at(root, &commit)?;
+    let epoch = dist::content_epoch(root, &commit)?;
     let timestamp = epoch
         .parse::<i64>()
         .ok()

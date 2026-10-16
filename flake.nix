@@ -22,29 +22,29 @@
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       pkgsFor = system: nixpkgs.legacyPackages.${system};
+      inherit (nixpkgs) lib;
+      # The working tree, not the release archive: only what the build and
+      # its tests read, never `target/` or `doc/build/`.
+      workingTree = lib.fileset.toSource {
+        root = ./.;
+        fileset = lib.fileset.difference (lib.fileset.unions [
+          ./.cargo
+          ./Cargo.toml
+          ./Cargo.lock
+          ./crates
+          ./xtask
+          ./contracts
+          ./themes
+          ./doc
+        ]) (lib.fileset.maybeMissing ./doc/build);
+      };
     in
     {
       packages = forAllSystems (
         system:
         let
           pkgs = pkgsFor system;
-          # The working tree, not the release archive: only what the build
-          # and its tests read, never `target/` or `doc/build/`.
-          fairing = pkgs.callPackage ./packaging/default.nix {
-            workingTree = pkgs.lib.fileset.toSource {
-              root = ./.;
-              fileset = pkgs.lib.fileset.difference (pkgs.lib.fileset.unions [
-                ./.cargo
-                ./Cargo.toml
-                ./Cargo.lock
-                ./crates
-                ./xtask
-                ./contracts
-                ./themes
-                ./doc
-              ]) (pkgs.lib.fileset.maybeMissing ./doc/build);
-            };
-          };
+          fairing = pkgs.callPackage ./packaging/default.nix { inherit workingTree; };
         in
         {
           inherit fairing;
@@ -65,16 +65,17 @@
       );
 
       nixosModules = {
-        # The module as the flake ships it: its default package is this
-        # flake's build of the tree, not the release archive module.nix
+        # The module as the flake ships it: its default package is the
+        # flake's tree built with the system's own pkgs (its nixpkgs,
+        # overlays and cross setup), not the release archive module.nix
         # fetches on its own.
         fairing =
           { lib, pkgs, ... }:
           {
             imports = [ ./packaging/nixos/module.nix ];
-            steelbore.fairing.package =
-              lib.mkDefault
-                self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+            steelbore.fairing.package = lib.mkDefault (
+              pkgs.callPackage ./packaging/default.nix { inherit workingTree; }
+            );
           };
         default = self.nixosModules.fairing;
       };
