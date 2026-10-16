@@ -66,7 +66,7 @@ reads this file.
 - [ ] P-050 Traceability matrix generated in CI, no orphans (§21.3)
 - [ ] P-051 Budgets measured on the reference machine, margins in band (§22)
 - [ ] P-052 Mutation run triaged, ≥ 80 % line coverage (§21.2 B)
-- [ ] P-053 packaging/default.nix, guix.scm, PKGBUILD build the binary (§5.5)
+- [x] P-053 packaging/default.nix, guix.scm, PKGBUILD build the binary (§5.5)
 - [ ] P-054 SBOM, release manifest, signed tag (§24.3, §25.3)
 - [ ] P-055 Texinfo manual builds to info, html, pdf (§8) (optional)
 

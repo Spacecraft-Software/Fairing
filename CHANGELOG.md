@@ -28,6 +28,12 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
   over the password agent and the splash lifecycle fails on any survivor not triaged in
   `doc/mutants.toml`. `RELEASING.md` is the release procedure, `SECURITY.md` states the
   support window, and the dev shell carries pdfTeX for `make pdf`.
+
+### Changed
+
+- `rust-version` is now 1.93, the Rust Guix ships, so `packaging/guix.scm` builds; CI's
+  `msrv` job checks every crate and both splash builds on it. The development toolchain
+  stays pinned at 1.97.0.
 - M4 operator and accessibility. Escape shows the journal over the splash: the boot's last
   40 entries at notice or higher from `journalctl -o json --follow`, newest at the bottom,
   scrolled with Up/Down, PgUp/PgDn and j/k; keyboards are read without a grab and the
