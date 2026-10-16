@@ -179,6 +179,20 @@ impl Presenter {
         &self.surface
     }
 
+    /// The live memory backend, if that is what draws.
+    ///
+    /// Test support: compiled only for this crate's tests and under the
+    /// `test-support` feature, so downstream tests can inject a failure with
+    /// [`MemoryBackend::fail_next`](crate::MemoryBackend::fail_next).
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub const fn memory_mut(&mut self) -> Option<&mut crate::MemoryBackend> {
+        match &mut self.surface {
+            Surface::Memory(memory) => Some(memory),
+            Surface::Drm(_) | Surface::Fbdev(_) => None,
+        }
+    }
+
     /// Which backend is in use.
     #[must_use]
     pub fn backend(&self) -> BackendKind {

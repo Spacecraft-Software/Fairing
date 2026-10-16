@@ -16,6 +16,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Only for downstream tests (MemoryBackend::fail_next); never enable it in a shipped build.
+test-support = []
+
 [dependencies]
 fairing-theme = { version = "0.1.0", path = "../fairing-theme" }
 # Every dependency below is qualified in DEPENDENCIES.md (§24.1).

@@ -16,7 +16,7 @@ pub struct MemoryBackend {
     format: PixelFormat,
     last: Option<Frame>,
     presented: u64,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fail_next: Option<RenderErrorKind>,
 }
 
@@ -32,14 +32,17 @@ impl MemoryBackend {
             format,
             last: None,
             presented: 0,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             fail_next: None,
         })
     }
 
     /// Makes the next `present` fail with `kind` (tests of the lost-output path).
-    #[cfg(test)]
-    pub(crate) const fn fail_next(&mut self, kind: RenderErrorKind) {
+    ///
+    /// Test support: compiled only for this crate's tests and under the
+    /// `test-support` feature, which downstream tests enable.
+    #[cfg(any(test, feature = "test-support"))]
+    pub const fn fail_next(&mut self, kind: RenderErrorKind) {
         self.fail_next = Some(kind);
     }
 
@@ -70,7 +73,7 @@ impl Backend for MemoryBackend {
     }
 
     fn present(&mut self, frame: &Frame) -> Result<(), RenderError> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         if let Some(kind) = self.fail_next.take() {
             return Err(RenderError::new(kind, "injected failure").on(BackendKind::Memory));
         }

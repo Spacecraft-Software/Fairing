@@ -2256,4 +2256,181 @@ mod tests {
             );
         });
     }
+
+    /// A memory presenter whose lost output is never re-acquired, so a
+    /// failure injected with `fail_next` reaches `Session::present`.
+    fn failing_output(plan: &Plan) -> Output {
+        let opened = memory(plan.choice, plan.memory_size).unwrap_or_else(|e| panic!("{e:?}"));
+        let compositor =
+            Compositor::with_theme(plan.selection, &plan.theme).unwrap_or_else(|e| panic!("{e}"));
+        let config = PresenterConfig {
+            choice: plan.choice,
+            reacquire_budget: Duration::ZERO,
+            reopen: nothing,
+            ..PresenterConfig::default()
+        };
+        Output::Pixels(
+            Presenter::new(opened.surface, compositor, config).unwrap_or_else(|e| panic!("{e}")),
+        )
+    }
+
+    /// Makes the next frame of `output` fail with `kind`.
+    fn fail_next(output: &mut Output, kind: RenderErrorKind) {
+        let Output::Pixels(presenter) = output else {
+            panic!("not a presenter");
+        };
+        presenter
+            .memory_mut()
+            .unwrap_or_else(|| panic!("not the memory backend"))
+            .fail_next(kind);
+    }
+
+    fn prompted() -> Scene {
+        Scene::new(10).with_prompt(Some(PromptView {
+            message: "Passphrase".to_owned(),
+            field: Field::Masked(0),
+            notice: None,
+        }))
+    }
+
+    #[test]
+    fn a_lost_output_is_reported_once_and_retried_every_frame() {
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::Initrd, None);
+        let mut output = failing_output(&plan);
+        let mut session = Session::new(0.0);
+        let mut outcome = blank();
+        let scene = Scene::new(10);
+        let lost = Duration::from_secs(10);
+        harness.with_env(Instant::now(), |env| {
+            let mut present =
+                |output: &mut Output, now| session.present(env, output, &scene, &mut outcome, now);
+            for (i, now) in [
+                lost,
+                lost + Duration::from_millis(33),
+                lost + BLIND_PROMPT_LIMIT * 3,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                fail_next(&mut output, RenderErrorKind::Lost);
+                assert_eq!(present(&mut output, now), Ok(()), "lost frame {i}");
+            }
+            assert_eq!(present(&mut output, lost + BLIND_PROMPT_LIMIT * 4), Ok(()));
+        });
+        assert_eq!(
+            harness.codes(),
+            ["OUTPUT_LOST"],
+            "said once, no prompt to strand"
+        );
+        assert_eq!(session.lost_since, None, "a frame landed");
+        assert_eq!(outcome.first_bar, Some(0.0));
+    }
+
+    #[test]
+    fn a_question_left_undrawn_past_the_limit_goes_to_the_console_agent() {
+        // Verifies: FRN-SRS-027
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::Initrd, None);
+        let mut output = failing_output(&plan);
+        let mut session = Session::new(0.0);
+        let mut outcome = blank();
+        let scene = prompted();
+        let lost = Duration::from_secs(10);
+        let results = harness.with_env(Instant::now(), |env| {
+            let mut lost_frame = |now| {
+                fail_next(&mut output, RenderErrorKind::Lost);
+                session.present(env, &mut output, &scene, &mut outcome, now)
+            };
+            [
+                lost_frame(lost),
+                lost_frame(lost + BLIND_PROMPT_LIMIT),
+                lost_frame(lost + BLIND_PROMPT_LIMIT + Duration::from_millis(1)),
+            ]
+        });
+        assert_eq!(results, [Ok(()), Ok(()), Err(Reason::AgentFailed)]);
+        assert_eq!(harness.codes(), ["OUTPUT_LOST", "ASK_BLIND"]);
+    }
+
+    #[test]
+    fn a_frame_drawn_between_losses_restarts_the_prompt_limit() {
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::Initrd, None);
+        let mut output = failing_output(&plan);
+        let mut session = Session::new(0.0);
+        let mut outcome = blank();
+        let scene = prompted();
+        let lost = Duration::from_secs(10);
+        harness.with_env(Instant::now(), |env| {
+            fail_next(&mut output, RenderErrorKind::Lost);
+            assert_eq!(
+                session.present(env, &mut output, &scene, &mut outcome, lost),
+                Ok(())
+            );
+            let drawn = lost + Duration::from_secs(1);
+            assert_eq!(
+                session.present(env, &mut output, &scene, &mut outcome, drawn),
+                Ok(())
+            );
+            fail_next(&mut output, RenderErrorKind::Lost);
+            let again = lost + BLIND_PROMPT_LIMIT + Duration::from_secs(1);
+            assert_eq!(
+                session.present(env, &mut output, &scene, &mut outcome, again),
+                Ok(())
+            );
+        });
+        assert!(
+            !harness.codes().contains(&"ASK_BLIND"),
+            "{:?}",
+            harness.codes()
+        );
+    }
+
+    #[test]
+    fn late_flips_are_dropped_frames_until_the_stall_limit() {
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::Initrd, None);
+        let mut output = failing_output(&plan);
+        let mut session = Session::new(0.0);
+        let mut outcome = blank();
+        let scene = Scene::new(10);
+        let first = Duration::from_secs(10);
+        let results = harness.with_env(Instant::now(), |env| {
+            let mut late = |now| {
+                fail_next(&mut output, RenderErrorKind::Timeout);
+                session.present(env, &mut output, &scene, &mut outcome, now)
+            };
+            [
+                late(first),
+                late(first + Duration::from_secs(1)),
+                late(first + FLIP_STALL_LIMIT),
+                late(first + FLIP_STALL_LIMIT + Duration::from_millis(1)),
+            ]
+        });
+        assert_eq!(results, [Ok(()), Ok(()), Ok(()), Err(Reason::RenderFailed)]);
+        assert_eq!(harness.codes(), ["FLIP_LATE", "RENDER_FAILED"]);
+        assert_eq!(outcome.first_bar, None, "no frame was drawn");
+    }
+
+    #[test]
+    fn any_other_failure_ends_the_run_at_once() {
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::Initrd, None);
+        let mut output = failing_output(&plan);
+        let mut session = Session::new(0.0);
+        let mut outcome = blank();
+        let scene = Scene::new(10);
+        let result = harness.with_env(Instant::now(), |env| {
+            fail_next(&mut output, RenderErrorKind::Io);
+            session.present(
+                env,
+                &mut output,
+                &scene,
+                &mut outcome,
+                Duration::from_secs(10),
+            )
+        });
+        assert_eq!(result, Err(Reason::RenderFailed));
+        assert_eq!(harness.codes(), ["RENDER_FAILED"]);
+    }
 }

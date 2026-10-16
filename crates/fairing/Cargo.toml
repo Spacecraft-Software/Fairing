@@ -43,6 +43,8 @@ signal-hook = { workspace = true }
 zbus = { workspace = true, optional = true }
 
 [dev-dependencies]
+# Test-only: MemoryBackend::fail_next for the splash's lost-output and late-flip paths.
+fairing-render = { version = "0.1.0", path = "../fairing-render", features = ["test-support"] }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
 tempfile = { workspace = true }
