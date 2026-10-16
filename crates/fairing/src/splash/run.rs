@@ -2124,6 +2124,7 @@ mod tests {
                 .check_dbus_deadline(env, DBUS_DEADLINE.saturating_sub(Duration::from_millis(1)));
             assert!(harness.codes().is_empty(), "{:?}", harness.codes());
             session.check_dbus_deadline(env, DBUS_DEADLINE);
+            assert_eq!(harness.codes(), ["DBUS_DEGRADED"], "at the deadline itself");
             session.check_dbus_deadline(env, DBUS_DEADLINE * 2);
             assert_eq!(harness.codes(), ["DBUS_DEGRADED"]);
         });
