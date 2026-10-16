@@ -2087,11 +2087,14 @@ mod tests {
         let started = Instant::now();
         let outcome = harness.run(&plan, false, Vec::new(), memory);
         assert_eq!(outcome.frames, 20);
-        // Nineteen waits of a period: no faster than 31 Hz, the top of the
-        // tolerance. A lower bound only, which load cannot break.
+        // Twenty frames are eighteen sleeps: the first frame is drawn at
+        // once and the first wait only anchors the schedule. Every later
+        // deadline is the anchor plus whole periods, so no faster than 31 Hz,
+        // the top of the tolerance. A lower bound only, which load cannot
+        // break.
         assert_eq!(SPLASH_HZ, 30);
         let elapsed = started.elapsed();
-        assert!(elapsed >= Duration::from_secs(19) / 31, "{elapsed:?}");
+        assert!(elapsed >= Duration::from_secs(18) / 31, "{elapsed:?}");
     }
 
     #[test]
