@@ -18,7 +18,7 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-084 SBOM and release manifest: CycloneDX from the locked inputs; `cargo xtask manifest` (identity, artifacts and checksums, provenance, verification summary, budgets, known issues, conformance); a release workflow on `v*` tags drafts the release with every asset
 - [ ] T-085 SECURITY.md support window, RELEASING.md (clean-environment installs from all three packages, the signed tag), CHANGELOG `[0.1.0]` ready to date; `make pdf` from the dev shell (P-055)
 - [x] T-086 Manual (Releasing, Budgets chapter), README, AGENTS, SKILL, CHANGELOG
-- [ ] T-087 Adversarial review folded in
+- [x] T-087 Adversarial review folded in
 - [ ] T-088 M5 pull request reviewed and merged
 - [ ] T-089 Time budgets measured on the T490s into `doc/measurements.toml` (maintainer)
 - [ ] T-091 Decide which build the initrd-binary budget binds: CI's `cargo build --release --no-default-features` measures 1,954,776 B (25.4 %, green), but nixpkgs' build of `fairing-initrd`, the copy the module puts in the initrd, measured 2,335,792 B locally on 2026-10-16 (10.9 %, amber) (maintainer)
