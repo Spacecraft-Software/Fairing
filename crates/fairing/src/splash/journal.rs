@@ -229,6 +229,11 @@ fn stop(child: &mut Child) {
 /// A journalctl stand-in for tests: a shell script in `dir` running
 /// `script`. Its interpreter is the `sh` found on `PATH`, since a build
 /// sandbox such as Guix's has no `/bin/sh`.
+///
+/// The executable is written by a `cp` child, never through a descriptor of
+/// this process: a test thread forking at that moment would inherit the
+/// descriptor, and exec of the script would fail with ETXTBSY until that
+/// child itself had exec'd.
 #[cfg(test)]
 pub(crate) fn fake_journalctl(dir: &std::path::Path, script: &str) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt as _;
@@ -239,9 +244,16 @@ pub(crate) fn fake_journalctl(dir: &std::path::Path, script: &str) -> std::path:
                 .find(|candidate| candidate.is_file())
         })
         .unwrap_or_else(|| std::path::PathBuf::from("/bin/sh"));
-    let path = dir.join("journalctl");
-    std::fs::write(&path, format!("#!{}\n{script}\n", sh.display()))
+    let source = dir.join("journalctl.sh");
+    std::fs::write(&source, format!("#!{}\n{script}\n", sh.display()))
         .unwrap_or_else(|e| panic!("{e}"));
+    let path = dir.join("journalctl");
+    let copied = std::process::Command::new("cp")
+        .arg(&source)
+        .arg(&path)
+        .status()
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(copied.success(), "cp wrote the stand-in");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
         .unwrap_or_else(|e| panic!("{e}"));
     path
