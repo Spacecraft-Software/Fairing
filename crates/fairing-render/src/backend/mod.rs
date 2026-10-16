@@ -319,8 +319,11 @@ mod tests {
         Size::new(64, 32).unwrap_or_else(|e| panic!("{e}"))
     }
 
+    /// The chain itself adds no wait between a failed DRM open and fbdev; the
+    /// figure on a real `/dev/fb0` is the hardware test below.
     #[test]
     fn chain_falls_through_failures_and_records_them() {
+        // Verifies: FRN-SRS-002
         let opened = open_chain(Choice::Auto.chain(), |kind| match kind {
             BackendKind::Drm => Err(RenderError::new(RenderErrorKind::NotFound, "no card")),
             BackendKind::Fbdev => {
@@ -333,7 +336,30 @@ mod tests {
         assert_eq!(opened.attempts[0].backend, BackendKind::Drm);
         assert_eq!(opened.attempts[0].error.backend(), Some(BackendKind::Drm));
         assert!(opened.elapsed >= opened.attempts[0].elapsed);
+        assert!(opened.elapsed.saturating_sub(opened.attempts[0].elapsed) < FBDEV_WITHIN);
         assert_eq!(opened.surface.format(), PixelFormat::Xrgb8888);
+    }
+
+    /// FRN-SRS-002's bound: from the DRM failure to an open framebuffer.
+    const FBDEV_WITHIN: std::time::Duration = std::time::Duration::from_millis(200);
+
+    /// Falls back to the real `/dev/fb0` after a DRM failure, within the bound;
+    /// a hardware run, not CI evidence. `cargo test -p fairing-render --
+    /// --ignored` on a free text console; it is red without `/dev/fb0`.
+    #[test]
+    #[ignore = "needs /dev/fb0 and a free text console"]
+    fn falls_back_to_the_real_framebuffer_within_200_ms() {
+        // Verifies: FRN-SRS-002
+        let opened = open_chain(Choice::Auto.chain(), |kind| match kind {
+            BackendKind::Drm => Err(RenderError::new(RenderErrorKind::NotFound, "DRM refused")),
+            BackendKind::Fbdev => fbdev::FbdevBackend::open().map(Surface::Fbdev),
+            BackendKind::Memory => unreachable!("not in the auto chain"),
+        })
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(opened.surface.kind(), BackendKind::Fbdev);
+        let fallback = opened.elapsed.saturating_sub(opened.attempts[0].elapsed);
+        assert!(fallback < FBDEV_WITHIN, "{fallback:?}");
+        opened.surface.close().unwrap_or_else(|e| panic!("{e}"));
     }
 
     #[test]

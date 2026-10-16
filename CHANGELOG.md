@@ -31,6 +31,19 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 
 ### Changed
 
+- G1: the maintainer baselined the 69 requirements on 2026-10-16. FRN-SRS-010 names the
+  first-boot curve until the cached duration is readable under `/sysroot`; FRN-SRS-032
+  names `fairing-handoff.service`; FRN-SRS-034 counts a rise in the failed-unit count
+  that lasts 200 ms, or a rescue or emergency start, not a failed unit already present;
+  FRN-SRS-090 names all four units; FRN-SRS-093 and the module now use
+  `PrivateTmp=disconnected` for `fairing.service` and `fairing-shutdown.service`, so
+  neither waits for tmpfiles setup and the /var mount; FRN-SRS-105 binds the Nix build of
+  `fairing-initrd`, which CI's `nix` job and the release workflow now measure (2,335,680 B,
+  10.9 % margin, amber). The malachite licence exception and the accepted Nickel
+  advisories are confirmed. 61 requirements are verified; 8 stay implemented until their
+  figures are measured on the T490s. New evidence: posture tests for FRN-SRS-100, 101,
+  103 and 104, module checks for FRN-SRS-090, and hardware tests for FRN-SRS-001, 002,
+  004 and 083. `fairing-theme`'s build script now carries `#![forbid(unsafe_code)]`.
 - `rust-version` is now 1.93, the Rust Guix ships, so `packaging/guix.scm` builds; CI's
   `msrv` job checks every crate and both splash builds on it. The development toolchain
   stays pinned at 1.97.0.

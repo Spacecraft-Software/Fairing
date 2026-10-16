@@ -13,6 +13,8 @@
 //! A malformed palette file is a build failure with a message naming the key,
 //! never a silently wrong colour.
 
+#![forbid(unsafe_code)]
+
 use std::env;
 use std::error::Error;
 use std::fmt::Write as _;

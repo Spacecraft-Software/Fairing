@@ -353,7 +353,7 @@ in
         CapabilityBoundingSet = "CAP_SYS_ADMIN CAP_SYS_TTY_CONFIG";
         ProtectSystem = "strict";
         ProtectHome = "yes";
-        PrivateTmp = "yes";
+        PrivateTmp = "disconnected";
         ReadWritePaths = "/var/lib/fairing /run/fairing";
         # Beyond FRN-SRS-093: nothing the splash does needs these.
         NoNewPrivileges = true;
@@ -417,7 +417,7 @@ in
         CapabilityBoundingSet = "CAP_SYS_ADMIN CAP_SYS_TTY_CONFIG";
         ProtectSystem = "strict";
         ProtectHome = "yes";
-        PrivateTmp = "yes";
+        PrivateTmp = "disconnected";
         NoNewPrivileges = true;
         PrivateNetwork = true;
         RestrictAddressFamilies = [ "AF_UNIX" ];

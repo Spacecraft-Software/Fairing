@@ -610,12 +610,13 @@ mod tests {
         assert!(error.to_string().contains("card-does-not-exist"), "{error}");
     }
 
-    /// Drives a real DRM device at the connector's preferred mode; a hardware smoke
+    /// Drives a real DRM device at the connector's preferred mode; a hardware
     /// run, not CI evidence. `cargo test -p fairing-render -- --ignored` on a free
     /// text console; it is red without a device, as it should be.
     #[test]
     #[ignore = "needs a DRM device and a free text console"]
     fn presents_two_frames_on_real_hardware_at_the_preferred_mode() {
+        // Verifies: FRN-SRS-001
         let mut backend = DrmBackend::open().unwrap_or_else(|e| panic!("{e}"));
         // Read the preferred mode independently of the backend's own choice.
         let card = Card::open(backend.path()).unwrap_or_else(|e| panic!("{e}"));

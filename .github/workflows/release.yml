@@ -48,15 +48,18 @@ jobs:
       - run: cargo xtask sbom
       - run: cargo xtask manifest --check
       - run: cargo xtask trace
-      # The two sizes are measured on the tag's own build, as CI's size job
-      # does; a budget never measured on the reference machine blocks the
-      # release (§22.3): its figure goes into doc/measurements.toml first.
+      # The two sizes are measured on the tag's own build, as CI does: the
+      # initrd binary as the flake's `fairing-initrd` (FRN-SRS-105 binds the
+      # Nix build the module ships), the theme by `fairing theme compile`. A
+      # budget never measured on the reference machine blocks the release
+      # (§22.3): its figure goes into doc/measurements.toml first.
+      - uses: cachix/install-nix-action@v31
       - name: budgets on this build
         run: |
-          cargo build --release --locked -p fairing --no-default-features --target-dir target/size-initrd
+          initrd=$(nix build .#fairing-initrd --no-update-lock-file --no-link --print-out-paths)
           cargo build --release --locked -p fairing --target-dir target/size-full
           target/size-full/release/fairing theme compile themes/steelbore.ncl --output target/steelbore.fairing --json > /dev/null
-          measured="initrd-binary=$(stat -c %s target/size-initrd/release/fairing),theme-artefact=$(stat -c %s target/steelbore.fairing)"
+          measured="initrd-binary=$(stat -c %s "$initrd/bin/fairing"),theme-artefact=$(stat -c %s target/steelbore.fairing)"
           cargo xtask budgets --release --measured "$measured"
       - name: checksums
         run: |

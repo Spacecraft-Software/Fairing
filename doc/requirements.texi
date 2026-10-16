@@ -5,7 +5,7 @@
 @node Requirements
 @chapter Requirements
 
-Sixty-nine requirements in eleven groups, every one at status draft until the G1 requirements gate baselines the set. Each group names the need it traces to and the scoping decision of 2026-10-06 that fixed it. The Steelbore Standard §20.6 sentence pattern applies throughout: a binding obligation is carried by shall, a prohibition by shall not.
+Sixty-nine requirements in eleven groups, baselined at the G1 requirements gate on 2026-10-16. A requirement is verified once its evidence has passed; one whose bound is a figure on the reference machine stays implemented until that figure is measured there. Each group names the need it traces to and the scoping decision of 2026-10-06 that fixed it. The Steelbore Standard §20.6 sentence pattern applies throughout: a binding obligation is carried by shall, a prohibition by shall not.
 
 Priority is mandatory, expected or optional; only the first two count toward the §17 progress figures. Verification is one of the four §21.1 methods --- test, analysis, inspection, review of design --- chosen when the requirement was written. Milestone names the plan item that discharges the requirement; Assurance appears only where a requirement belongs to a raised Category A subsystem (the password agent and the initrd lifecycle unit).
 
@@ -43,7 +43,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M1
 @end table
@@ -63,7 +63,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+implemented
 @item Milestone
 M1
 @end table
@@ -83,7 +83,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M1
 @end table
@@ -103,7 +103,7 @@ expected
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M1
 @end table
@@ -123,7 +123,7 @@ expected
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M1
 @end table
@@ -143,7 +143,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+implemented
 @item Milestone
 M1
 @end table
@@ -163,7 +163,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M1
 @end table
@@ -178,9 +178,9 @@ Source: FRN-NEED-002; decision 3 (hybrid progress). A time estimate in the initr
 @cindex FRN-SRS-010
 @table @asis
 @item Requirement
-In the initrd, the bar shall display 0.30 times the elapsed time divided by the cached initrd duration, clamped to the range 0.00 to 0.30.
+In the initrd, until @code{/sysroot/var/lib/fairing/boot-duration} can be read, the bar shall follow the first-boot curve of FRN-SRS-011; once it can be read, the bar shall display 0.30 times the elapsed time divided by the cached initrd duration, clamped to the range 0.00 to 0.30, and shall not decrease when it switches between the two.
 @item Rationale
-No D-Bus exists before switch-root; the cache is the best available signal. Scaled rather than clamped, so the initrd's share of the bar fills over the whole initrd instead of stalling at 30 % of it; the wording was amended in draft to the formula the design and the code use, for confirmation at G1. The cache is read from /sysroot/var/lib/fairing once the root is mounted; until then the first-boot curve applies.
+No D-Bus exists before switch-root; the cache is the best available signal. Scaled rather than clamped, so the initrd's share of the bar fills over the whole initrd instead of stalling at 30 % of it; the wording was amended in draft to the formula the design and the code use, for confirmation at G1. @code{/var/lib} does not exist before the root is mounted, so the cache is read from /sysroot/var/lib/fairing once it is; until then the first-boot curve applies, and FRN-SRS-013 keeps the switch from moving the bar back. Amended and baselined at G1 (2026-10-16).
 @item Source
 @ref{FRN-NEED-002}, decision 3.
 @item Priority
@@ -188,7 +188,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -208,7 +208,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -228,7 +228,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -248,7 +248,7 @@ mandatory
 @item Verification
 analysis
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -268,7 +268,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -288,7 +288,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -308,7 +308,7 @@ expected
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -328,7 +328,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -353,7 +353,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+implemented
 @item Milestone
 M3
 @item Assurance
@@ -375,7 +375,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M3
 @item Assurance
@@ -397,7 +397,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M3
 @item Assurance
@@ -419,7 +419,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M3
 @item Assurance
@@ -441,7 +441,7 @@ mandatory
 @item Verification
 analysis
 @item Status
-draft
+verified
 @item Milestone
 M3
 @item Assurance
@@ -463,7 +463,7 @@ mandatory
 @item Verification
 analysis
 @item Status
-draft
+verified
 @item Milestone
 M3
 @item Assurance
@@ -485,7 +485,7 @@ expected
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M3
 @item Assurance
@@ -507,7 +507,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M3
 @item Assurance
@@ -529,7 +529,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+implemented
 @item Milestone
 M3
 @item Assurance
@@ -551,7 +551,7 @@ expected
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M3
 @item Assurance
@@ -578,7 +578,7 @@ mandatory
 @item Verification
 inspection
 @item Status
-draft
+verified
 @item Milestone
 M2
 @item Assurance
@@ -600,7 +600,7 @@ mandatory
 @item Verification
 inspection
 @item Status
-draft
+verified
 @item Milestone
 M2
 @item Assurance
@@ -608,13 +608,13 @@ Category A (raised subsystem)
 @end table
 
 @anchor{FRN-SRS-032}
-@subheading FRN-SRS-032 --- fairing.service hands the screen to greetd, holds last frame
+@subheading FRN-SRS-032 --- A handoff unit stops the splash before greetd starts
 @cindex FRN-SRS-032
 @table @asis
 @item Requirement
-@code{fairing.service} shall be ordered @code{Before=greetd.service}, greetd's start shall stop @code{fairing.service} and wait for it to exit before greetd runs, and @code{fairing.service} shall hold DRM master and the last frame until it receives SIGTERM.
+@code{fairing.service} shall be ordered @code{Before=greetd.service}; @code{fairing-handoff.service}, a oneshot wanted by @code{greetd.service} and ordered @code{After=systemd-user-sessions.service} and @code{Before=greetd.service}, shall write @code{/run/fairing/handoff} and then stop @code{fairing.service}, waiting for it to exit, so that greetd starts only once the splash has gone; @code{fairing.service} shall hold DRM master and the last frame until it receives SIGTERM.
 @item Rationale
-systemd stops the splash at the exact moment the greeter starts. A @code{Conflicts=greetd.service} on the splash cannot do this: both units are wanted by the boot transaction, and systemd 255 resolves the conflicting jobs by deleting greetd's start (@code{systemd --test} on the unit pair, 2026-10-06), so greetd would never run. Amended in draft; for confirmation at G1.
+systemd stops the splash at the exact moment the greeter starts. A @code{Conflicts=greetd.service} on the splash cannot do this: both units are wanted by the boot transaction, and systemd 255 resolves the conflicting jobs by deleting greetd's start (@code{systemd --test} on the unit pair, 2026-10-06), so greetd would never run. The stop is a unit of its own, not an @code{ExecStartPre=} of greetd, because greetd is @code{Type=idle} and systemd holds its commands for the 5 s idle wait; it is ordered after @code{systemd-user-sessions.service}, as greetd is, because ordered after the splash alone it would run at the splash's @code{READY=1} and end it at the start of stage 2. Amended and baselined at G1 (2026-10-16).
 @item Source
 @ref{FRN-NEED-001}, decision 5.
 @item Priority
@@ -622,7 +622,7 @@ mandatory
 @item Verification
 inspection
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -642,19 +642,19 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+implemented
 @item Milestone
 M2
 @end table
 
 @anchor{FRN-SRS-034}
-@subheading FRN-SRS-034 --- Exits on a failed unit or the emergency target
+@subheading FRN-SRS-034 --- Exits when a unit fails or the emergency target starts
 @cindex FRN-SRS-034
 @table @asis
 @item Requirement
-When any unit enters the failed state, or @code{emergency.target} or @code{rescue.target} becomes active, Fairing shall exit within 1 s.
+When the number of failed units rises above its first reading and stays above it for 200 ms, or a start job for @code{emergency.target} or @code{rescue.target} is queued, Fairing shall exit within 1 s.
 @item Rationale
-Failures must never be hidden behind the splash.
+Failures must never be hidden behind the splash. A transition, not a state: a unit that failed before the splash started is already on the console, and a failed job alone is not a failed unit (a @code{Restart=} service or a device timeout recovers), so only a rise in @code{NFailedUnits} that lasts 200 ms counts. Amended and baselined at G1 (2026-10-16).
 @item Source
 @ref{FRN-NEED-001}, @ref{FRN-NEED-005}, decision 9.
 @item Priority
@@ -662,7 +662,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -682,7 +682,7 @@ expected
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M4
 @end table
@@ -702,7 +702,7 @@ expected
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -722,7 +722,7 @@ mandatory
 @item Verification
 analysis
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -747,7 +747,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -767,7 +767,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -787,7 +787,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+implemented
 @item Milestone
 M2
 @end table
@@ -807,7 +807,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -827,7 +827,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -847,7 +847,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -867,7 +867,7 @@ mandatory
 @item Verification
 inspection
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -887,7 +887,7 @@ expected
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -912,7 +912,7 @@ expected
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -932,7 +932,7 @@ expected
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M4
 @end table
@@ -952,7 +952,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M4
 @end table
@@ -972,7 +972,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M1
 @end table
@@ -997,7 +997,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M4
 @end table
@@ -1017,7 +1017,7 @@ expected
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M4
 @end table
@@ -1037,7 +1037,7 @@ expected
 @item Verification
 test
 @item Status
-draft
+implemented
 @item Milestone
 M4
 @end table
@@ -1057,7 +1057,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M4
 @end table
@@ -1082,7 +1082,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M4
 @end table
@@ -1102,7 +1102,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M4
 @end table
@@ -1122,7 +1122,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M4
 @end table
@@ -1142,7 +1142,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M4
 @end table
@@ -1167,7 +1167,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M1
 @end table
@@ -1187,7 +1187,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M1
 @end table
@@ -1207,7 +1207,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M1
 @end table
@@ -1227,7 +1227,7 @@ expected
 @item Verification
 test
 @item Status
-draft
+implemented
 @item Milestone
 M1
 @end table
@@ -1247,7 +1247,7 @@ expected
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M1
 @end table
@@ -1267,7 +1267,7 @@ expected
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M1
 @end table
@@ -1282,9 +1282,9 @@ Source: FRN-NEED-001; decision 8 (Bravais only for v1). The NixOS module and ini
 @cindex FRN-SRS-090
 @table @asis
 @item Requirement
-The NixOS module @code{steelbore.fairing} shall, when enabled, install the three units, compile the configured theme into the initrd, add the KMS and simpledrm modules to @code{boot.initrd.kernelModules}, and set the @code{quiet} and @code{splash} kernel parameters.
+The NixOS module @code{steelbore.fairing} shall, when enabled, install @code{fairing-initrd.service}, @code{fairing.service}, @code{fairing-handoff.service} and @code{fairing-shutdown.service}, compile the configured theme into the initrd, add the KMS and simpledrm modules to @code{boot.initrd.kernelModules}, and set the @code{quiet} and @code{splash} kernel parameters.
 @item Rationale
-One switch enables the whole feature.
+One switch enables the whole feature. Amended and baselined at G1 (2026-10-16).
 @item Source
 @ref{FRN-NEED-001}, decision 8.
 @item Priority
@@ -1292,7 +1292,7 @@ mandatory
 @item Verification
 inspection
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -1312,7 +1312,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -1332,7 +1332,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M3
 @end table
@@ -1342,9 +1342,9 @@ M3
 @cindex FRN-SRS-093
 @table @asis
 @item Requirement
-@code{fairing.service} shall run with @code{CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_TTY_CONFIG}, @code{ProtectSystem=strict}, @code{ProtectHome=yes}, @code{PrivateTmp=yes}, @code{ReadWritePaths=/var/lib/fairing /run/fairing}.
+@code{fairing.service} shall run with @code{CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_TTY_CONFIG}, @code{ProtectSystem=strict}, @code{ProtectHome=yes}, @code{PrivateTmp=disconnected}, @code{ReadWritePaths=/var/lib/fairing /run/fairing}.
 @item Rationale
-§3.3 least privilege; DRM master needs no more.
+§3.3 least privilege; DRM master needs no more. @code{PrivateTmp=disconnected} rather than @code{yes}: @code{yes} backs the private /tmp and /var/tmp on the host's and so orders the splash after @code{systemd-tmpfiles-setup.service} and the /var mount, late in stage 2. Amended and baselined at G1 (2026-10-16).
 @item Source
 @ref{FRN-NEED-001}, @ref{FRN-NEED-007}, decision 8, Steelbore Standard §3.3.
 @item Priority
@@ -1352,7 +1352,7 @@ mandatory
 @item Verification
 inspection
 @item Status
-draft
+verified
 @item Milestone
 M2
 @end table
@@ -1362,9 +1362,9 @@ M2
 @cindex FRN-SRS-105
 @table @asis
 @item Requirement
-The stripped release binary that the initrd carries, built without the theme tool and the D-Bus client, shall not exceed 2.5 MiB.
+The binary that the initrd carries, the @code{fairing-initrd} package of the flake built without the theme tool and the D-Bus client, shall not exceed 2.5 MiB.
 @item Rationale
-Every byte ships in the initrd; the Nickel evaluator and zbus are kept out of it by feature gates (roadmap decision of 2026-10-06), and the ceiling keeps them out. Steelbore Standard §22.1 declares binary size as a budget.
+Every byte ships in the initrd; the Nickel evaluator and zbus are kept out of it by feature gates (roadmap decision of 2026-10-06), and the ceiling keeps them out. Steelbore Standard §22.1 declares binary size as a budget. The budget binds the binary that ships, the Nix build, not a cargo build of the same features. Amended and baselined at G1 (2026-10-16).
 @item Source
 @ref{FRN-NEED-001}, Steelbore Standard §22.1.
 @item Priority
@@ -1372,7 +1372,7 @@ expected
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M5
 @end table
@@ -1397,7 +1397,7 @@ mandatory
 @item Verification
 inspection
 @item Status
-draft
+verified
 @item Milestone
 M0
 @end table
@@ -1417,7 +1417,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M3
 @end table
@@ -1437,7 +1437,7 @@ mandatory
 @item Verification
 test
 @item Status
-draft
+verified
 @item Milestone
 M3
 @item Assurance
@@ -1459,7 +1459,7 @@ mandatory
 @item Verification
 inspection
 @item Status
-draft
+verified
 @item Milestone
 M0
 @end table
@@ -1479,7 +1479,7 @@ mandatory
 @item Verification
 analysis
 @item Status
-draft
+verified
 @item Milestone
 M3
 @item Assurance

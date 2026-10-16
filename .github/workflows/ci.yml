@@ -190,10 +190,11 @@ jobs:
       - run: ~/.config/guix/current/bin/guix download "file://$PWD/$(ls target/dist/fairing-*.tar.gz)"
       - run: ~/.config/guix/current/bin/guix build -f packaging/guix.scm
 
-  # The size budgets (§22, doc/budgets.toml): the stripped release binary the
-  # initrd carries is at most 2.5 MiB (FRN-SRS-105) and the compiled reference
-  # theme at most 4 MiB (FRN-SRS-047); `cargo xtask budgets` fails a red or
-  # exceeded margin. The other two builds are measured and reported.
+  # The size budgets (§22, doc/budgets.toml): the compiled reference theme is
+  # at most 4 MiB (FRN-SRS-047); `cargo xtask budgets` fails a red or exceeded
+  # margin. The three cargo builds are measured and reported only: the 2.5 MiB
+  # ceiling of FRN-SRS-105 binds the Nix build the module ships, which the
+  # `nix` job measures (G1, T-091).
   size:
     runs-on: ubuntu-latest
     needs: fmt
@@ -221,10 +222,10 @@ jobs:
         run: |
           target/size-full/release/fairing theme compile themes/steelbore.ncl --output target/steelbore.fairing --json > target/theme-compile.json
           stat -c %s target/steelbore.fairing > target/theme-artefact.bytes
-      # Verifies: FRN-SRS-105, FRN-SRS-047
+      # Verifies: FRN-SRS-047
       - name: budgets and margins (§22)
         run: |
-          measured="initrd-binary=$(cat target/size-initrd.bytes),theme-artefact=$(cat target/theme-artefact.bytes)"
+          measured="theme-artefact=$(cat target/theme-artefact.bytes)"
           {
             echo '```'
             cargo xtask budgets --measured "$measured"
@@ -250,6 +251,16 @@ jobs:
           extra_nix_config: |
             system-features = nixos-test benchmark big-parallel kvm
       - run: nix flake check -L --no-update-lock-file
+      # FRN-SRS-105 binds the binary the initrd carries: the flake's
+      # `fairing-initrd`, built by nixpkgs as the module builds it.
+      # Verifies: FRN-SRS-105
+      - name: the initrd binary as shipped (§22)
+        run: |
+          out=$(nix build .#fairing-initrd --no-update-lock-file --no-link --print-out-paths)
+          bytes=$(stat -c %s "$out/bin/fairing")
+          echo "| fairing-initrd (Nix) | $bytes |" >> "$GITHUB_STEP_SUMMARY"
+          rustup toolchain install
+          cargo xtask budgets --measured "initrd-binary=$bytes"
 
   # The two parsers of untrusted bytes, under libFuzzer: two minutes a
   # target on a pull request, ten on main and on a release tag. A crash
