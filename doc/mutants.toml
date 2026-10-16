@@ -141,3 +141,139 @@ function = "Watcher::read"
 replacement = "<="
 verdict = "equivalent"
 reason = "The extra pass happens only once the MAX_FILE + 1 buffer is full, and then reads into an empty slice; read(2) of zero bytes from a regular file (the only kind read) returns 0, which breaks out with the same length."
+
+# crates/fairing/src/splash/console.rs
+
+[[survivor]]
+file = "crates/fairing/src/splash/console.rs"
+function = "Sink::open"
+replacement = "^"
+verdict = "equivalent"
+reason = "O_WRONLY, O_APPEND, O_NOCTTY, O_NONBLOCK and O_CLOEXEC are distinct single bits, so exclusive or of them equals their union; covers all four operators (columns 25 of lines 67 to 70)."
+
+[[survivor]]
+file = "crates/fairing/src/splash/console.rs"
+function = "<impl Write for Sink>::flush"
+replacement = "Ok(())"
+verdict = "equivalent"
+reason = "Neither target buffers: std's File::flush and Stderr::flush both return Ok(()) without a system call, so the forwarded call and the constant are the same."
+
+# crates/fairing/src/splash/dbus.rs
+
+[[survivor]]
+file = "crates/fairing/src/splash/dbus.rs"
+function = "poll"
+replacement = "-"
+verdict = "equivalent"
+reason = "A past deadline only stops block_on_until waiting after its first poll, and Connection::close is ready on that poll: it takes an uncontended write lock (nothing else writes once the polls have stopped) and shuts the socket down synchronously. The '*' at the same column is killed."
+
+[[survivor]]
+file = "crates/fairing/src/splash/dbus.rs"
+function = "watch_signals"
+replacement = "=="
+verdict = "unobservable"
+reason = "The sender comparison runs only on a bus connection, where the owner of org.freedesktop.systemd1 is known; the fake manager is served peer-to-peer, where there is no owner and the comparison is skipped, so it shows only on a real system bus."
+
+# crates/fairing/src/splash/journal.rs
+
+[[survivor]]
+file = "crates/fairing/src/splash/journal.rs"
+function = "Journal::spawn"
+replacement = "^"
+verdict = "equivalent"
+reason = "std creates the child's stdout pipe with O_CLOEXEC only, never O_NONBLOCK, so exclusive or with O_NONBLOCK sets the bit exactly as the union does. The '&' at the same column is killed."
+
+[[survivor]]
+file = "crates/fairing/src/splash/journal.rs"
+function = "Journal::read"
+replacement = "true"
+verdict = "equivalent"
+reason = "Covers both guards (186:27 WouldBlock, 187:27 Interrupted): a non-blocking read of the pipe's owned read end fails only with EAGAIN, never EINTR (it does not sleep) nor EBADF, EFAULT or EIO, so the arms these guards choose between are never reached by another error."
+
+[[survivor]]
+file = "crates/fairing/src/splash/journal.rs"
+function = "Journal::read"
+replacement = "false"
+verdict = "equivalent"
+reason = "Covers the Interrupted guard (187:27): a non-blocking pipe read does not sleep, so it never returns EINTR and the retry arm is never taken. The same replacement of the WouldBlock guard (186:27) is killed."
+
+[[survivor]]
+file = "crates/fairing/src/splash/journal.rs"
+function = "Journal::read"
+replacement = "!="
+verdict = "equivalent"
+reason = "Covers the Interrupted comparison (187:36): it is reached only by an error other than EAGAIN, and a non-blocking read of the pipe's owned read end returns no other. The '!=' of the WouldBlock comparison (186:36) is killed."
+
+# crates/fairing/src/splash/keys.rs
+
+[[survivor]]
+file = "crates/fairing/src/splash/keys.rs"
+function = "Navigation::scan"
+replacement = "^"
+verdict = "equivalent"
+reason = "O_RDONLY is 0 and O_NONBLOCK, O_CLOEXEC and O_NOCTTY are distinct single bits, so exclusive or of them equals their union; covers the three operators at 125:32, 125:51 and 125:69. Every '&' is killed."
+
+# crates/fairing/src/splash/run.rs
+
+[[survivor]]
+file = "crates/fairing/src/splash/run.rs"
+function = "start"
+replacement = ""
+verdict = "equivalent"
+reason = "Covers deleting `hz` (523:21): PresenterConfig::default() is 30 Hz, which is SPLASH_HZ. Deleting origin, choice or reacquire_budget is killed by the_presenter_is_configured_for_the_splash."
+
+[[survivor]]
+file = "crates/fairing/src/splash/run.rs"
+function = "Session::present"
+replacement = "true"
+verdict = "unobservable"
+reason = "Every Err arm of Session::present needs the presenter to fail, which on the memory backend happens only through MemoryBackend::fail_next, a cfg(test) item of fairing-render this crate cannot call; a lost output or a late flip shows only on a real DRM or fbdev device."
+
+[[survivor]]
+file = "crates/fairing/src/splash/run.rs"
+function = "Session::present"
+replacement = "false"
+verdict = "unobservable"
+reason = "The is_lost guard is reached only when the presenter fails, which the memory backend never does outside fairing-render's own tests; a lost output shows only on a real DRM or fbdev device."
+
+[[survivor]]
+file = "crates/fairing/src/splash/run.rs"
+function = "Session::present"
+replacement = ""
+verdict = "unobservable"
+reason = "Covers the three deleted '!' (948:20 lost_output_reported, 975:64 stall.late, 976:24 late_flip_reported), all in the error arms, which only a failing DRM or fbdev presenter reaches; the memory backend cannot fail from this crate."
+
+[[survivor]]
+file = "crates/fairing/src/splash/run.rs"
+function = "Session::present"
+replacement = "||"
+verdict = "unobservable"
+reason = "Covers 960:45 (prompt and lost-output time) and 975:61 (timeout and stall), both in error arms only a failing DRM or fbdev presenter reaches; the memory backend cannot fail from this crate."
+
+[[survivor]]
+file = "crates/fairing/src/splash/run.rs"
+function = "Session::present"
+replacement = "<"
+verdict = "unobservable"
+reason = "The BLIND_PROMPT_LIMIT comparison (960:74) is in the lost-output arm, which only a DRM or fbdev output lost mid-swap reaches; the memory backend cannot fail from this crate."
+
+[[survivor]]
+file = "crates/fairing/src/splash/run.rs"
+function = "Session::present"
+replacement = "=="
+verdict = "unobservable"
+reason = "The BLIND_PROMPT_LIMIT comparison (960:74) is in the lost-output arm, which only a DRM or fbdev output lost mid-swap reaches; the memory backend cannot fail from this crate."
+
+[[survivor]]
+file = "crates/fairing/src/splash/run.rs"
+function = "Session::present"
+replacement = ">="
+verdict = "unobservable"
+reason = "The BLIND_PROMPT_LIMIT comparison (960:74) is in the lost-output arm, which only a DRM or fbdev output lost mid-swap reaches; the memory backend cannot fail from this crate."
+
+[[survivor]]
+file = "crates/fairing/src/splash/run.rs"
+function = "Session::present"
+replacement = "!="
+verdict = "unobservable"
+reason = "The Timeout comparison (975:33) is in the error arm, and only the DRM backend's pending page flip returns Timeout; the memory backend cannot fail from this crate."

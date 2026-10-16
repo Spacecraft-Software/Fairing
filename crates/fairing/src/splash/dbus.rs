@@ -781,6 +781,62 @@ mod tests {
     }
 
     #[test]
+    fn an_address_with_more_than_a_path_is_refused() {
+        assert!(check_bus("unix:path=/tmp/manager,guid=0123").is_err());
+        assert!(check_bus("unix:path=").is_err());
+    }
+
+    #[test]
+    fn a_job_that_stops_and_runs_again_is_new_again() {
+        let mut order = JobOrder::default();
+        assert_eq!(order.newest(&[job(7, "running")]).map(|j| j.0), Some(7));
+        assert_eq!(order.newest(&[job(5, "running")]).map(|j| j.0), Some(5));
+        // 7 stopped running a poll ago; running again, it started last.
+        let both = [job(5, "running"), job(7, "running")];
+        assert_eq!(order.newest(&both).map(|j| j.0), Some(7));
+        let both = [job(9, "running"), job(5, "running")];
+        assert_eq!(order.newest(&both).map(|j| j.0), Some(9));
+    }
+
+    #[test]
+    fn a_waker_woken_by_reference_ends_the_wait() {
+        /// Pending until a thread wakes it, by reference, 20 ms after the first poll.
+        struct Later(
+            Option<Arc<std::sync::atomic::AtomicBool>>,
+            Arc<std::sync::atomic::AtomicBool>,
+        );
+        impl Future for Later {
+            type Output = ();
+            fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+                if self.1.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Poll::Ready(());
+                }
+                if let Some(done) = self.0.take() {
+                    let waker = cx.waker().clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(20));
+                        done.store(true, std::sync::atomic::Ordering::SeqCst);
+                        waker.wake_by_ref();
+                    });
+                }
+                Poll::Pending
+            }
+        }
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let started = Instant::now();
+        let output = block_on_until(
+            Later(Some(Arc::clone(&done)), done),
+            started + Duration::from_secs(10),
+        );
+        assert_eq!(output, Some(()));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "woken, not timed out: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
     fn the_private_socket_is_refused_however_it_is_spelt() {
         for spelling in [
             "unix:path=/run/systemd/private",

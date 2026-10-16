@@ -211,20 +211,18 @@ mod tests {
         assert_eq!(nav(KEY_ESC, 1, true), None, "another program's chord");
     }
 
-    #[test]
-    fn keyboards_are_read_without_a_grab_and_chords_are_left_alone() {
-        // Verifies: FRN-SRS-063
-        let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let sysfs = root.path().join("sys");
-        let dev = root.path().join("dev");
-        let caps = sysfs.join("event4/device/capabilities");
+    /// Lists a keyboard `name` in the fake sysfs tree under `root`, with a
+    /// FIFO for its node, and returns the node.
+    fn keyboard(root: &Path, name: &str) -> PathBuf {
+        let caps = root.join("sys").join(name).join("device/capabilities");
+        let dev = root.join("dev");
         fs::create_dir_all(&caps).unwrap_or_else(|e| panic!("{e}"));
         fs::create_dir_all(&dev).unwrap_or_else(|e| panic!("{e}"));
         fs::write(caps.join("ev"), "120013\n").unwrap_or_else(|e| panic!("{e}"));
         fs::write(caps.join("key"), "fffffffffffffffe\n").unwrap_or_else(|e| panic!("{e}"));
         // A FIFO stands in for the event node: it can be opened like one,
         // and a grab, which the overlay never attempts, would fail on it.
-        let node = dev.join("event4");
+        let node = dev.join(name);
         rustix::fs::mknodat(
             rustix::fs::CWD,
             &node,
@@ -233,6 +231,96 @@ mod tests {
             0,
         )
         .unwrap_or_else(|e| panic!("{e}"));
+        node
+    }
+
+    /// Writes `events` to `writer` and returns the keys `keys` reads.
+    fn press(keys: &mut Navigation, writer: &mut fs::File, events: &[(u16, i32)]) -> Vec<Nav> {
+        let mut bytes = Vec::new();
+        for &(code, value) in events {
+            bytes.extend(event(code, value));
+        }
+        writer.write_all(&bytes).unwrap_or_else(|e| panic!("{e}"));
+        let mut seen = Vec::new();
+        keys.read(|key| seen.push(key));
+        seen
+    }
+
+    #[test]
+    fn every_modifier_makes_a_chord_and_is_forgotten_when_asked() {
+        let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let node = keyboard(root.path(), "event4");
+        let mut keys = Navigation::new(&root.path().join("sys"), &root.path().join("dev"));
+        keys.scan(Duration::ZERO);
+        assert_eq!(keys.keyboards(), 1);
+        let mut writer = fs::OpenOptions::new()
+            .write(true)
+            .open(&node)
+            .unwrap_or_else(|e| panic!("{e}"));
+        for modifier in [
+            KEY_LEFTCTRL,
+            KEY_RIGHTCTRL,
+            KEY_LEFTALT,
+            KEY_RIGHTALT,
+            KEY_LEFTMETA,
+            KEY_RIGHTMETA,
+        ] {
+            assert_eq!(
+                press(&mut keys, &mut writer, &[(modifier, 1), (KEY_DOWN, 1)]),
+                [],
+                "{modifier} held makes a chord"
+            );
+            // Still held at the next read: the chord outlives one batch.
+            assert_eq!(
+                press(&mut keys, &mut writer, &[(KEY_DOWN, 1)]),
+                [],
+                "{modifier}"
+            );
+            assert_eq!(
+                press(&mut keys, &mut writer, &[(modifier, 0), (KEY_DOWN, 1)]),
+                [Nav::Down],
+                "{modifier} let go"
+            );
+        }
+        assert_eq!(press(&mut keys, &mut writer, &[(KEY_LEFTALT, 1)]), []);
+        keys.release_modifiers();
+        assert_eq!(press(&mut keys, &mut writer, &[(KEY_UP, 1)]), [Nav::Up]);
+        assert_eq!(press(&mut keys, &mut writer, &[(KEY_LEFTCTRL, 1)]), []);
+        keys.close();
+        assert_eq!(keys.keyboards(), 0, "closed");
+        // Opened again, the old chord is gone too.
+        keys.scan(RESCAN);
+        assert_eq!(keys.keyboards(), 1);
+        assert_eq!(press(&mut keys, &mut writer, &[(KEY_UP, 1)]), [Nav::Up]);
+    }
+
+    #[test]
+    fn keyboards_are_opened_close_on_exec_and_looked_for_once_a_second() {
+        let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        keyboard(root.path(), "event4");
+        let mut keys = Navigation::new(&root.path().join("sys"), &root.path().join("dev"));
+        keys.scan(Duration::ZERO);
+        assert_eq!(keys.keyboards(), 1);
+        let (_, fd) = &keys.open[0];
+        let fd_flags = rustix::io::fcntl_getfd(fd).unwrap_or_else(|e| panic!("{e}"));
+        assert!(fd_flags.contains(rustix::io::FdFlags::CLOEXEC));
+        let status = rustix::fs::fcntl_getfl(fd).unwrap_or_else(|e| panic!("{e}"));
+        assert!(status.contains(OFlags::NONBLOCK));
+        // One plugged in now is not seen before the second is up.
+        keyboard(root.path(), "event5");
+        keys.scan(Duration::from_millis(500));
+        assert_eq!(keys.keyboards(), 1);
+        keys.scan(RESCAN);
+        assert_eq!(keys.keyboards(), 2);
+    }
+
+    #[test]
+    fn keyboards_are_read_without_a_grab_and_chords_are_left_alone() {
+        // Verifies: FRN-SRS-063
+        let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let sysfs = root.path().join("sys");
+        let dev = root.path().join("dev");
+        let node = keyboard(root.path(), "event4");
         let mut keys = Navigation::new(&sysfs, &dev);
         keys.scan(Duration::ZERO);
         assert_eq!(keys.keyboards(), 1);
