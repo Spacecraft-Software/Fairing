@@ -37,9 +37,11 @@ that do not exist yet.
 - Budgets: `cargo xtask budgets` (CI passes `--measured`), `cargo xtask budgets-texi --check`
 - Coverage: `cargo llvm-cov --workspace --exclude xtask --locked --json --summary-only
   --output-path target/llvm-cov.json`, then `cargo xtask coverage` (80 % per crate)
-- Mutation: `cargo mutants -p fairing-askpass` and `cargo mutants -p fairing --file
-  'crates/fairing/src/splash/**'`, then `cargo xtask mutants --outcomes
-  mutants.out/outcomes.json` (weekly in `.github/workflows/mutants.yml`)
+- Mutation: `cargo mutants -p fairing-askpass`, `cargo mutants -p fairing --file
+  'crates/fairing/src/splash/**' --exclude crates/fairing/src/splash/dbus_off.rs`, and
+  `dbus_off.rs` alone with `--no-default-features` (it exists only without `dbus`); then
+  `cargo xtask mutants --outcomes mutants.out/outcomes.json` on each (weekly in
+  `.github/workflows/mutants.yml`)
 - Release archive: `cargo xtask dist [--check]` (stamps the three package definitions),
   `cargo xtask sbom`, `cargo xtask manifest [--check]`; the procedure is `RELEASING.md`
 - Manual: `make check` (zero makeinfo warnings), `make info html`

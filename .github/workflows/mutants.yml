@@ -29,13 +29,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scope: [askpass, splash]
+        scope: [askpass, splash, splash-no-dbus]
         shard: [0, 1, 2, 3]
         include:
           - scope: askpass
             args: --package fairing-askpass
           - scope: splash
-            args: --package fairing --file 'crates/fairing/src/splash/**'
+            args: >-
+              --package fairing --file 'crates/fairing/src/splash/**'
+              --exclude crates/fairing/src/splash/dbus_off.rs
+          # The stand-in for the D-Bus client exists only in the initrd
+          # build, without the `dbus` feature.
+          - scope: splash-no-dbus
+            args: >-
+              --package fairing --file crates/fairing/src/splash/dbus_off.rs
+              --no-default-features
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install
