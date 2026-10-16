@@ -215,7 +215,15 @@ impl Journal {
     }
 
     /// Stops journalctl and reaps it.
-    pub fn stop(mut self) {
+    pub fn stop(self) {
+        drop(self);
+    }
+}
+
+/// journalctl never outlives its reader: a dropped [`Journal`] kills and
+/// reaps it (a test that fails before [`Journal::stop`] included).
+impl Drop for Journal {
+    fn drop(&mut self) {
         stop(&mut self.child);
     }
 }
@@ -383,8 +391,8 @@ mod tests {
         let mut entries = Vec::new();
         let mut f = |e: Entry| entries.push(e);
         journal.take("x".repeat(MAX_LINE + 1).as_bytes(), &mut f);
-        // The rest of the long line, in pieces, one of which is an entry.
-        journal.take(b"still the long line ", &mut f);
+        // The rest of the long line, in pieces that would parse as an entry
+        // on their own: only the skip drops them.
         journal.take(ENTRY.as_bytes(), &mut f);
         journal.take(b"\n", &mut f);
         // The next line is read again.
@@ -422,7 +430,18 @@ mod tests {
             journal.read(&mut ignore).unwrap_or(false),
             "the budget is spent before the end is seen"
         );
-        assert!(!journal.read(&mut ignore).unwrap_or(true), "then the end");
+        // Then the end. Not necessarily at the next read: a child another
+        // test thread forks while this pipe was being made holds its write end
+        // until that child execs, which on a loaded machine can take a while.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut open = true;
+        while open && Instant::now() < deadline {
+            open = journal.read(&mut ignore).unwrap_or(false);
+            if open {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        assert!(!open, "then the end");
         journal.stop();
     }
 

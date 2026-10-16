@@ -2036,7 +2036,6 @@ mod tests {
 
     #[test]
     fn the_first_frame_is_timed_from_process_start_in_milliseconds() {
-        // Verifies: FRN-SRS-004
         let harness = Harness::new();
         let plan = harness.plan(Stage::Initrd, Some(Duration::from_millis(30)));
         let started = Instant::now();
@@ -2055,8 +2054,11 @@ mod tests {
         let outcome = harness.run(&plan, true, Vec::new(), memory);
         let bound = started.elapsed().as_secs_f64() * 1000.0;
         let release = outcome.release_ms.unwrap_or_default();
-        // A frame drawn and the output closed take more than a microsecond.
+        // A frame drawn and the output closed take more than a microsecond,
+        // and on the memory backend far less than the 100 ms the requirement
+        // allows.
         assert!(release > 0.001 && release <= bound, "{release} ms");
+        assert!(release < 100.0, "released in {release} ms");
     }
 
     #[test]
@@ -2080,20 +2082,20 @@ mod tests {
 
     #[test]
     fn the_loop_keeps_to_thirty_frames_a_second() {
-        // Verifies: FRN-SRS-005
         let harness = Harness::new();
         let plan = harness.plan(Stage::Initrd, Some(Duration::from_millis(200)));
         let started = Instant::now();
         let outcome = harness.run(&plan, false, Vec::new(), memory);
         assert_eq!(outcome.frames, 20);
-        // Nineteen waits of a thirtieth of a second, with room to spare.
+        // Nineteen waits of a period: no faster than 31 Hz, the top of the
+        // tolerance. A lower bound only, which load cannot break.
+        assert_eq!(SPLASH_HZ, 30);
         let elapsed = started.elapsed();
-        assert!(elapsed >= Duration::from_millis(400), "{elapsed:?}");
+        assert!(elapsed >= Duration::from_secs(19) / 31, "{elapsed:?}");
     }
 
     #[test]
     fn the_cache_is_looked_for_once_a_second_and_read_once() {
-        // Verifies: FRN-SRS-015
         let harness = Harness::new();
         let plan = harness.plan(Stage::System, None);
         let path = plan.paths.state.join(DURATIONS_FILE);
@@ -2154,6 +2156,9 @@ mod tests {
         assert_eq!(session.navigate(Duration::ZERO, false), None, "no overlay");
         let mut keys = Navigation::new(&sysfs, &dev);
         keys.scan(Duration::ZERO);
+        // Opening a FIFO to write blocks until it has a reader: without the
+        // keyboard open the test would hang, not fail.
+        assert_eq!(keys.keyboards(), 1, "the keyboard is opened");
         session.keys = Some(keys);
         session.overlay = Some(Overlay::new(PathBuf::from("/nonexistent/journalctl")));
         let mut writer = std::fs::OpenOptions::new()
@@ -2195,7 +2200,6 @@ mod tests {
 
     #[test]
     fn text_lines_without_a_question_never_time_out() {
-        // Verifies: FRN-SRS-071
         let harness = Harness::new();
         let console = harness.dir.path().join("console");
         std::fs::write(&console, b"").unwrap_or_else(|e| panic!("{e}"));
@@ -2329,7 +2333,6 @@ mod tests {
 
     #[test]
     fn a_question_left_undrawn_past_the_limit_goes_to_the_console_agent() {
-        // Verifies: FRN-SRS-027
         let harness = Harness::new();
         let plan = harness.plan(Stage::Initrd, None);
         let mut output = failing_output(&plan);

@@ -71,8 +71,8 @@ jobs:
       - run: rustup toolchain install 1.93.0 --profile minimal
       - uses: Swatinem/rust-cache@v2
       - run: cargo +1.93.0 check --workspace --all-targets --all-features --locked
-      - run: cargo +1.93.0 check -p fairing --no-default-features --features dbus --locked
-      - run: cargo +1.93.0 check -p fairing --no-default-features --locked
+      - run: cargo +1.93.0 check -p fairing --all-targets --no-default-features --features dbus --locked
+      - run: cargo +1.93.0 check -p fairing --all-targets --no-default-features --locked
 
   # Line coverage of every product crate is at least 80 % (§21); the files
   # that only run against a device are listed, with reasons, in
