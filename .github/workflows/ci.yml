@@ -55,6 +55,19 @@ jobs:
       - run: cargo test -p fairing --no-default-features --features dbus --locked
       - run: cargo test -p fairing --no-default-features --locked
 
+  # The declared minimum Rust (`rust-version` in Cargo.toml), which the Guix
+  # package builds with: every crate, every target, both splash builds.
+  msrv:
+    runs-on: ubuntu-latest
+    needs: fmt
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.93.0 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +1.93.0 check --workspace --all-targets --all-features --locked
+      - run: cargo +1.93.0 check -p fairing --no-default-features --features dbus --locked
+      - run: cargo +1.93.0 check -p fairing --no-default-features --locked
+
   # Line coverage of every product crate is at least 80 % (§21); the files
   # that only run against a device are listed, with reasons, in
   # xtask/src/coverage.rs and nowhere else.

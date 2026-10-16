@@ -247,7 +247,8 @@ will not be green there.
 
 ## Environment expectations
 
-- Toolchain pinned by `rust-toolchain.toml` (1.97.0, rustfmt, clippy); edition 2024;
+- Toolchain pinned by `rust-toolchain.toml` (1.97.0, rustfmt, clippy); edition 2024; the
+  declared minimum (`rust-version`) is 1.93, Guix's Rust, checked by CI's `msrv` job;
   `Cargo.lock` is committed and `--locked` is the norm.
 - `cargo-deny`, `cargo-audit`, `reuse`, `texinfo` (makeinfo/texi2any) and `nushell` come
   from `nix develop`. Without Nix: `cargo install --locked cargo-deny cargo-audit`,
