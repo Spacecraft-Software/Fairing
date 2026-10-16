@@ -56,7 +56,8 @@ pub struct Survivor {
     pub file: String,
     /// The function the mutant is in.
     pub function: String,
-    /// What cargo-mutants put in its place.
+    /// What cargo-mutants put in its place, empty for a deletion.
+    #[serde(default)]
     pub replacement: String,
     /// Why it stays.
     pub verdict: Verdict,
@@ -164,7 +165,9 @@ pub fn untriaged<'a>(outcomes: &'a Outcomes, triage: &Triage) -> Vec<&'a Missed>
         .collect()
 }
 
-/// Reads and checks the triage file: every entry has a reason.
+/// Reads and checks the triage file: every entry names its file and
+/// function and has a reason. The replacement may be empty: cargo-mutants
+/// writes `""` for a mutant that deletes code, such as `delete !`.
 ///
 /// # Errors
 ///
@@ -172,7 +175,7 @@ pub fn untriaged<'a>(outcomes: &'a Outcomes, triage: &Triage) -> Vec<&'a Missed>
 pub fn load_triage(path: &std::path::Path) -> Result<Triage, Failure> {
     let triage: Triage = toml::from_str(&paths::read_text(path, "cargo xtask mutants")?)?;
     if let Some(bad) = triage.survivor.iter().find(|s| {
-        [&s.file, &s.function, &s.replacement, &s.reason]
+        [&s.file, &s.function, &s.reason]
             .iter()
             .any(|f| f.trim().is_empty())
     }) {
@@ -183,7 +186,7 @@ pub fn load_triage(path: &std::path::Path) -> Result<Triage, Failure> {
                 bad.replacement,
                 bad.file
             ),
-            "every survivor names file, function, replacement and reason",
+            "every survivor names file, function and reason",
         ));
     }
     Ok(triage)
@@ -317,6 +320,22 @@ mod tests {
         let outcomes = outcomes(&document("Failure", &[])).unwrap_or_else(|e| panic!("{e}"));
         assert!(!outcomes.baseline_passed);
         assert!(super::outcomes(&serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn a_deletion_is_triaged_with_an_empty_replacement() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let path = dir.path().join("mutants.toml");
+        let entry = |reason: &str| {
+            format!(
+                "[[survivor]]\nfile = \"a.rs\"\nfunction = \"f\"\nreplacement = \"\"\n\
+                 verdict = \"unobservable\"\nreason = \"{reason}\"\n"
+            )
+        };
+        std::fs::write(&path, entry("needs a device")).unwrap_or_else(|e| panic!("{e}"));
+        assert!(load_triage(&path).is_ok());
+        std::fs::write(&path, entry(" ")).unwrap_or_else(|e| panic!("{e}"));
+        assert!(load_triage(&path).is_err());
     }
 
     #[test]

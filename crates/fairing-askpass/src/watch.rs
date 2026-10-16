@@ -453,8 +453,11 @@ mod tests {
     #[test]
     fn links_and_fifos_are_not_read() {
         let (dir, mut watcher) = open();
+        // A target that would be a usable question if it were read through
+        // the link.
         let target = dir.path().join("elsewhere");
-        fs::write(&target, question("/run/sck.1", "")).unwrap_or_else(|e| panic!("{e}"));
+        let socket = format!("{}/sck.1", dir.path().display());
+        fs::write(&target, question(&socket, "")).unwrap_or_else(|e| panic!("{e}"));
         std::os::unix::fs::symlink(&target, dir.path().join("ask.link"))
             .unwrap_or_else(|e| panic!("{e}"));
         rustix::fs::mknodat(
@@ -481,6 +484,43 @@ mod tests {
         assert_eq!(watcher.dir(), dir);
         ask(&dir, "ask.1", &question("/run/sck.1", ""));
         assert!(watcher.changed().unwrap_or_else(|e| panic!("{e}")));
+    }
+
+    #[test]
+    fn a_removed_watch_is_a_change() {
+        let base = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let dir = base.path().join("ask-password");
+        let mut watcher = Watcher::open(&dir).unwrap_or_else(|e| panic!("{e}"));
+        // The kernel drops the watch with IN_IGNORED, an event with no name.
+        fs::remove_dir(&dir).unwrap_or_else(|e| panic!("{e}"));
+        assert!(watcher.changed().unwrap_or_else(|e| panic!("{e}")));
+    }
+
+    #[test]
+    fn debug_shows_the_directory_only() {
+        let (dir, watcher) = open();
+        let shown = format!("{watcher:?}");
+        assert!(shown.starts_with("Watcher {"), "{shown}");
+        assert!(shown.contains(&format!("{:?}", dir.path())), "{shown}");
+    }
+
+    #[test]
+    fn the_clock_is_monotonic_microseconds() {
+        let us = |t: rustix::time::Timespec| {
+            u64::try_from(t.tv_sec).unwrap_or(0) * 1_000_000
+                + u64::try_from(t.tv_nsec).unwrap_or(0) / 1_000
+        };
+        for _ in 0..3 {
+            let before = us(rustix::time::clock_gettime(
+                rustix::time::ClockId::Monotonic,
+            ));
+            let now = monotonic_us();
+            let after = us(rustix::time::clock_gettime(
+                rustix::time::ClockId::Monotonic,
+            ));
+            assert!(before <= now && now <= after, "{before} {now} {after}");
+            std::thread::sleep(Duration::from_millis(3));
+        }
     }
 
     #[test]

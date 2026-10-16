@@ -138,6 +138,7 @@ mod tests {
             assert!(secret.push(c));
         }
         assert_eq!(secret.chars(), 8);
+        assert!(!secret.is_empty());
         secret.pop();
         assert_eq!(secret.as_str(), "pässwör");
         secret.pop();

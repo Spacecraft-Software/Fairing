@@ -470,6 +470,59 @@ mod tests {
     }
 
     #[test]
+    fn the_limit_is_64_kib() {
+        let mut file = b"[Ask]\nSocket=/run/s\n".to_vec();
+        file.resize(65_536, b'#');
+        assert!(Ask::parse(&file).is_ok());
+        file.push(b'#');
+        assert_eq!(Ask::parse(&file), Err(AskError::TooLarge));
+    }
+
+    #[test]
+    fn every_refusal_says_why() {
+        for (error, text) in [
+            (AskError::TooLarge, "the ask file is larger than 64 KiB"),
+            (AskError::NotUtf8, "the ask file is not UTF-8"),
+            (AskError::NoSocket, "the ask file names no reply socket"),
+            (
+                AskError::BadSocket,
+                "the ask file's reply socket is not a usable absolute path",
+            ),
+            (AskError::IdTooLong, "the ask file's Id= is too long"),
+            (AskError::BadNumber, "the ask file has a malformed number"),
+            (AskError::RepeatedKey, "the ask file repeats a key"),
+        ] {
+            assert_eq!(error.to_string(), text);
+        }
+    }
+
+    #[test]
+    fn a_cut_inside_a_character_steps_back_to_its_start() {
+        // 'é' is two bytes: a cut at 4 bytes falls inside the second one.
+        let text = Text::<4>::cut("aéé");
+        assert_eq!(text.as_str(), "aé");
+        let text = Text::<2>::cut("é");
+        assert_eq!(text.as_str(), "é");
+        let text = Text::<1>::cut("é");
+        assert_eq!(text.as_str(), "");
+        assert!(text.is_empty());
+    }
+
+    #[test]
+    fn text_is_empty_only_without_bytes() {
+        let empty = Text::<4>::exact("").unwrap_or_else(|| panic!("no text"));
+        assert!(empty.is_empty());
+        let one = Text::<4>::exact("a").unwrap_or_else(|| panic!("no text"));
+        assert!(!one.is_empty());
+    }
+
+    #[test]
+    fn text_debug_is_the_quoted_string() {
+        let text = Text::<8>::exact("ask.1").unwrap_or_else(|| panic!("no text"));
+        assert_eq!(format!("{text:?}"), "\"ask.1\"");
+    }
+
+    #[test]
     fn malformed_numbers_are_refused() {
         for file in [
             &b"[Ask]\nSocket=/run/s\nNotAfter=soon\n"[..],

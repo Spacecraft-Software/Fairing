@@ -12,3 +12,132 @@
 #                 memory a safe test cannot read (after a drop)
 #
 # Entries match by file, function and replacement, not by line.
+
+# crates/fairing-askpass/src/agent.rs
+
+[[survivor]]
+file = "crates/fairing-askpass/src/agent.rs"
+function = "<impl KeySource for Keyboards>::read"
+replacement = "()"
+verdict = "unobservable"
+reason = "Keyboards::read only passes on keys read from grabbed evdev nodes; with no device open it calls nothing, so dropping the forward differs only on a real keyboard."
+
+# crates/fairing-askpass/src/ask.rs
+
+[[survivor]]
+file = "crates/fairing-askpass/src/ask.rs"
+function = "Ask::parse"
+replacement = "&&"
+verdict = "equivalent"
+reason = "Skipping blank, '#' and ';' lines is redundant: a blank line has no '=', and a trimmed comment line that has one yields a key starting with '#' or ';', which is none of the seven keys read, so either operator leaves the result unchanged."
+
+# crates/fairing-askpass/src/input.rs
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "attribute"
+replacement = "<="
+verdict = "equivalent"
+reason = "The extra pass happens only once the page buffer is full, and then reads into an empty slice; read(2) of zero bytes from a regular or sysfs file returns 0, which breaks out with the same length."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "attribute"
+replacement = "false"
+verdict = "unobservable"
+reason = "The guard decides only what an EINTR does, and a read of a regular or sysfs file does not sleep interruptibly, so no test can make it return EINTR; every other error already returns None."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "Keyboards::grab"
+replacement = "!="
+verdict = "unobservable"
+reason = "The comparison skips a keyboard already open; the list of open keyboards fills only from an evdev node RawDevice::from_fd accepts, so without a device it is empty and any() is false either way."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "Keyboards::take"
+replacement = "^"
+verdict = "equivalent"
+reason = "O_RDONLY is 0 and O_NONBLOCK, O_CLOEXEC and O_NOCTTY are distinct single bits, so exclusive or of them equals their union."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "Keyboards::take"
+replacement = "&"
+verdict = "unobservable"
+reason = "Covers the last operator, where O_CLOEXEC & O_NOCTTY is empty and both flags are dropped: O_NOCTTY has no effect on an evdev node, which is never a tty, and O_CLOEXEC shows only to an exec while the descriptor is open. The two '&' that drop O_NONBLOCK are killed by a_node_is_opened_without_blocking."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "Keyboards::read"
+replacement = "()"
+verdict = "unobservable"
+reason = "With no grabbed evdev node open, the real read drains nothing and its modifier release does not run, so an empty body differs only with a real keyboard."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "<impl Drop for Keyboards>::drop"
+replacement = "()"
+verdict = "unobservable"
+reason = "Drop releases EVIOCGRAB grabs on open evdev nodes, which no test machine has, and the state it resets cannot be read once the value is dropped."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "Keyboards::grab"
+replacement = ""
+verdict = "unobservable"
+reason = "`delete !` on `!self.caps_read` (column 12): the Caps Lock LED is read only from a keyboard already opened from an evdev node, so with none open, as on every test machine, both branches do nothing."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "Keyboards::read"
+replacement = ""
+verdict = "unobservable"
+reason = "`delete !` on `!self.grabbed` (column 12): while not grabbed the open list is always empty, since release drains it, and while grabbed with no evdev node open the drain does nothing, so the two differ only with a real keyboard open."
+
+# crates/fairing-askpass/src/secret.rs
+
+[[survivor]]
+file = "crates/fairing-askpass/src/secret.rs"
+function = "<impl Drop for Secret>::drop"
+replacement = "()"
+verdict = "unobservable"
+reason = "The zeroisation on drop is visible only by reading the buffer after it has been dropped, which safe code cannot do; the eager Secret::clear on every path is tested instead."
+
+# crates/fairing-askpass/src/watch.rs
+
+[[survivor]]
+file = "crates/fairing-askpass/src/watch.rs"
+function = "Watcher::open"
+replacement = "^"
+verdict = "equivalent"
+reason = "IN_NONBLOCK and IN_CLOEXEC are distinct bits, as are IN_CLOSE_WRITE, IN_MOVED_TO, IN_MOVED_FROM, IN_DELETE and IN_ONLYDIR, so exclusive or of each set equals its union."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/watch.rs"
+function = "Watcher::changed"
+replacement = "^"
+verdict = "equivalent"
+reason = "IN_Q_OVERFLOW (0x4000) and IN_IGNORED (0x8000) are distinct bits, so their exclusive or equals their union."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/watch.rs"
+function = "Watcher::read"
+replacement = "^"
+verdict = "equivalent"
+reason = "O_RDONLY is 0 and O_CLOEXEC, O_NOFOLLOW, O_NONBLOCK and O_NOCTTY are distinct single bits, so exclusive or of them equals their union."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/watch.rs"
+function = "Watcher::read"
+replacement = "&"
+verdict = "unobservable"
+reason = "Covers the first operator, where O_RDONLY & O_CLOEXEC is 0 and drops only O_CLOEXEC; the descriptor is closed before read returns, so the flag shows only to a concurrent exec in that window. The '&' that drops O_NOFOLLOW is killed by links_and_fifos_are_not_read, and those that drop O_NONBLOCK hang on the FIFO there."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/watch.rs"
+function = "Watcher::read"
+replacement = "<="
+verdict = "equivalent"
+reason = "The extra pass happens only once the MAX_FILE + 1 buffer is full, and then reads into an empty slice; read(2) of zero bytes from a regular file (the only kind read) returns 0, which breaks out with the same length."

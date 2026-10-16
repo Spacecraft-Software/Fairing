@@ -616,6 +616,68 @@ mod tests {
     }
 
     #[test]
+    fn caps_lock_toggles_on_the_press_only() {
+        let mut map = Keymap::new();
+        map.key(KEY_CAPSLOCK, 1);
+        assert_eq!(typed(&mut map, &[30]), "A", "on at the press");
+        map.key(KEY_CAPSLOCK, 2);
+        map.key(KEY_CAPSLOCK, 0);
+        assert_eq!(typed(&mut map, &[30]), "A", "not at repeat or release");
+    }
+
+    #[test]
+    fn a_held_escape_does_not_cancel_twice() {
+        let mut map = Keymap::new();
+        assert_eq!(map.key(KEY_ESC, 2), None);
+    }
+
+    #[test]
+    fn reset_forgets_held_modifiers_and_caps_lock() {
+        let mut map = Keymap::new();
+        map.key(KEY_LEFTSHIFT, 1);
+        map.key(KEY_LEFTCTRL, 1);
+        map.set_caps_lock(true);
+        map.reset();
+        assert_eq!(typed(&mut map, &[30]), "a");
+    }
+
+    #[test]
+    fn a_repeating_modifier_stays_held() {
+        let mut map = Keymap::new();
+        map.key(KEY_LEFTCTRL, 1);
+        map.key(KEY_LEFTCTRL, 2);
+        assert_eq!(press(&mut map, 46), None, "Ctrl still held after a repeat");
+        map.key(KEY_LEFTCTRL, 2);
+        assert_eq!(press(&mut map, 46), None, "and after another");
+    }
+
+    #[test]
+    fn left_and_right_alt_are_tracked_apart() {
+        let mut map = Keymap::new();
+        map.key(KEY_LEFTALT, 1);
+        map.key(KEY_RIGHTALT, 1);
+        map.key(KEY_RIGHTALT, 0);
+        assert_eq!(press(&mut map, 46), None, "left Alt still held");
+        map.key(KEY_LEFTALT, 0);
+        assert_eq!(press(&mut map, 46), Some(Key::Char('c')));
+    }
+
+    #[test]
+    fn an_attribute_that_cannot_be_read_is_none() {
+        let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let mut buf = [0u8; ATTRIBUTE_BYTES];
+        // A directory opens but every read fails with EISDIR.
+        assert_eq!(attribute(root.path(), &mut buf), None);
+        assert_eq!(attribute(&root.path().join("missing"), &mut buf), None);
+        let page = root.path().join("page");
+        fs::write(&page, "f".repeat(ATTRIBUTE_BYTES)).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            attribute(&page, &mut buf).map(str::len),
+            Some(ATTRIBUTE_BYTES)
+        );
+    }
+
+    #[test]
     fn capability_masks_are_read_word_by_word() {
         let width = usize::try_from(usize::BITS).unwrap_or(64);
         assert!(bit("1", 0));
@@ -684,6 +746,85 @@ mod tests {
         let gone =
             drain(rx.as_fd(), &mut Keymap::new(), &mut |_k| {}).unwrap_or_else(|e| panic!("{e}"));
         assert!(!gone, "end of file is a device gone");
+    }
+
+    #[test]
+    fn key_events_read_their_fields_past_the_timestamp() {
+        let (mut tx, rx) = UnixStream::pair().unwrap_or_else(|e| panic!("{e}"));
+        rx.set_nonblocking(true).unwrap_or_else(|e| panic!("{e}"));
+        let mut bytes = Vec::new();
+        for (kind, code, value) in [(1, 30, 1), (1, 30, 0), (1, 28, 2)] {
+            let mut one = event(kind, code, value);
+            // A timestamp with every byte set, as a real one rarely is zero.
+            one[..2 * size_of::<usize>()].fill(0xa5);
+            bytes.extend(one);
+        }
+        io::Write::write_all(&mut tx, &bytes).unwrap_or_else(|e| panic!("{e}"));
+        let mut seen = Vec::new();
+        let alive = key_events(rx.as_fd(), &mut |code, value| seen.push((code, value)))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(alive);
+        assert_eq!(seen, [(30, 1), (30, 0), (28, 2)]);
+    }
+
+    #[test]
+    fn a_grab_forgets_modifiers_held_before_it() {
+        let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let mut boards = Keyboards::new(root.path(), &root.path().join("dev"));
+        boards.map.key(KEY_LEFTSHIFT, 1);
+        boards.grab();
+        assert_eq!(typed(&mut boards.map, &[30]), "a");
+    }
+
+    #[test]
+    fn a_read_with_no_keyboard_lost_keeps_the_modifiers() {
+        let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let mut boards = Keyboards::new(root.path(), &root.path().join("dev"));
+        boards.grab();
+        boards.map.key(KEY_LEFTSHIFT, 1);
+        boards.read(|_k| {});
+        assert_eq!(typed(&mut boards.map, &[30]), "A", "Shift still held");
+    }
+
+    #[test]
+    fn a_keyboard_whose_node_cannot_be_opened_is_refused() {
+        let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        device(root.path(), "event1", "120013\n", "fffffffffffffffe\n");
+        let mut boards = Keyboards::new(root.path(), &root.path().join("dev"));
+        assert_eq!(boards.refused(), None);
+        assert_eq!(boards.grab(), 0);
+        assert_eq!(boards.refused(), Some(("event1", io::ErrorKind::NotFound)));
+    }
+
+    #[test]
+    fn a_node_is_opened_without_blocking() {
+        // A FIFO with no writer blocks an open without O_NONBLOCK; with it the
+        // open returns at once, and the FIFO is then refused as no evdev node.
+        let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let node = root.path().join("event9");
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            &node,
+            rustix::fs::FileType::Fifo,
+            Mode::RUSR | Mode::WUSR,
+            0,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = node.clone();
+        let opener = std::thread::spawn(move || {
+            let _sent = tx.send(Keyboards::take(&path).is_err());
+        });
+        let result = rx.recv_timeout(std::time::Duration::from_secs(5));
+        if result.is_err() {
+            // Let the blocked open finish before failing; a writer that does
+            // not block itself, in case the reader has just gone.
+            let _writer = rustix::fs::open(&node, OFlags::WRONLY | OFlags::NONBLOCK, Mode::empty());
+        }
+        opener
+            .join()
+            .unwrap_or_else(|_e| panic!("the opener panicked"));
+        assert_eq!(result, Ok(true), "the open blocked, or a FIFO was taken");
     }
 
     #[test]
