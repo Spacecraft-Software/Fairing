@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: CC-BY-SA-4.0
+#
+# Measured figures for doc/budgets.toml (Steelbore Standard §22.4). Append an
+# entry per measurement, never rewrite one: the last entry for a budget is its
+# current figure, and the ones before it are its history. Report the median
+# and, where more than one run was taken, the spread. CI figures are taken on
+# every build and passed to `cargo xtask budgets --measured`; the entries
+# here record them at a release.
+
+[[measurement]]
+budget = "first-frame"
+value = 20.5
+date = "2026-10-14"
+machine = "ThinkPad T490s, kernel 7.2.10, 1920x1080, DRM backend"
+source = "T-029: `fairing preview` on a free VT, 152 frames at 30.06 Hz"
+
+[[measurement]]
+budget = "initrd-binary"
+value = 1954776
+date = "2026-10-15"
+machine = "GitHub Actions ubuntu-latest"
+source = "CI size job at the M3 merge"
+
+[[measurement]]
+budget = "theme-artefact"
+value = 210
+date = "2026-10-16"
+machine = "CI container, x86-64"
+source = "`fairing theme compile themes/steelbore.ncl`"

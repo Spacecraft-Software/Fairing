@@ -55,8 +55,10 @@ jobs:
       - run: cargo test -p fairing --no-default-features --features dbus --locked
       - run: cargo test -p fairing --no-default-features --locked
 
-  # PRD budget: the stripped release binary the initrd carries is at most
-  # 2.5 MiB. The other two builds are measured and reported, not gated.
+  # The size budgets (§22, doc/budgets.toml): the stripped release binary the
+  # initrd carries is at most 2.5 MiB (FRN-SRS-105) and the compiled reference
+  # theme at most 4 MiB (FRN-SRS-047); `cargo xtask budgets` fails a red or
+  # exceeded margin. The other two builds are measured and reported.
   size:
     runs-on: ubuntu-latest
     needs: fmt
@@ -80,12 +82,20 @@ jobs:
           measure initrd --no-default-features
           measure splash --no-default-features --features dbus
           measure full
-      - name: the initrd binary is within 2.5 MiB
+      - name: compile the reference theme
         run: |
-          bytes=$(cat target/size-initrd.bytes)
-          limit=2621440
-          echo "initrd binary: $bytes of $limit bytes"
-          test "$bytes" -le "$limit"
+          target/size-full/release/fairing theme compile themes/steelbore.ncl --output target/steelbore.fairing --json > target/theme-compile.json
+          stat -c %s target/steelbore.fairing > target/theme-artefact.bytes
+      # Verifies: FRN-SRS-105, FRN-SRS-047
+      - name: budgets and margins (§22)
+        run: |
+          measured="initrd-binary=$(cat target/size-initrd.bytes),theme-artefact=$(cat target/theme-artefact.bytes)"
+          {
+            echo '```'
+            cargo xtask budgets --measured "$measured"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cargo xtask budgets --measured "$measured"
 
   # The NixOS module: evaluation checks everywhere, VM tests on KVM. Inputs come
   # from the committed flake.lock (P-101); a lock that no longer matches flake.nix
@@ -183,6 +193,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: generated Needs and Requirements chapters are current
         run: cargo xtask req-texi --check
+      - name: generated budget table is current
+        run: cargo xtask budgets-texi --check
       - name: install texinfo
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends texinfo
       - name: makeinfo zero-warning gate
