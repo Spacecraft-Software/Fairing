@@ -226,6 +226,27 @@ fn stop(child: &mut Child) {
     let _reaped = child.wait();
 }
 
+/// A journalctl stand-in for tests: a shell script in `dir` running
+/// `script`. Its interpreter is the `sh` found on `PATH`, since a build
+/// sandbox such as Guix's has no `/bin/sh`.
+#[cfg(test)]
+pub(crate) fn fake_journalctl(dir: &std::path::Path, script: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    let sh = std::env::var_os("PATH")
+        .and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join("sh"))
+                .find(|candidate| candidate.is_file())
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("/bin/sh"));
+    let path = dir.join("journalctl");
+    std::fs::write(&path, format!("#!{}\n{script}\n", sh.display()))
+        .unwrap_or_else(|e| panic!("{e}"));
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|e| panic!("{e}"));
+    path
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
@@ -258,14 +279,8 @@ mod tests {
         assert_eq!(Entry::parse(b"not json"), None);
     }
 
-    /// A journalctl stand-in: a script that prints `lines`, then sleeps.
     fn fake(dir: &Path, script: &str) -> std::path::PathBuf {
-        use std::os::unix::fs::PermissionsExt as _;
-        let path = dir.join("journalctl");
-        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap_or_else(|e| panic!("{e}"));
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-            .unwrap_or_else(|e| panic!("{e}"));
-        path
+        super::fake_journalctl(dir, script)
     }
 
     #[test]

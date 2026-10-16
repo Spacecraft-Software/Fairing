@@ -171,12 +171,7 @@ mod tests {
     use super::*;
 
     fn fake(dir: &Path, script: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt as _;
-        let path = dir.join("journalctl");
-        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap_or_else(|e| panic!("{e}"));
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-            .unwrap_or_else(|e| panic!("{e}"));
-        path
+        crate::splash::journal::fake_journalctl(dir, script)
     }
 
     fn entries(n: usize) -> String {
