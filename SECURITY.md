@@ -22,16 +22,27 @@ password-agent path) are worked first.
 
 ## Scope
 
-- In scope: the `fairing` binary and the four workspace crates, the NixOS module and
-  systemd units once they ship, and the compiled-theme and ask-password parsers.
+- In scope: the `fairing` binary and the four product crates, the NixOS module and its
+  systemd units, the compiled-theme and ask-password parsers, and the release archive
+  and the three package definitions (`packaging/`).
 - Out of scope: the `xtask` developer tooling, documentation, and vulnerabilities in
   dependencies that are already published upstream (report those upstream; tell us too so
   the qualification record in `DEPENDENCIES.md` is updated).
 
 ## Supported versions
 
-Best effort on the **latest release only** (§26.4). There are no backports. Until the
-first release, the `main` branch is the only supported line.
+Best effort on the **latest release only** (§26.4). There are no backports: a fix ships
+in a new release, and the release before it stops receiving fixes the day its successor
+is published.
+
+| Version | Supported |
+|---|---|
+| 0.1.x (latest) | Yes, until the next release |
+| `main` | Yes: fixes land here first |
+| Anything older | No |
+
+Each release publishes its CycloneDX SBOM; an advisory names the affected releases by
+it, so you can tell whether a build is exposed without reading the diff.
 
 ## Coordinated disclosure
 

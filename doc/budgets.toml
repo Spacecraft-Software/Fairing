@@ -1,0 +1,105 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: CC-BY-SA-4.0
+#
+# Fairing's resource budgets (Steelbore Standard §22). Each ceiling is stated
+# by a requirement in doc/requirements.toml and declared here once, with where
+# and how it is measured. Figures live in doc/measurements.toml; `cargo xtask
+# budgets` reports the margins and fails a red or exceeded one, and `cargo
+# xtask budgets-texi` writes the table the manual includes.
+#
+# A ceiling may be re-baselined only under §22.2: a dated entry in the
+# CHANGELOG with the old ceiling, the new one and what justified it.
+
+[meta]
+reference_machine = "The maintainer's ThinkPad T490s: Intel i915 graphics, NVMe storage, a 1920x1080 panel, running Steelbore OS Bravais with a LUKS root."
+reference_workload = "A cold boot from power-on to greetd with the reference theme (themes/steelbore.ncl) and a 24-frame animation, as the requirement set defines it."
+
+[[budget]]
+id = "initrd-binary"
+requirement = "FRN-SRS-105"
+resource = "binary size"
+ceiling = 2621440
+unit = "bytes"
+measured = "ci"
+method = "The stripped release build without default features (`cargo build --release -p fairing --no-default-features`), the copy the initrd carries; CI's size job."
+
+[[budget]]
+id = "theme-artefact"
+requirement = "FRN-SRS-047"
+resource = "artefact size"
+ceiling = 4194304
+unit = "bytes"
+measured = "ci"
+method = "The reference theme compiled with `fairing theme compile themes/steelbore.ncl`; CI's size job."
+
+[[budget]]
+id = "first-frame"
+requirement = "FRN-SRS-004"
+resource = "cold-start latency"
+ceiling = 150
+unit = "ms"
+measured = "reference"
+method = "`first_frame_ms` of `fairing preview --backend drm`, process start to the first frame on screen, on a free VT."
+
+[[budget]]
+id = "artefact-load"
+requirement = "FRN-SRS-042"
+resource = "theme load time"
+ceiling = 5
+unit = "ms"
+measured = "reference"
+method = "`load_ms` of `fairing theme compile themes/steelbore.ncl --json`, the reference artefact decoded from its bytes."
+
+[[budget]]
+id = "sigterm-release"
+requirement = "FRN-SRS-033"
+resource = "release latency"
+ceiling = 100
+unit = "ms"
+measured = "reference"
+method = "`release_ms` of the stage-2 splash report at the greetd handoff, from the journal of a reference boot."
+
+[[budget]]
+id = "fbdev-fallback"
+requirement = "FRN-SRS-002"
+resource = "fallback latency"
+ceiling = 200
+unit = "ms"
+measured = "reference"
+method = "The failed DRM attempt's `elapsed_ms` plus the fbdev first frame of `fairing preview --backend auto` with the DRM device withheld."
+
+[[budget]]
+id = "reacquire"
+requirement = "FRN-SRS-006"
+resource = "re-acquire latency"
+ceiling = 500
+unit = "ms"
+measured = "reference"
+method = "From the simpledrm-to-i915 swap in the journal to the next presented frame, on a reference boot."
+
+[[budget]]
+id = "ask-detect"
+requirement = "FRN-SRS-020"
+resource = "question latency"
+ceiling = 50
+unit = "ms"
+measured = "reference"
+method = "From the `ask.*` file's creation to the `ASK_OPENED` journal line, on a reference boot with a LUKS root."
+
+[[budget]]
+id = "grab-release"
+requirement = "FRN-SRS-028"
+resource = "grab release latency"
+ceiling = 50
+unit = "ms"
+measured = "reference"
+method = "From the answer's reply to the `ASK_CLOSED` journal line, on a reference boot with a LUKS root."
+
+[[budget]]
+id = "overlay-entry"
+requirement = "FRN-SRS-062"
+resource = "journal overlay latency"
+ceiling = 250
+unit = "ms"
+measured = "reference"
+method = "From a `logger -p notice` entry to its line in the overlay, timed on the reference machine."

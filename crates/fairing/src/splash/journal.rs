@@ -215,7 +215,15 @@ impl Journal {
     }
 
     /// Stops journalctl and reaps it.
-    pub fn stop(mut self) {
+    pub fn stop(self) {
+        drop(self);
+    }
+}
+
+/// journalctl never outlives its reader: a dropped [`Journal`] kills and
+/// reaps it (a test that fails before [`Journal::stop`] included).
+impl Drop for Journal {
+    fn drop(&mut self) {
         stop(&mut self.child);
     }
 }
@@ -224,6 +232,39 @@ impl Journal {
 fn stop(child: &mut Child) {
     let _killed = child.kill();
     let _reaped = child.wait();
+}
+
+/// A journalctl stand-in for tests: a shell script in `dir` running
+/// `script`. Its interpreter is the `sh` found on `PATH`, since a build
+/// sandbox such as Guix's has no `/bin/sh`.
+///
+/// The executable is written by a `cp` child, never through a descriptor of
+/// this process: a test thread forking at that moment would inherit the
+/// descriptor, and exec of the script would fail with ETXTBSY until that
+/// child itself had exec'd.
+#[cfg(test)]
+pub(crate) fn fake_journalctl(dir: &std::path::Path, script: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    let sh = std::env::var_os("PATH")
+        .and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join("sh"))
+                .find(|candidate| candidate.is_file())
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("/bin/sh"));
+    let source = dir.join("journalctl.sh");
+    std::fs::write(&source, format!("#!{}\n{script}\n", sh.display()))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let path = dir.join("journalctl");
+    let copied = std::process::Command::new("cp")
+        .arg(&source)
+        .arg(&path)
+        .status()
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(copied.success(), "cp wrote the stand-in");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|e| panic!("{e}"));
+    path
 }
 
 #[cfg(test)]
@@ -258,14 +299,8 @@ mod tests {
         assert_eq!(Entry::parse(b"not json"), None);
     }
 
-    /// A journalctl stand-in: a script that prints `lines`, then sleeps.
     fn fake(dir: &Path, script: &str) -> std::path::PathBuf {
-        use std::os::unix::fs::PermissionsExt as _;
-        let path = dir.join("journalctl");
-        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap_or_else(|e| panic!("{e}"));
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-            .unwrap_or_else(|e| panic!("{e}"));
-        path
+        super::fake_journalctl(dir, script)
     }
 
     #[test]
@@ -299,6 +334,127 @@ mod tests {
         // the delay from above.
         let delay = written.map_or(Duration::ZERO, |w| seen.saturating_duration_since(w));
         assert!(delay < Duration::from_millis(250), "{delay:?}");
+    }
+
+    const HEAD: &str = r#"{"PRIORITY":"5","MESSAGE":""#;
+    const TAIL: &str = "\"}\n";
+
+    /// An entry line of exactly `len` bytes, newline included.
+    fn entry_of(len: usize) -> Vec<u8> {
+        let pad = len - HEAD.len() - TAIL.len();
+        format!("{HEAD}{}{TAIL}", "m".repeat(pad)).into_bytes()
+    }
+
+    /// A journal whose journalctl prints nothing; lines are fed with `take`.
+    fn idle(dir: &Path) -> Journal {
+        Journal::spawn(&fake(dir, "exec sleep 30")).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn a_line_of_the_limit_is_kept_and_one_byte_more_is_dropped() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let mut journal = idle(dir.path());
+        let mut entries = Vec::new();
+        let mut f = |e: Entry| entries.push(e.message.len());
+        // Well over a kilobyte, well under the limit, in one piece.
+        journal.take(&entry_of(4096), &mut f);
+        // Exactly the limit, in two pieces.
+        let exact = entry_of(MAX_LINE);
+        let (first, second) = exact.split_at(MAX_LINE / 2);
+        journal.take(first, &mut f);
+        journal.take(second, &mut f);
+        // One byte over, in one piece and in two.
+        let over = entry_of(MAX_LINE + 1);
+        journal.take(&over, &mut f);
+        let (first, second) = over.split_at(100);
+        journal.take(first, &mut f);
+        journal.take(second, &mut f);
+        // And one after it, to show nothing was left pending.
+        journal.take(ENTRY.as_bytes(), &mut f);
+        journal.take(b"\n", &mut f);
+        journal.stop();
+        let overhead = HEAD.len() + TAIL.len();
+        assert_eq!(
+            entries,
+            [
+                4096 - overhead,
+                MAX_LINE - overhead,
+                "/dev/vda1: clean".len()
+            ]
+        );
+    }
+
+    #[test]
+    fn an_oversized_line_is_skipped_to_its_newline_however_it_arrives() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let mut journal = idle(dir.path());
+        let mut entries = Vec::new();
+        let mut f = |e: Entry| entries.push(e);
+        journal.take("x".repeat(MAX_LINE + 1).as_bytes(), &mut f);
+        // The rest of the long line, in pieces that would parse as an entry
+        // on their own: only the skip drops them.
+        journal.take(ENTRY.as_bytes(), &mut f);
+        journal.take(b"\n", &mut f);
+        // The next line is read again.
+        journal.take(format!("{ENTRY}\n").as_bytes(), &mut f);
+        journal.stop();
+        assert_eq!(
+            entries.len(),
+            1,
+            "only the line after the long one: {entries:?}"
+        );
+    }
+
+    #[test]
+    fn one_read_takes_exactly_its_budget() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let marker = dir.path().join("written");
+        // Exactly the budget, which a pipe holds, then the end of output.
+        let program = fake(
+            dir.path(),
+            &format!(
+                "printf '%s' '{}'\ntouch {}",
+                // The budget, written out: 64 KiB.
+                "x".repeat(64 * 1024),
+                marker.display()
+            ),
+        );
+        let mut journal = Journal::spawn(&program).unwrap_or_else(|e| panic!("{e}"));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while journal.child.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(marker.exists(), "all written");
+        let mut ignore = |_e: Entry| {};
+        assert!(
+            journal.read(&mut ignore).unwrap_or(false),
+            "the budget is spent before the end is seen"
+        );
+        // Then the end. Not necessarily at the next read: a child another
+        // test thread forks while this pipe was being made holds its write end
+        // until that child execs, which on a loaded machine can take a while.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut open = true;
+        while open && Instant::now() < deadline {
+            open = journal.read(&mut ignore).unwrap_or(false);
+            if open {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        assert!(!open, "then the end");
+        journal.stop();
+    }
+
+    #[test]
+    fn stopping_kills_and_reaps_journalctl() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let program = fake(dir.path(), "exec sleep 30");
+        let journal = Journal::spawn(&program).unwrap_or_else(|e| panic!("{e}"));
+        let pid = journal.child.id();
+        let proc = std::path::PathBuf::from(format!("/proc/{pid}"));
+        assert!(proc.exists());
+        journal.stop();
+        assert!(!proc.exists(), "killed and reaped");
     }
 
     #[test]

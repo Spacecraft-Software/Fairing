@@ -22,13 +22,29 @@
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       pkgsFor = system: nixpkgs.legacyPackages.${system};
+      inherit (nixpkgs) lib;
+      # The working tree, not the release archive: only what the build and
+      # its tests read, never `target/` or `doc/build/`.
+      workingTree = lib.fileset.toSource {
+        root = ./.;
+        fileset = lib.fileset.difference (lib.fileset.unions [
+          ./.cargo
+          ./Cargo.toml
+          ./Cargo.lock
+          ./crates
+          ./xtask
+          ./contracts
+          ./themes
+          ./doc
+        ]) (lib.fileset.maybeMissing ./doc/build);
+      };
     in
     {
       packages = forAllSystems (
         system:
         let
           pkgs = pkgsFor system;
-          fairing = pkgs.callPackage ./packaging/default.nix { };
+          fairing = pkgs.callPackage ./packaging/default.nix { inherit workingTree; };
         in
         {
           inherit fairing;
@@ -49,7 +65,18 @@
       );
 
       nixosModules = {
-        fairing = ./packaging/nixos/module.nix;
+        # The module as the flake ships it: its default package is the
+        # flake's tree built with the system's own pkgs (its nixpkgs,
+        # overlays and cross setup), not the release archive module.nix
+        # fetches on its own.
+        fairing =
+          { lib, pkgs, ... }:
+          {
+            imports = [ ./packaging/nixos/module.nix ];
+            steelbore.fairing.package = lib.mkDefault (
+              pkgs.callPackage ./packaging/default.nix { inherit workingTree; }
+            );
+          };
         default = self.nixosModules.fairing;
       };
 
@@ -75,6 +102,12 @@
               pkgs.nickel
               pkgs.nixfmt
               pkgs.gnumake
+              # `make pdf` (texi2pdf): pdfTeX and texinfo.tex.
+              (pkgs.texliveBasic.withPackages (ps: [ ps.texinfo ]))
+              # The release verbs: `cargo xtask coverage`, `mutants` and `sbom`.
+              pkgs.cargo-llvm-cov
+              pkgs.cargo-mutants
+              pkgs.cargo-cyclonedx
             ];
             # The repository pins the toolchain in rust-toolchain.toml for rustup
             # users; inside this shell nixpkgs' rustc is used, which must satisfy

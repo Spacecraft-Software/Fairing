@@ -409,3 +409,137 @@ fn emit(
     };
     write_line(&line, invocation)
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser as _;
+    use serde_json::Value;
+
+    use super::*;
+    use crate::cli::{Cli, Command};
+
+    /// `fairing <words>`, parsed; the words must name `splash`.
+    fn parse(words: &[&str]) -> (SplashArgs, GlobalFlags) {
+        let cli = Cli::try_parse_from(std::iter::once("fairing").chain(words.iter().copied()))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let Some(Command::Splash(args)) = cli.command else {
+            panic!("not a splash invocation: {words:?}");
+        };
+        (args, cli.global)
+    }
+
+    #[test]
+    fn the_command_line_is_read_whole() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let path = dir.path().join("cmdline");
+        std::fs::write(&path, "quiet fairing.accessible=1\n").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            read_cmdline(&path).as_deref(),
+            Some("quiet fairing.accessible=1\n")
+        );
+        assert_eq!(read_cmdline(&dir.path().join("missing")), None);
+    }
+
+    #[test]
+    fn the_flag_alone_asks_for_reduced_motion() {
+        // Verifies: FRN-SRS-052
+        let (args, flags) = parse(&[
+            "--no-accessible",
+            "splash",
+            "--stage",
+            "system",
+            "--reduced-motion",
+        ]);
+        let context = Context::resolve(&flags);
+        let resolved = modes(&args, &context, Some("quiet"), "fairing splash");
+        assert!(!resolved.accessible.on);
+        assert!(resolved.reduced_motion);
+        assert_eq!(resolved.text, None);
+    }
+
+    #[test]
+    fn a_dry_run_reports_an_unreadable_theme_as_an_error() {
+        let (args, flags) = parse(&[
+            "--dry-run",
+            "splash",
+            "--stage",
+            "system",
+            "--backend",
+            "memory",
+            "--cmdline",
+            "",
+            "--theme",
+            "/nonexistent/theme.fairing",
+        ]);
+        let context = Context::resolve(&flags);
+        let planned = run(&args, &context, "fairing splash", &flags, Instant::now());
+        assert!(planned.is_err(), "a plan does not step aside");
+    }
+
+    /// Set to the splash arguments of a dry run [`dry_run_child`] makes.
+    const CHILD: &str = "FAIRING_TEST_DRY_RUN";
+
+    /// Not a test on its own: runs `fairing --json --dry-run splash` with
+    /// the arguments in [`CHILD`] when the parent test, [`dry_run`], starts
+    /// this test binary again, so the report on stdout can be read.
+    #[test]
+    fn dry_run_child() {
+        let Ok(extra) = std::env::var(CHILD) else {
+            return;
+        };
+        let mut words = vec![
+            "--json",
+            "--dry-run",
+            "splash",
+            "--backend",
+            "memory",
+            "--cmdline",
+            "",
+        ];
+        words.extend(extra.split_whitespace());
+        let (args, flags) = parse(&words);
+        let context = Context::resolve(&flags);
+        run(&args, &context, "fairing splash", &flags, Instant::now())
+            .unwrap_or_else(|e| panic!("{}", e.message));
+    }
+
+    /// The `data` of the dry-run report for the splash arguments `extra`.
+    fn dry_run(extra: &str) -> Value {
+        let exe = std::env::current_exe().unwrap_or_else(|e| panic!("{e}"));
+        let out = std::process::Command::new(exe)
+            .args([
+                "--exact",
+                "splash::tests::dry_run_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, extra)
+            .env_remove("SPACECRAFT_A11Y")
+            .output()
+            .unwrap_or_else(|e| panic!("{e}"));
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let report = stdout
+            .lines()
+            .find_map(|line| line.find("{\"").map(|at| &line[at..]))
+            .unwrap_or_else(|| panic!("no report in {stdout:?}"));
+        let value: Value = serde_json::from_str(report).unwrap_or_else(|e| panic!("{e}"));
+        value["data"].clone()
+    }
+
+    #[test]
+    fn a_dry_run_names_the_theme_and_whether_the_agent_will_run() {
+        let system = dry_run("--stage system");
+        assert_eq!(system["planned"], true, "{system}");
+        assert_eq!(
+            system["theme"].as_str(),
+            Some(CompiledTheme::builtin().meta().name.as_str())
+        );
+        assert_eq!(system["agent"], true);
+        assert_eq!(dry_run("--stage system --no-agent")["agent"], false);
+        assert_eq!(
+            dry_run("--stage shutdown")["agent"],
+            false,
+            "nothing asks at shutdown"
+        );
+    }
+}

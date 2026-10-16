@@ -171,12 +171,7 @@ mod tests {
     use super::*;
 
     fn fake(dir: &Path, script: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt as _;
-        let path = dir.join("journalctl");
-        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap_or_else(|e| panic!("{e}"));
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-            .unwrap_or_else(|e| panic!("{e}"));
-        path
+        crate::splash::journal::fake_journalctl(dir, script)
     }
 
     fn entries(n: usize) -> String {
@@ -229,6 +224,65 @@ mod tests {
         assert!(overlay.frame(&[Nav::Toggle], false).is_some());
         assert_eq!(overlay.frame(&[], true), None, "the prompt covers it");
         assert!(overlay.frame(&[], false).is_some(), "and it is back after");
+    }
+
+    #[test]
+    fn journalctl_runs_once_and_never_after_it_is_closed() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let mut overlay = Overlay::new(fake(dir.path(), "exec sleep 30"));
+        overlay.key(Nav::Toggle);
+        assert!(overlay.journal.is_some(), "started when first shown");
+        overlay.close();
+        assert!(overlay.journal.is_none(), "stopped");
+        // Hiding the overlay, or showing it again, starts nothing.
+        overlay.key(Nav::Toggle);
+        assert!(overlay.journal.is_none());
+        assert!(!overlay.shown());
+
+        // A journalctl that cannot be started is said once, however often
+        // the overlay is shown.
+        let mut overlay = Overlay::new(PathBuf::from("/nonexistent/journalctl"));
+        for _ in 0..4 {
+            overlay.key(Nav::Toggle);
+        }
+        assert_eq!(overlay.lines.len(), 1, "{:?}", overlay.lines);
+    }
+
+    #[test]
+    fn a_journalctl_that_exits_is_said_and_let_go() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let mut overlay = Overlay::new(fake(dir.path(), "exit 0"));
+        overlay.key(Nav::Toggle);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while overlay.journal.is_some() && Instant::now() < deadline {
+            overlay.tick();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(overlay.journal.is_none(), "reaped");
+        assert!(
+            overlay
+                .lines
+                .back()
+                .is_some_and(|l| l.contains("journalctl exited")),
+            "{:?}",
+            overlay.lines
+        );
+    }
+
+    #[test]
+    fn a_full_overlay_scrolled_to_the_oldest_line_stays_on_it() {
+        let mut overlay = Overlay::new(PathBuf::from("/nonexistent/journalctl"));
+        overlay.key(Nav::Toggle);
+        for i in 0..ENTRIES {
+            overlay.push(format!("line {i}"));
+        }
+        for _ in 0..=ENTRIES / PAGE {
+            overlay.key(Nav::PageUp);
+        }
+        assert_eq!(overlay.scroll, ENTRIES - 1);
+        overlay.push("newer".to_owned());
+        assert_eq!(overlay.lines.len(), ENTRIES);
+        assert_eq!(overlay.scroll, ENTRIES - 1, "never past the oldest line");
     }
 
     #[test]

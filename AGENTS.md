@@ -13,12 +13,14 @@ acts as the systemd password agent, and hands the screen to greetd. Part of Spac
 Software. Assurance **Category B**, with `crates/fairing-askpass` and the initrd
 lifecycle unit raised to **Category A** (Steelbore Standard §19). Licence GPL-3.0-or-later.
 
-Milestone state: M0 (repository and posture), M1 (draws a frame) and M2 (boots on
-Bravais: themes, progress, `fairing splash`, the NixOS module) and M3 (the password agent
-in `fairing-askpass`, run inside the splash) are merged. M4 (journal overlay, accessible
-mode and the text backend, frame sequences and reduced motion, the shutdown splash,
-failure signals) is in progress on its branch; every requirement waits on G1 baselining.
-Do not advertise verbs, flags or files that do not exist yet.
+Milestone state: M0 (repository and posture), M1 (draws a frame), M2 (boots on Bravais:
+themes, progress, `fairing splash`, the NixOS module), M3 (the password agent in
+`fairing-askpass`, run inside the splash) and M4 (journal overlay, accessible mode and the
+text backend, frame sequences and reduced motion, the shutdown splash, failure signals)
+are merged. M5 (release 0.1: budgets, coverage and mutation gates, the release archive and
+the three package definitions, SBOM, manifest, release workflow) is in progress on its
+branch; every requirement waits on G1 baselining. Do not advertise verbs, flags or files
+that do not exist yet.
 
 ## Build, test, lint
 
@@ -32,6 +34,16 @@ Do not advertise verbs, flags or files that do not exist yet.
 - Requirements chapters current: `cargo xtask req-texi --check`
 - Traceability gate: `cargo xtask trace` (artifacts in `target/trace/`)
 - Progress block: `cargo xtask progress` (add `--explain` for denominators)
+- Budgets: `cargo xtask budgets` (CI passes `--measured`), `cargo xtask budgets-texi --check`
+- Coverage: `cargo llvm-cov --workspace --exclude xtask --locked --json --summary-only
+  --output-path target/llvm-cov.json`, then `cargo xtask coverage` (80 % per crate)
+- Mutation: `cargo mutants -p fairing-askpass`, `cargo mutants -p fairing --file
+  'crates/fairing/src/splash/**' --exclude crates/fairing/src/splash/dbus_off.rs`, and
+  `dbus_off.rs` alone with `--no-default-features` (it exists only without `dbus`); then
+  `cargo xtask mutants --outcomes mutants.out/outcomes.json` on each (weekly in
+  `.github/workflows/mutants.yml`)
+- Release archive: `cargo xtask dist [--check]` (stamps the three package definitions),
+  `cargo xtask sbom`, `cargo xtask manifest [--check]`; the procedure is `RELEASING.md`
 - Manual: `make check` (zero makeinfo warnings), `make info html`
 - Dependencies: `cargo deny check` and `cargo audit`
 - NixOS module: `nix flake check` (evaluation everywhere; VM tests need x86_64 and KVM).
@@ -197,6 +209,24 @@ will not be green there.
   follow the ecosystem's American spelling (`color`, `Selection::Color`, `NO_COLOR`).
 - `xtask` is internal tooling, not a shipped CLI: it honours `--json` and the error
   envelope but not the full CLI Standard flag set.
+- The release archive and the SBOM are bit-reproducible. Their timestamps are the commit
+  time of the last commit that changed archived content (`dist::content_epoch`), and
+  `dist::EXPORT_IGNORED` (`packaging/`, `flake.nix`, `flake.lock`, `doc/releases/`) is
+  `export-ignore` in `.gitattributes` (a test keeps the two in step), so stamping a
+  checksum changes nothing archived. `cargo xtask dist` runs only with rustup's pinned
+  cargo (`cargo vendor` output differs between releases; never from `nix develop`) and
+  only in a full clone. Never hand-edit a definition's version or checksum line (`cargo
+  xtask dist` writes them, matched by exact line format in `dist::stamp`), and never put
+  archived content in a release commit.
+- `packaging/default.nix` is the §5.5 release form: without `workingTree` it fetches the
+  archive and builds from its `vendor/`. The flake passes its own tree as `workingTree`
+  and sets the module's default `package` to that tree built with the system's own
+  `pkgs` (never `self.packages`, which would bring a second nixpkgs into the closure);
+  `module.nix` alone defaults to the release. `callPackage` would fill an argument named `src` from nixpkgs' `src`
+  alias, so never rename it to `src`.
+- The coverage floor leaves out only `coverage::HARDWARE_ONLY`, each file with its
+  reason; a mutant survivor is killed by a test or triaged in `doc/mutants.toml` by
+  file, function and replacement, never by line.
 
 ## Forbidden patterns
 
@@ -221,7 +251,8 @@ will not be green there.
 
 ## Environment expectations
 
-- Toolchain pinned by `rust-toolchain.toml` (1.97.0, rustfmt, clippy); edition 2024;
+- Toolchain pinned by `rust-toolchain.toml` (1.97.0, rustfmt, clippy); edition 2024; the
+  declared minimum (`rust-version`) is 1.93, Guix's Rust, checked by CI's `msrv` job;
   `Cargo.lock` is committed and `--locked` is the norm.
 - `cargo-deny`, `cargo-audit`, `reuse`, `texinfo` (makeinfo/texi2any) and `nushell` come
   from `nix develop`. Without Nix: `cargo install --locked cargo-deny cargo-audit`,
@@ -265,6 +296,9 @@ will not be green there.
 | Tailoring register | `COMPLIANCE.md` |
 | Dependency qualification | `DEPENDENCIES.md` |
 | Third-party credits (§15.3) | `CREDITS.md` |
+| Budgets, coverage and mutation gates | `xtask/src/{budgets,coverage,mutants}.rs`, `doc/{budgets,measurements,mutants}.toml` |
+| Release archive, SBOM, manifest | `xtask/src/{dist,sbom,manifest}.rs`, `doc/releases/`, `RELEASING.md`, `.github/workflows/release.yml` |
+| Package definitions | `packaging/{default.nix,guix.scm,PKGBUILD}` |
 | Plan and task list | `PLAN.md`, `TODO.md` |
 
 ## Standards compliance

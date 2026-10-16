@@ -66,7 +66,7 @@ reads this file.
 - [ ] P-050 Traceability matrix generated in CI, no orphans (§21.3)
 - [ ] P-051 Budgets measured on the reference machine, margins in band (§22)
 - [ ] P-052 Mutation run triaged, ≥ 80 % line coverage (§21.2 B)
-- [ ] P-053 packaging/default.nix, guix.scm, PKGBUILD build the binary (§5.5)
+- [x] P-053 packaging/default.nix, guix.scm, PKGBUILD build the binary (§5.5)
 - [ ] P-054 SBOM, release manifest, signed tag (§24.3, §25.3)
 - [ ] P-055 Texinfo manual builds to info, html, pdf (§8) (optional)
 
@@ -74,7 +74,7 @@ reads this file.
 
 Maintainer actions that unblock ticks above; counted in the PLAN row, not in a milestone.
 
-- [ ] P-100 G1: confirm the 68 draft requirements and set `status = "baselined"` in doc/requirements.toml; then P-001 and P-003 can be verified (inspection) and ticked
+- [ ] P-100 G1: confirm the 69 draft requirements and set `status = "baselined"` in doc/requirements.toml; then P-001 and P-003 can be verified (inspection) and ticked
 - [x] P-101 Generate and commit flake.lock on a host with GitHub access (`nix flake lock`; the sandbox that produced M0 could not reach github.com)
 - [ ] P-102 Re-sign the M0 commits with the maintainer key at squash-merge (§6.3)
 - [ ] P-103 Add the PROJECTS.md row in the Projects repository: `| Fairing | FRN | Boot splash for Steelbore OS Bravais | B (fairing-askpass and initrd unit raised to A) | https://github.com/Spacecraft-Software/Fairing | pre-release |`

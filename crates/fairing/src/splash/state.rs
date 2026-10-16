@@ -305,6 +305,38 @@ mod tests {
     }
 
     #[test]
+    fn the_limits_themselves_are_accepted() {
+        let dir = dir();
+        let path = dir.path().join("state");
+        fs::write(&path, "bar=10000\ninitrd_end_ms=7\n").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            read_handoff(&path),
+            Some(Handoff {
+                bar: 1.0,
+                initrd_end: Duration::from_millis(7),
+            }),
+            "a full bar is a bar"
+        );
+        let line = "initrd_ms=1500\n";
+        let padding =
+            usize::try_from(MAX_FILE_BYTES).unwrap_or_else(|e| panic!("{e}")) - line.len();
+        let exact = format!("{line}{}", "#".repeat(padding));
+        assert_eq!(u64::try_from(exact.len()).ok(), Some(MAX_FILE_BYTES));
+        fs::write(&path, &exact).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            read_durations(&path).initrd,
+            Some(Duration::from_millis(1500)),
+            "a file of exactly the limit is read"
+        );
+        fs::write(&path, format!("{exact}#")).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            read_durations(&path),
+            Durations::default(),
+            "one byte more is not"
+        );
+    }
+
+    #[test]
     fn bar_steps_are_exact_and_clamped() {
         assert_eq!(fraction_to_steps(0.0), 0);
         assert_eq!(fraction_to_steps(1.0), 10_000);

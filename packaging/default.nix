@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Nix derivation for Fairing, consumed by flake.nix through `callPackage`.
-# Builds from the local tree. The §5.5 release form (fetch from the tagged
-# archive with its SHA-256) lands at M5 alongside guix.scm and PKGBUILD.
+# Steelbore Standard §5.5 release form: without `workingTree` it fetches the
+# release archive `cargo xtask dist` builds, by version and SHA-256, and
+# builds from the crates vendored inside it. flake.nix passes the working tree
+# as `workingTree` instead, with the dependencies read from Cargo.lock. `cargo xtask dist`
+# writes `version` and `hash` below; never edit them by hand.
 #
 # Two feature switches make the splash builds the NixOS module runs:
 #
@@ -17,13 +20,21 @@
 {
   lib,
   rustPlatform,
+  fetchurl,
   texinfo,
   gnumake,
   withThemeTool ? true,
   withDbus ? true,
+  workingTree ? null,
 }:
 let
   full = withThemeTool && withDbus;
+  version = "0.1.0";
+  # The release archive: the tree at the tag with every crate vendored.
+  release = fetchurl {
+    url = "https://github.com/Spacecraft-Software/Fairing/releases/download/v${version}/fairing-${version}.tar.gz";
+    hash = "sha256-B1Rl+nq1zppxEruCKHUAu3/cEAVBFFhaJY/9jV09RKc=";
+  };
 in
 rustPlatform.buildRustPackage (finalAttrs: {
   pname =
@@ -35,32 +46,27 @@ rustPlatform.buildRustPackage (finalAttrs: {
       "fairing-tool"
     else
       "fairing-initrd";
-  version = "0.1.0";
+  inherit version;
 
-  # Only what the build and its tests read: never `target/` or `doc/build/`,
-  # which a working copy may hold.
-  src = lib.fileset.toSource {
-    root = ../.;
-    fileset = lib.fileset.difference (lib.fileset.unions [
-      ../.cargo
-      ../Cargo.toml
-      ../Cargo.lock
-      ../crates
-      ../xtask
-      ../contracts
-      ../themes
-      ../doc
-    ]) (lib.fileset.maybeMissing ../doc/build);
-  };
+  src = if workingTree == null then release else workingTree;
 
-  cargoLock.lockFile = ../Cargo.lock;
+  # The archive carries its crates in `vendor/`; the working tree has only
+  # Cargo.lock, whose crates Nix fetches by their checksums.
+  ${if workingTree == null then "cargoVendorDir" else "cargoLock"} =
+    if workingTree == null then "vendor" else { lockFile = ../Cargo.lock; };
 
   # Only the product binary is installed; xtask is development tooling.
   cargoBuildFlags = [
     "--package"
     "fairing"
   ];
-  cargoTestFlags = [ "--workspace" ];
+  # xtask's tests read the repository itself (git, the package definitions,
+  # doc/releases), which the release archive leaves out; CI runs them.
+  cargoTestFlags = [
+    "--workspace"
+    "--exclude"
+    "xtask"
+  ];
 
   buildNoDefaultFeatures = !full;
   buildFeatures = lib.optionals (!full) (

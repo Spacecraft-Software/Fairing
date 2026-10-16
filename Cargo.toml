@@ -16,7 +16,10 @@ exclude = ["fuzz"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.97"
+# The oldest rustc the workspace builds with, which CI's `msrv` job checks:
+# the Rust that Guix ships, so packaging/guix.scm builds with it. Development
+# and CI otherwise use the pin in rust-toolchain.toml.
+rust-version = "1.93"
 license = "GPL-3.0-or-later"
 authors = ["Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>"]
 homepage = "https://Fairing.SpacecraftSoftware.org/"

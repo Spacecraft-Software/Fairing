@@ -1372,6 +1372,18 @@ mod tests {
             events: Vec<Event>,
             opener: fn(Choice, Size) -> Result<Opened, NoBackend>,
         ) -> Outcome {
+            self.run_from(plan, terminate, events, opener, Instant::now())
+        }
+
+        /// [`Harness::run`] for a process that started at `origin`.
+        fn run_from(
+            &self,
+            plan: &Plan,
+            terminate: bool,
+            events: Vec<Event>,
+            opener: fn(Choice, Size) -> Result<Opened, NoBackend>,
+            origin: Instant,
+        ) -> Outcome {
             let flag = AtomicBool::new(terminate);
             let clock = Ticking(Cell::new(Duration::from_secs(5)));
             let (tx, rx) = mpsc::channel();
@@ -1384,11 +1396,28 @@ mod tests {
                 terminate: &flag,
                 notifier: &self.notifier,
                 systemd: (plan.stage == Stage::System).then_some(rx),
-                origin: Instant::now(),
+                origin,
                 emit: &emit,
                 invocation: "fairing splash",
             };
             run_with(plan, &env, opener)
+        }
+
+        /// Calls `f` with an environment of no D-Bus and no signal.
+        fn with_env<R>(&self, origin: Instant, f: impl FnOnce(&Environment<'_>) -> R) -> R {
+            let flag = AtomicBool::new(false);
+            let clock = Ticking(Cell::new(Duration::from_secs(5)));
+            let emit = |d: Diagnostic| self.diagnostics.borrow_mut().push(d);
+            let env = Environment {
+                clock: &clock,
+                terminate: &flag,
+                notifier: &self.notifier,
+                systemd: None,
+                origin,
+                emit: &emit,
+                invocation: "fairing splash",
+            };
+            f(&env)
         }
 
         /// What greetd's start does before it stops the splash.
@@ -1951,5 +1980,463 @@ mod tests {
         );
         assert_eq!(outcome.last_status.as_deref(), Some("Network Manager"));
         assert!(outcome.dbus);
+    }
+
+    /// An outcome before anything happened.
+    fn blank() -> Outcome {
+        Outcome {
+            reason: Reason::NoBackend,
+            backend: None,
+            frames: 0,
+            dropped: 0,
+            first_frame_ms: None,
+            bar: 0.0,
+            dbus: false,
+            carried_bar: None,
+            first_bar: None,
+            last_status: None,
+            release_ms: None,
+            agent: false,
+            answered: 0,
+        }
+    }
+
+    /// `secs` seconds before now.
+    fn ago(secs: u64) -> Instant {
+        Instant::now()
+            .checked_sub(Duration::from_secs(secs))
+            .unwrap_or_else(|| panic!("the clock is younger than {secs} s"))
+    }
+
+    #[test]
+    fn the_presenter_is_configured_for_the_splash() {
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::Initrd, None);
+        let origin = ago(1);
+        let output = harness.with_env(origin, |env| start(&plan, env, memory));
+        let Ok(Output::Pixels(presenter)) = output else {
+            panic!("no presenter");
+        };
+        let config = presenter.config();
+        assert_eq!(config.hz, SPLASH_HZ);
+        assert_eq!(
+            config.origin, origin,
+            "first frames count from process start"
+        );
+        assert_eq!(
+            config.choice, plan.choice,
+            "re-acquired through the same chain"
+        );
+        assert_eq!(
+            config.reacquire_budget,
+            Duration::ZERO,
+            "never a wait in a frame"
+        );
+    }
+
+    #[test]
+    fn the_first_frame_is_timed_from_process_start_in_milliseconds() {
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::Initrd, Some(Duration::from_millis(30)));
+        let started = Instant::now();
+        let outcome = harness.run_from(&plan, false, Vec::new(), memory, ago(10));
+        let bound = 10_000.0 + started.elapsed().as_secs_f64() * 1000.0;
+        let first = outcome.first_frame_ms.unwrap_or_default();
+        assert!((10_000.0..=bound).contains(&first), "{first} ms");
+    }
+
+    #[test]
+    fn the_release_is_timed_in_milliseconds_and_only_on_a_signal() {
+        // Verifies: FRN-SRS-033
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::Initrd, None);
+        let started = Instant::now();
+        let outcome = harness.run(&plan, true, Vec::new(), memory);
+        let bound = started.elapsed().as_secs_f64() * 1000.0;
+        let release = outcome.release_ms.unwrap_or_default();
+        // A frame drawn and the output closed take more than a microsecond,
+        // and on the memory backend far less than the 100 ms the requirement
+        // allows.
+        assert!(release > 0.001 && release <= bound, "{release} ms");
+        assert!(release < 100.0, "released in {release} ms");
+    }
+
+    #[test]
+    fn a_failure_signal_must_last_the_settle_time_to_the_tick() {
+        // Verifies: FRN-SRS-034
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::System, Some(Duration::from_mins(1)));
+        let outcome = harness.run(
+            &plan,
+            false,
+            vec![snapshot(0.3, 1, "starting", None), Event::FailedUnits(2)],
+            memory,
+        );
+        assert_eq!(outcome.reason, Reason::FailedUnit);
+        // The ticking clock moves 10 ms a frame: the count rose at the first
+        // tick and has lasted SIGNAL_SETTLE at the twenty-first, which ends
+        // the run before it draws.
+        assert_eq!(outcome.frames, 20);
+        assert_eq!(outcome.release_ms, None, "no signal, no release time");
+    }
+
+    #[test]
+    fn the_loop_keeps_to_thirty_frames_a_second() {
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::Initrd, Some(Duration::from_millis(200)));
+        let started = Instant::now();
+        let outcome = harness.run(&plan, false, Vec::new(), memory);
+        assert_eq!(outcome.frames, 20);
+        // Twenty frames are eighteen sleeps: the first frame is drawn at
+        // once and the first wait only anchors the schedule. Every later
+        // deadline is the anchor plus whole periods, so no faster than 31 Hz,
+        // the top of the tolerance. A lower bound only, which load cannot
+        // break.
+        assert_eq!(SPLASH_HZ, 30);
+        let elapsed = started.elapsed();
+        assert!(elapsed >= Duration::from_secs(18) / 31, "{elapsed:?}");
+    }
+
+    #[test]
+    fn the_cache_is_looked_for_once_a_second_and_read_once() {
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::System, None);
+        let path = plan.paths.state.join(DURATIONS_FILE);
+        let mut session = Session::new(0.0);
+        session.look_for_cache(&plan, Duration::ZERO);
+        assert_eq!(session.durations, None, "nothing there yet");
+        let first = Durations {
+            initrd: Some(Duration::from_secs(3)),
+            stage2: Some(Duration::from_secs(9)),
+        };
+        write_durations(&path, &first).unwrap_or_else(|e| panic!("{e}"));
+        session.look_for_cache(&plan, Duration::from_millis(500));
+        assert_eq!(session.durations, None, "not looked for within the second");
+        session.look_for_cache(&plan, CACHE_RETRY);
+        assert_eq!(session.durations, Some(first));
+        write_durations(&path, &Durations::default()).unwrap_or_else(|e| panic!("{e}"));
+        session.look_for_cache(&plan, CACHE_RETRY * 5);
+        assert_eq!(session.durations, Some(first), "read once");
+    }
+
+    #[test]
+    fn missing_dbus_is_reported_at_the_deadline_not_before() {
+        // Verifies: FRN-SRS-016
+        let harness = Harness::new();
+        harness.with_env(Instant::now(), |env| {
+            let mut session = Session::new(0.0);
+            session
+                .check_dbus_deadline(env, DBUS_DEADLINE.saturating_sub(Duration::from_millis(1)));
+            assert!(harness.codes().is_empty(), "{:?}", harness.codes());
+            session.check_dbus_deadline(env, DBUS_DEADLINE);
+            assert_eq!(harness.codes(), ["DBUS_DEGRADED"], "at the deadline itself");
+            session.check_dbus_deadline(env, DBUS_DEADLINE * 2);
+            assert_eq!(harness.codes(), ["DBUS_DEGRADED"]);
+        });
+    }
+
+    #[test]
+    fn escape_on_a_keyboard_shows_the_overlay_in_the_frame() {
+        use std::io::Write as _;
+        let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let sysfs = root.path().join("sys");
+        let dev = root.path().join("dev");
+        let caps = sysfs.join("event2/device/capabilities");
+        std::fs::create_dir_all(&caps).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::create_dir_all(&dev).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(caps.join("ev"), "120013\n").unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(caps.join("key"), "fffffffffffffffe\n").unwrap_or_else(|e| panic!("{e}"));
+        let node = dev.join("event2");
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            &node,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::from_raw_mode(0o600),
+            0,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let mut session = Session::new(0.0);
+        assert_eq!(session.navigate(Duration::ZERO, false), None, "no overlay");
+        let mut keys = Navigation::new(&sysfs, &dev);
+        keys.scan(Duration::ZERO);
+        // Opening a FIFO to write blocks until it has a reader: without the
+        // keyboard open the test would hang, not fail.
+        assert_eq!(keys.keyboards(), 1, "the keyboard is opened");
+        session.keys = Some(keys);
+        session.overlay = Some(Overlay::new(PathBuf::from("/nonexistent/journalctl")));
+        let mut writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&node)
+            .unwrap_or_else(|e| panic!("{e}"));
+        // One Escape press, as evdev writes it.
+        let mut escape = vec![0_u8; 2 * size_of::<usize>()];
+        escape.extend_from_slice(&1_u16.to_ne_bytes());
+        escape.extend_from_slice(&1_u16.to_ne_bytes());
+        escape.extend_from_slice(&1_i32.to_ne_bytes());
+        writer.write_all(&escape).unwrap_or_else(|e| panic!("{e}"));
+        let view = session
+            .navigate(Duration::from_millis(33), false)
+            .unwrap_or_else(|| panic!("the overlay is not shown"));
+        assert_eq!(view.scroll, 0);
+        assert_eq!(view.lines.len(), 1, "{:?}", view.lines);
+        assert!(view.lines[0].contains("cannot be read"), "{:?}", view.lines);
+        assert_eq!(
+            session.navigate(Duration::from_millis(66), true),
+            None,
+            "a prompt covers it"
+        );
+    }
+
+    /// The text backend on `path`.
+    fn text_output(path: &std::path::Path) -> TextOutput {
+        TextOutput {
+            console: TextConsole::new(
+                Sink::open(&TextTarget::Console(path.to_path_buf()))
+                    .unwrap_or_else(|e| panic!("{e}")),
+            ),
+            cadence: Cadence::new(SPLASH_HZ),
+            origin: Instant::now(),
+            first: None,
+            frames: 0,
+        }
+    }
+
+    #[test]
+    fn text_lines_without_a_question_never_time_out() {
+        let harness = Harness::new();
+        let console = harness.dir.path().join("console");
+        std::fs::write(&console, b"").unwrap_or_else(|e| panic!("{e}"));
+        let mut text = text_output(&console);
+        let mut session = Session::new(0.0);
+        let mut outcome = blank();
+        let scene = Scene::new(10);
+        harness.with_env(Instant::now(), |env| {
+            for now in [Duration::ZERO, BLIND_PROMPT_LIMIT * 5] {
+                let written = session.write(env, &mut text, &scene, &mut outcome, now);
+                assert_eq!(written, Ok(()));
+            }
+        });
+        assert_eq!(text.frames, 2);
+        assert!(text.first.is_some());
+    }
+
+    #[test]
+    fn a_question_the_console_does_not_take_is_given_up_after_the_limit() {
+        use std::io::Write as _;
+        let harness = Harness::new();
+        // A console that takes nothing: a FIFO whose buffer is already full.
+        let console = harness.dir.path().join("console");
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            &console,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::from_raw_mode(0o600),
+            0,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let _reader = rustix::fs::open(
+            &console,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK,
+            rustix::fs::Mode::empty(),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let mut filler =
+            Sink::open(&TextTarget::Console(console.clone())).unwrap_or_else(|e| panic!("{e}"));
+        while filler.write(&[b'x'; 4096]).is_ok() {}
+        let mut text = text_output(&console);
+        let mut session = Session::new(0.0);
+        let mut outcome = blank();
+        let scene = Scene::new(10).with_prompt(Some(PromptView {
+            message: "Passphrase".to_owned(),
+            field: Field::Masked(0),
+            notice: None,
+        }));
+        let opened = Duration::from_secs(10);
+        harness.with_env(Instant::now(), |env| {
+            let mut write = |now| session.write(env, &mut text, &scene, &mut outcome, now);
+            assert_eq!(write(opened), Ok(()));
+            assert_eq!(write(opened + BLIND_PROMPT_LIMIT), Ok(()), "at the limit");
+            assert_eq!(
+                write(opened + BLIND_PROMPT_LIMIT + Duration::from_millis(1)),
+                Err(Reason::AgentFailed),
+                "past it"
+            );
+        });
+    }
+
+    /// A memory presenter whose lost output is never re-acquired, so a
+    /// failure injected with `fail_next` reaches `Session::present`.
+    fn failing_output(plan: &Plan) -> Output {
+        let opened = memory(plan.choice, plan.memory_size).unwrap_or_else(|e| panic!("{e:?}"));
+        let compositor =
+            Compositor::with_theme(plan.selection, &plan.theme).unwrap_or_else(|e| panic!("{e}"));
+        let config = PresenterConfig {
+            choice: plan.choice,
+            reacquire_budget: Duration::ZERO,
+            reopen: nothing,
+            ..PresenterConfig::default()
+        };
+        Output::Pixels(
+            Presenter::new(opened.surface, compositor, config).unwrap_or_else(|e| panic!("{e}")),
+        )
+    }
+
+    /// Makes the next frame of `output` fail with `kind`.
+    fn fail_next(output: &mut Output, kind: RenderErrorKind) {
+        let Output::Pixels(presenter) = output else {
+            panic!("not a presenter");
+        };
+        presenter
+            .memory_mut()
+            .unwrap_or_else(|| panic!("not the memory backend"))
+            .fail_next(kind);
+    }
+
+    fn prompted() -> Scene {
+        Scene::new(10).with_prompt(Some(PromptView {
+            message: "Passphrase".to_owned(),
+            field: Field::Masked(0),
+            notice: None,
+        }))
+    }
+
+    #[test]
+    fn a_lost_output_is_reported_once_and_retried_every_frame() {
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::Initrd, None);
+        let mut output = failing_output(&plan);
+        let mut session = Session::new(0.0);
+        let mut outcome = blank();
+        let scene = Scene::new(10);
+        let lost = Duration::from_secs(10);
+        harness.with_env(Instant::now(), |env| {
+            let mut present =
+                |output: &mut Output, now| session.present(env, output, &scene, &mut outcome, now);
+            for (i, now) in [
+                lost,
+                lost + Duration::from_millis(33),
+                lost + BLIND_PROMPT_LIMIT * 3,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                fail_next(&mut output, RenderErrorKind::Lost);
+                assert_eq!(present(&mut output, now), Ok(()), "lost frame {i}");
+            }
+            assert_eq!(present(&mut output, lost + BLIND_PROMPT_LIMIT * 4), Ok(()));
+        });
+        assert_eq!(
+            harness.codes(),
+            ["OUTPUT_LOST"],
+            "said once, no prompt to strand"
+        );
+        assert_eq!(session.lost_since, None, "a frame landed");
+        assert_eq!(outcome.first_bar, Some(0.0));
+    }
+
+    #[test]
+    fn a_question_left_undrawn_past_the_limit_goes_to_the_console_agent() {
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::Initrd, None);
+        let mut output = failing_output(&plan);
+        let mut session = Session::new(0.0);
+        let mut outcome = blank();
+        let scene = prompted();
+        let lost = Duration::from_secs(10);
+        let results = harness.with_env(Instant::now(), |env| {
+            let mut lost_frame = |now| {
+                fail_next(&mut output, RenderErrorKind::Lost);
+                session.present(env, &mut output, &scene, &mut outcome, now)
+            };
+            [
+                lost_frame(lost),
+                lost_frame(lost + BLIND_PROMPT_LIMIT),
+                lost_frame(lost + BLIND_PROMPT_LIMIT + Duration::from_millis(1)),
+            ]
+        });
+        assert_eq!(results, [Ok(()), Ok(()), Err(Reason::AgentFailed)]);
+        assert_eq!(harness.codes(), ["OUTPUT_LOST", "ASK_BLIND"]);
+    }
+
+    #[test]
+    fn a_frame_drawn_between_losses_restarts_the_prompt_limit() {
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::Initrd, None);
+        let mut output = failing_output(&plan);
+        let mut session = Session::new(0.0);
+        let mut outcome = blank();
+        let scene = prompted();
+        let lost = Duration::from_secs(10);
+        harness.with_env(Instant::now(), |env| {
+            fail_next(&mut output, RenderErrorKind::Lost);
+            assert_eq!(
+                session.present(env, &mut output, &scene, &mut outcome, lost),
+                Ok(())
+            );
+            let drawn = lost + Duration::from_secs(1);
+            assert_eq!(
+                session.present(env, &mut output, &scene, &mut outcome, drawn),
+                Ok(())
+            );
+            fail_next(&mut output, RenderErrorKind::Lost);
+            let again = lost + BLIND_PROMPT_LIMIT + Duration::from_secs(1);
+            assert_eq!(
+                session.present(env, &mut output, &scene, &mut outcome, again),
+                Ok(())
+            );
+        });
+        assert!(
+            !harness.codes().contains(&"ASK_BLIND"),
+            "{:?}",
+            harness.codes()
+        );
+    }
+
+    #[test]
+    fn late_flips_are_dropped_frames_until_the_stall_limit() {
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::Initrd, None);
+        let mut output = failing_output(&plan);
+        let mut session = Session::new(0.0);
+        let mut outcome = blank();
+        let scene = Scene::new(10);
+        let first = Duration::from_secs(10);
+        let results = harness.with_env(Instant::now(), |env| {
+            let mut late = |now| {
+                fail_next(&mut output, RenderErrorKind::Timeout);
+                session.present(env, &mut output, &scene, &mut outcome, now)
+            };
+            [
+                late(first),
+                late(first + Duration::from_secs(1)),
+                late(first + FLIP_STALL_LIMIT),
+                late(first + FLIP_STALL_LIMIT + Duration::from_millis(1)),
+            ]
+        });
+        assert_eq!(results, [Ok(()), Ok(()), Ok(()), Err(Reason::RenderFailed)]);
+        assert_eq!(harness.codes(), ["FLIP_LATE", "RENDER_FAILED"]);
+        assert_eq!(outcome.first_bar, None, "no frame was drawn");
+    }
+
+    #[test]
+    fn any_other_failure_ends_the_run_at_once() {
+        let harness = Harness::new();
+        let plan = harness.plan(Stage::Initrd, None);
+        let mut output = failing_output(&plan);
+        let mut session = Session::new(0.0);
+        let mut outcome = blank();
+        let scene = Scene::new(10);
+        let result = harness.with_env(Instant::now(), |env| {
+            fail_next(&mut output, RenderErrorKind::Io);
+            session.present(
+                env,
+                &mut output,
+                &scene,
+                &mut outcome,
+                Duration::from_secs(10),
+            )
+        });
+        assert_eq!(result, Err(Reason::RenderFailed));
+        assert_eq!(harness.codes(), ["RENDER_FAILED"]);
     }
 }

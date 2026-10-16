@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: CC-BY-SA-4.0
+#
+# Release notes the manifest cannot derive (Steelbore Standard §25.3), for
+# Fairing 0.1.0. `cargo xtask manifest` reads this file and writes
+# fairing-0.1.0.manifest.json beside it. The maintainer completes the
+# validation note after the G3 run on the reference machine (T-089) and
+# before the tag (T-090).
+
+category = "B (§19.2); crates/fairing-askpass and the initrd lifecycle unit raised to A"
+
+validation = "Pending the maintainer's G3 run on the reference machine (T-089): a cold boot to greetd with a LUKS root on the ThinkPad T490s, the reference-machine budgets of doc/budgets.toml measured, and the release installed from each of the three package definitions, run once and removed (§25.3)."
+
+conformance = "Fairing 0.1.0 conforms to The Steelbore Standard v2.12 and the Spacecraft Software Dual-Mode Self-Documenting CLI Standard v1.1.0 as tailored in COMPLIANCE.md at the release tag."
+
+[[known_issue]]
+id = "T-050"
+severity = "S3"
+summary = "A theme whose Nickel evaluation recurses without bound can abort `fairing theme check|compile` instead of exiting 2. The 5 s deadline and the 256-level nesting bound on the theme file limit it; the boot loads compiled themes only and is not affected."
+
+[[known_issue]]
+id = "T-051"
+severity = "S3"
+summary = "A stage-2 splash that has no D-Bus connection, on a machine that does not start greetd, has nothing to end it until shutdown. Workaround: `systemctl stop fairing.service` from another VT or over SSH, or start greetd."

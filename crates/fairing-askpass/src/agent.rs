@@ -645,6 +645,50 @@ mod tests {
     }
 
     #[test]
+    fn the_directory_is_rescanned_on_time_without_an_event() {
+        let mut f = fixture();
+        f.ask("ask.1", "");
+        // Swallow the rename's event: only the clock can find the question.
+        while f.agent.watcher.changed().unwrap_or_else(|e| panic!("{e}")) {}
+        assert_eq!(f.tick(0), Activity::Opened(1), "the first tick scans");
+        f.withdraw("ask.1");
+        while f.agent.watcher.changed().unwrap_or_else(|e| panic!("{e}")) {}
+        assert_eq!(f.tick(RESCAN_US - 1), Activity::Idle, "not yet due");
+        assert_eq!(f.tick(RESCAN_US), Activity::Closed, "due at the interval");
+    }
+
+    #[test]
+    fn debug_names_the_question_and_counts_the_secret() {
+        let mut f = fixture();
+        f.ask("ask.1", "");
+        f.tick(1);
+        f.agent.keys.typed("abc");
+        f.tick(2);
+        let shown = format!("{:?}", f.agent);
+        assert!(shown.starts_with("Agent {"), "{shown}");
+        assert!(shown.contains("\"ask.1\""), "{shown}");
+        assert!(shown.contains("chars: 3"), "{shown}");
+        assert!(!shown.contains("abc"), "{shown}");
+    }
+
+    #[test]
+    fn keyboards_are_a_key_source() {
+        let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let caps = root.path().join("event1/device/capabilities");
+        fs::create_dir_all(&caps).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(caps.join("ev"), "120013\n").unwrap_or_else(|e| panic!("{e}"));
+        fs::write(caps.join("key"), "fffffffffffffffe\n").unwrap_or_else(|e| panic!("{e}"));
+        // The keyboard is listed but its node does not exist.
+        let mut boards = Keyboards::new(root.path(), &root.path().join("dev"));
+        assert!(!KeySource::grabbed(&boards));
+        assert_eq!(KeySource::grab(&mut boards), 0);
+        assert!(KeySource::grabbed(&boards));
+        assert_eq!(KeySource::refused(&boards), Some(io::ErrorKind::NotFound));
+        KeySource::release(&mut boards);
+        assert!(!KeySource::grabbed(&boards));
+    }
+
+    #[test]
     fn a_reply_that_cannot_be_sent_is_reported_and_cleared() {
         let mut f = fixture();
         f.ask("ask.1", "");

@@ -32,7 +32,7 @@ The full requirement set lives in the manual: `doc/fairing.texi` (Needs and Requ
 | `crates/fairing-askpass` | systemd ask-password agent (**Category A**) |
 | `xtask/` | In-tree task runner: requirements generation, traceability, progress, text-format gate |
 | `doc/` | Texinfo manual, requirement set, Makefile |
-| `packaging/` | Nix derivation used by `flake.nix`; the NixOS module, its theme build and VM tests under `packaging/nixos/` (Guix and PKGBUILD arrive at M5) |
+| `packaging/` | The three release package definitions (`default.nix`, `guix.scm`, `PKGBUILD`); the NixOS module, its theme build and VM tests under `packaging/nixos/` |
 
 ## Building and verifying
 
@@ -48,7 +48,19 @@ cargo xtask progress           # §17.1 progress block from PLAN.md and TODO.md
 make check info html           # manual: zero makeinfo warnings, then .info and .html under doc/build/
 cargo deny check && cargo audit
 reuse lint
+cargo xtask budgets            # §22 margins; CI passes the sizes it measures with --measured
+cargo xtask coverage           # 80 % line floor per crate, from cargo llvm-cov's JSON summary
+cargo xtask dist               # reproducible, vendored release archive; stamps packaging/
 ```
+
+Releases are cut as `RELEASING.md` describes: `cargo xtask dist`, `sbom` and `manifest`
+produce the archive, its CycloneDX SBOM and the §25.3 manifest, and the release workflow
+rebuilds and checks them from the signed tag before it drafts the release. In a checkout of
+a release tag, `nix-build -E 'with import <nixpkgs> {}; callPackage ./packaging/default.nix {}'`,
+`guix build -f packaging/guix.scm` or `makepkg` beside `packaging/PKGBUILD` fetches the
+release archive by its checksum and builds the `fairing` binary and its Info manual
+offline. The archive itself carries the sources and their vendored crates, not the package
+definitions or the flake.
 
 `nix develop` provides every tool above, and `nix flake check` evaluates the NixOS module and, on x86_64 with KVM, boots it in two VM tests. The `fairing` binary offers `fairing splash`, `fairing theme check|compile|inspect`, `fairing preview`, `fairing describe`, `fairing schema [<command>]`, `--version` and the global flags of the Spacecraft Software CLI Standard; run `fairing describe --json` for the live capability manifest.
 

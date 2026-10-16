@@ -5,7 +5,7 @@
 @node Requirements
 @chapter Requirements
 
-Sixty-eight requirements in eleven groups, every one at status draft until the G1 requirements gate baselines the set. Each group names the need it traces to and the scoping decision of 2026-10-06 that fixed it. The Steelbore Standard §20.6 sentence pattern applies throughout: a binding obligation is carried by shall, a prohibition by shall not.
+Sixty-nine requirements in eleven groups, every one at status draft until the G1 requirements gate baselines the set. Each group names the need it traces to and the scoping decision of 2026-10-06 that fixed it. The Steelbore Standard §20.6 sentence pattern applies throughout: a binding obligation is carried by shall, a prohibition by shall not.
 
 Priority is mandatory, expected or optional; only the first two count toward the §17 progress figures. Verification is one of the four §21.1 methods --- test, analysis, inspection, review of design --- chosen when the requirement was written. Milestone names the plan item that discharges the requirement; Assurance appears only where a requirement belongs to a raised Category A subsystem (the password agent and the initrd lifecycle unit).
 
@@ -1355,6 +1355,26 @@ inspection
 draft
 @item Milestone
 M2
+@end table
+
+@anchor{FRN-SRS-105}
+@subheading FRN-SRS-105 --- The initrd build is no larger than 2.5 MiB
+@cindex FRN-SRS-105
+@table @asis
+@item Requirement
+The stripped release binary that the initrd carries, built without the theme tool and the D-Bus client, shall not exceed 2.5 MiB.
+@item Rationale
+Every byte ships in the initrd; the Nickel evaluator and zbus are kept out of it by feature gates (roadmap decision of 2026-10-06), and the ceiling keeps them out. Steelbore Standard §22.1 declares binary size as a budget.
+@item Source
+@ref{FRN-NEED-001}, Steelbore Standard §22.1.
+@item Priority
+expected
+@item Verification
+test
+@item Status
+draft
+@item Milestone
+M5
 @end table
 
 @node Security Requirements

@@ -9,7 +9,8 @@ description: >
   under an agent), `fairing theme check|compile|inspect` validates and compiles Nickel
   themes, `fairing splash` is the boot splash the systemd units run, and `--version
   --json` returns the attribution envelope. In the repository, `cargo xtask` runs the
-  requirements generator, traceability gate, progress block and text-format gate. The
+  requirements generator, traceability gate, progress block, text-format gate, the
+  budget, coverage and mutation gates, and the release archive, SBOM and manifest. The
   splash also answers systemd's password questions, shows the journal on Escape, draws
   at shutdown, and writes plain console text in accessible mode.
 license: GPL-3.0-or-later
@@ -117,6 +118,12 @@ cargo xtask req-texi --check   # generated Texinfo chapters current
 cargo xtask trace --json       # traceability matrix as an envelope
 cargo xtask progress           # §17.1 progress block
 cargo xtask check-eol          # §6.5 text-file gate
+cargo xtask budgets --json     # §22 margins and bands
+cargo xtask coverage --json    # per-crate line coverage from target/llvm-cov.json
+cargo xtask mutants --outcomes mutants.out/outcomes.json   # survivors triaged?
+cargo xtask dist --json        # release archive; stamps packaging/ (RELEASING.md)
+cargo xtask sbom --json        # CycloneDX SBOM into target/dist
+cargo xtask manifest --check   # committed manifest matches target/dist
 ```
 
 Live manifest: `fairing describe --json` is authoritative at run time.

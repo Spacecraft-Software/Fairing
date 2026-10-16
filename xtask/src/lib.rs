@@ -4,7 +4,7 @@
 
 //! In-tree task runner for the Fairing repository.
 //!
-//! `cargo xtask <verb>` runs one of four maintenance gates:
+//! `cargo xtask <verb>` runs one of the maintenance gates:
 //!
 //! - `req-texi`  — generate the Texinfo `Needs` and `Requirements` chapters from
 //!   `doc/requirements.toml` (Steelbore Standard §20.1), or check they are current.
@@ -12,6 +12,8 @@
 //!   `Implements:` markers and fail on orphans or unknown identifiers (§21.3).
 //! - `progress`  — render the §17.1 progress block from `PLAN.md` / `TODO.md`.
 //! - `check-eol` — the §6.5 text-file gate (stored line endings, BOM, final newline).
+//! - `budgets`, `budgets-texi` — the §22 resource budgets: margins and bands,
+//!   and the table the manual includes.
 //!
 //! This is an internal tool, not a shipped Spacecraft Software CLI: it accepts
 //! `--json` and emits the house `error` envelope on stderr, but does not carry the
@@ -21,11 +23,17 @@
 #![forbid(unsafe_code)]
 
 pub mod args;
+pub mod budgets;
+pub mod coverage;
+pub mod dist;
 pub mod eol;
+pub mod manifest;
+pub mod mutants;
 pub mod paths;
 pub mod progress;
 pub mod report;
 pub mod requirements;
+pub mod sbom;
 pub mod trace;
 
 use crate::args::Args;
@@ -40,6 +48,13 @@ verbs:
   trace      [--requirements <toml>] [--out <dir>]
   progress   [--plan <md>] [--todo <md>] [--prd <md>] [--matrix <json>] [--explain]
   check-eol
+  budgets      [--measured id=value,...] [--release]
+  budgets-texi [--check]
+  dist         [--ref <commit>] [--out <dir>] [--check]
+  coverage     [--report <json>] [--min <percent>]
+  mutants      --outcomes <json> [--triage <toml>]
+  sbom         [--ref <commit>] [--out <dir>]
+  manifest     [--coverage <json>] [--mutants <json>,...] [--out <dir>] [--check]
   help
 
 exit codes: 0 ok, 1 gate failed, 2 usage error, 3 input not found
@@ -61,6 +76,13 @@ where
         "trace" => trace::command::run(&parsed),
         "progress" => progress::run(&parsed),
         "check-eol" => eol::run(&parsed),
+        "budgets" => budgets::run(&parsed),
+        "budgets-texi" => budgets::run_texi(&parsed),
+        "dist" => dist::run_dist(&parsed),
+        "coverage" => coverage::run(&parsed),
+        "mutants" => mutants::run(&parsed),
+        "sbom" => sbom::run(&parsed),
+        "manifest" => manifest::run(&parsed),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
             Ok(())

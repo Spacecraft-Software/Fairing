@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Release (Steelbore Standard §5.5, §24.3, §25.3). The maintainer signs and
+# pushes the tag (RELEASING.md); this workflow proves the tag publishes what
+# it records and drafts the release. It rebuilds the source archive and the
+# SBOM from the tag, byte for byte, checks them against the checksums the
+# three package definitions and the committed manifest carry, regenerates
+# the traceability matrix, and attaches all of it to a draft release, which
+# the maintainer reviews and publishes. Nothing is published to a registry.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+# `bash` with pipefail: GitHub's default for an unnamed shell is `bash -e`,
+# under which `gate | tee` takes tee's status and a failed gate passes.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: rustup toolchain install
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-cyclonedx@0.5.9
+      - name: the tag names the workspace version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 --locked \
+            | jq -r '.packages[] | select(.name == "fairing") | .version')
+          test "v$version" = "$GITHUB_REF_NAME"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - run: cargo xtask dist --check
+      - run: cargo xtask sbom
+      - run: cargo xtask manifest --check
+      - run: cargo xtask trace
+      # The two sizes are measured on the tag's own build, as CI's size job
+      # does; a budget never measured on the reference machine blocks the
+      # release (§22.3): its figure goes into doc/measurements.toml first.
+      - name: budgets on this build
+        run: |
+          cargo build --release --locked -p fairing --no-default-features --target-dir target/size-initrd
+          cargo build --release --locked -p fairing --target-dir target/size-full
+          target/size-full/release/fairing theme compile themes/steelbore.ncl --output target/steelbore.fairing --json > /dev/null
+          measured="initrd-binary=$(stat -c %s target/size-initrd/release/fairing),theme-artefact=$(stat -c %s target/steelbore.fairing)"
+          cargo xtask budgets --release --measured "$measured"
+      - name: checksums
+        run: |
+          cp "doc/releases/fairing-$VERSION.manifest.json" target/dist/
+          cp target/trace/matrix.json target/trace/matrix.md target/dist/
+          cd target/dist
+          sha256sum "fairing-$VERSION.tar.gz" "fairing-$VERSION.cdx.json" \
+            "fairing-$VERSION.manifest.json" matrix.json matrix.md > SHA256SUMS
+          cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+      - name: draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "Fairing $VERSION" \
+            --notes "Fairing $VERSION. See CHANGELOG.md and the release manifest." \
+            "target/dist/fairing-$VERSION.tar.gz" \
+            "target/dist/fairing-$VERSION.cdx.json" \
+            "target/dist/fairing-$VERSION.manifest.json" \
+            target/dist/matrix.json target/dist/matrix.md target/dist/SHA256SUMS

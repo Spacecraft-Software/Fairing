@@ -373,6 +373,23 @@ mod tests {
     }
 
     #[test]
+    fn a_step_closes_its_share_of_the_gap_and_snaps_at_the_end() {
+        let mut bar = Bar::new(0.5);
+        bar.advance(0.5, Duration::ZERO, false);
+        let frame = Duration::from_millis(33);
+        let stepped = bar.advance(0.9, frame, false);
+        let expected = 0.4f32.mul_add(ease_fraction(frame), 0.5);
+        assert!(close(stepped, expected), "{stepped} != {expected}");
+        // A gap just wider than the snap, nearly closed in one long step,
+        // lands on the target exactly.
+        let mut bar = Bar::new(0.5);
+        bar.advance(0.5, Duration::ZERO, false);
+        let goal = 0.501;
+        let landed = bar.advance(goal, Duration::from_secs(1), false);
+        assert_eq!(landed.to_bits(), goal.to_bits(), "{landed}");
+    }
+
+    #[test]
     fn stage_names_match_the_cli() {
         assert_eq!(Stage::Initrd.as_str(), "initrd");
         assert_eq!(Stage::System.as_str(), "system");

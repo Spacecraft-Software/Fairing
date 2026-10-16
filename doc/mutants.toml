@@ -1,0 +1,252 @@
+# SPDX-FileCopyrightText: 2026 Mohamed Hammad <Mohamed.Hammad@SpacecraftSoftware.org>
+# SPDX-License-Identifier: CC-BY-SA-4.0
+#
+# Mutation-testing triage (Steelbore Standard §21) for the Category A code:
+# crates/fairing-askpass and crates/fairing/src/splash. `cargo xtask
+# mutants` fails on any mutant cargo-mutants reports as missed that is not
+# listed here. A survivor is killed with a test where one can tell it apart,
+# and then it is not listed; it stays only with a verdict and the argument:
+#
+#   equivalent    no input makes the mutant behave differently
+#   unobservable  the difference shows only on a device no test has, or in
+#                 memory a safe test cannot read (after a drop)
+#
+# Entries match by file, function, replacement and position (`at`, the
+# mutant's line:column); when code moves, `cargo xtask mutants` names the
+# survivor's new position and the entry is re-checked and updated.
+
+# crates/fairing-askpass/src/agent.rs
+
+[[survivor]]
+file = "crates/fairing-askpass/src/agent.rs"
+function = "<impl KeySource for Keyboards>::read"
+replacement = "()"
+at = ["80:9"]
+verdict = "unobservable"
+reason = "Keyboards::read only passes on keys read from grabbed evdev nodes; with no device open it calls nothing, so dropping the forward differs only on a real keyboard."
+
+# crates/fairing-askpass/src/ask.rs
+
+[[survivor]]
+file = "crates/fairing-askpass/src/ask.rs"
+function = "Ask::parse"
+replacement = "&&"
+at = ["204:32", "204:57"]
+verdict = "equivalent"
+reason = "Skipping blank, '#' and ';' lines is redundant: a blank line has no '=', and a trimmed comment line that has one yields a key starting with '#' or ';', which is none of the seven keys read, so either operator leaves the result unchanged."
+
+# crates/fairing-askpass/src/input.rs
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "attribute"
+replacement = "<="
+at = ["257:15"]
+verdict = "equivalent"
+reason = "The extra pass happens only once the page buffer is full, and then reads into an empty slice; read(2) of zero bytes from a regular or sysfs file returns 0, which breaks out with the same length."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "attribute"
+replacement = "false"
+at = ["261:23"]
+verdict = "unobservable"
+reason = "The guard decides only what an EINTR does, and a read of a regular or sysfs file does not sleep interruptibly, so no test can make it return EINTR; every other error already returns None."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "Keyboards::grab"
+replacement = "!="
+at = ["431:48"]
+verdict = "unobservable"
+reason = "The comparison skips a keyboard already open; the list of open keyboards fills only from an evdev node RawDevice::from_fd accepts, so without a device it is empty and any() is false either way."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "Keyboards::take"
+replacement = "^"
+at = ["458:28", "458:47", "458:65"]
+verdict = "equivalent"
+reason = "O_RDONLY is 0 and O_NONBLOCK, O_CLOEXEC and O_NOCTTY are distinct single bits, so exclusive or of them equals their union."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "Keyboards::take"
+replacement = "&"
+at = ["458:65"]
+verdict = "unobservable"
+reason = "Covers the last operator, where O_CLOEXEC & O_NOCTTY is empty and both flags are dropped: O_NOCTTY has no effect on an evdev node, which is never a tty, and O_CLOEXEC shows only to an exec while the descriptor is open. The two '&' that drop O_NONBLOCK are killed by a_node_is_opened_without_blocking."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "Keyboards::read"
+replacement = "()"
+at = ["492:9"]
+verdict = "unobservable"
+reason = "With no grabbed evdev node open, the real read drains nothing and its modifier release does not run, so an empty body differs only with a real keyboard."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "<impl Drop for Keyboards>::drop"
+replacement = "()"
+at = ["509:9"]
+verdict = "unobservable"
+reason = "Drop releases EVIOCGRAB grabs on open evdev nodes, which no test machine has, and the state it resets cannot be read once the value is dropped."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "Keyboards::grab"
+replacement = ""
+at = ["442:12"]
+verdict = "unobservable"
+reason = "`delete !` on `!self.caps_read` (column 12): the Caps Lock LED is read only from a keyboard already opened from an evdev node, so with none open, as on every test machine, both branches do nothing."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/input.rs"
+function = "Keyboards::read"
+replacement = ""
+at = ["492:12"]
+verdict = "unobservable"
+reason = "`delete !` on `!self.grabbed` (column 12): while not grabbed the open list is always empty, since release drains it, and while grabbed with no evdev node open the drain does nothing, so the two differ only with a real keyboard open."
+
+# crates/fairing-askpass/src/secret.rs
+
+[[survivor]]
+file = "crates/fairing-askpass/src/secret.rs"
+function = "<impl Drop for Secret>::drop"
+replacement = "()"
+at = ["111:9"]
+verdict = "unobservable"
+reason = "The zeroisation on drop is visible only by reading the buffer after it has been dropped, which safe code cannot do; the eager Secret::clear on every path is tested instead."
+
+# crates/fairing-askpass/src/watch.rs
+
+[[survivor]]
+file = "crates/fairing-askpass/src/watch.rs"
+function = "Watcher::open"
+replacement = "^"
+at = ["91:59", "96:17", "97:17", "98:17", "99:17"]
+verdict = "equivalent"
+reason = "IN_NONBLOCK and IN_CLOEXEC are distinct bits, as are IN_CLOSE_WRITE, IN_MOVED_TO, IN_MOVED_FROM, IN_DELETE and IN_ONLYDIR, so exclusive or of each set equals its union."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/watch.rs"
+function = "Watcher::changed"
+replacement = "^"
+at = ["131:67"]
+verdict = "equivalent"
+reason = "IN_Q_OVERFLOW (0x4000) and IN_IGNORED (0x8000) are distinct bits, so their exclusive or equals their union."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/watch.rs"
+function = "Watcher::read"
+replacement = "^"
+at = ["204:28", "204:46", "204:65", "204:84"]
+verdict = "equivalent"
+reason = "O_RDONLY is 0 and O_CLOEXEC, O_NOFOLLOW, O_NONBLOCK and O_NOCTTY are distinct single bits, so exclusive or of them equals their union."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/watch.rs"
+function = "Watcher::read"
+replacement = "&"
+at = ["204:28"]
+verdict = "unobservable"
+reason = "Covers the first operator, where O_RDONLY & O_CLOEXEC is 0 and drops only O_CLOEXEC; the descriptor is closed before read returns, so the flag shows only to a concurrent exec in that window. The '&' that drops O_NOFOLLOW is killed by links_and_fifos_are_not_read, and those that drop O_NONBLOCK hang on the FIFO there."
+
+[[survivor]]
+file = "crates/fairing-askpass/src/watch.rs"
+function = "Watcher::read"
+replacement = "<="
+at = ["215:19"]
+verdict = "equivalent"
+reason = "The extra pass happens only once the MAX_FILE + 1 buffer is full, and then reads into an empty slice; read(2) of zero bytes from a regular file (the only kind read) returns 0, which breaks out with the same length."
+
+# crates/fairing/src/splash/console.rs
+
+[[survivor]]
+file = "crates/fairing/src/splash/console.rs"
+function = "Sink::open"
+replacement = "^"
+at = ["67:25", "68:25", "69:25", "70:25"]
+verdict = "equivalent"
+reason = "O_WRONLY, O_APPEND, O_NOCTTY, O_NONBLOCK and O_CLOEXEC are distinct single bits, so exclusive or of them equals their union; covers all four operators (columns 25 of lines 67 to 70)."
+
+[[survivor]]
+file = "crates/fairing/src/splash/console.rs"
+function = "<impl Write for Sink>::flush"
+replacement = "Ok(())"
+at = ["88:9"]
+verdict = "equivalent"
+reason = "Neither target buffers: std's File::flush and Stderr::flush both return Ok(()) without a system call, so the forwarded call and the constant are the same."
+
+# crates/fairing/src/splash/dbus.rs
+
+[[survivor]]
+file = "crates/fairing/src/splash/dbus.rs"
+function = "poll"
+replacement = "-"
+at = ["300:66"]
+verdict = "equivalent"
+reason = "A past deadline only stops block_on_until waiting after its first poll, and Connection::close is ready on that poll: it takes an uncontended write lock (nothing else writes once the polls have stopped) and shuts the socket down synchronously. The '*' at the same column is killed."
+
+[[survivor]]
+file = "crates/fairing/src/splash/dbus.rs"
+function = "watch_signals"
+replacement = "=="
+at = ["349:77"]
+verdict = "unobservable"
+reason = "The sender comparison runs only on a bus connection, where the owner of org.freedesktop.systemd1 is known; the fake manager is served peer-to-peer, where there is no owner and the comparison is skipped, so it shows only on a real system bus."
+
+# crates/fairing/src/splash/journal.rs
+
+[[survivor]]
+file = "crates/fairing/src/splash/journal.rs"
+function = "Journal::spawn"
+replacement = "^"
+at = ["151:77"]
+verdict = "equivalent"
+reason = "std creates the child's stdout pipe with O_CLOEXEC only, never O_NONBLOCK, so exclusive or with O_NONBLOCK sets the bit exactly as the union does. The '&' at the same column is killed."
+
+[[survivor]]
+file = "crates/fairing/src/splash/journal.rs"
+function = "Journal::read"
+replacement = "true"
+at = ["186:27", "187:27"]
+verdict = "equivalent"
+reason = "Covers both guards (186:27 WouldBlock, 187:27 Interrupted): a non-blocking read of the pipe's owned read end fails only with EAGAIN, never EINTR (it does not sleep) nor EBADF, EFAULT or EIO, so the arms these guards choose between are never reached by another error."
+
+[[survivor]]
+file = "crates/fairing/src/splash/journal.rs"
+function = "Journal::read"
+replacement = "false"
+at = ["187:27"]
+verdict = "equivalent"
+reason = "Covers the Interrupted guard (187:27): a non-blocking pipe read does not sleep, so it never returns EINTR and the retry arm is never taken. The same replacement of the WouldBlock guard (186:27) is killed."
+
+[[survivor]]
+file = "crates/fairing/src/splash/journal.rs"
+function = "Journal::read"
+replacement = "!="
+at = ["187:36"]
+verdict = "equivalent"
+reason = "Covers the Interrupted comparison (187:36): it is reached only by an error other than EAGAIN, and a non-blocking read of the pipe's owned read end returns no other. The '!=' of the WouldBlock comparison (186:36) is killed."
+
+# crates/fairing/src/splash/keys.rs
+
+[[survivor]]
+file = "crates/fairing/src/splash/keys.rs"
+function = "Navigation::scan"
+replacement = "^"
+at = ["125:32", "125:51", "125:69"]
+verdict = "equivalent"
+reason = "O_RDONLY is 0 and O_NONBLOCK, O_CLOEXEC and O_NOCTTY are distinct single bits, so exclusive or of them equals their union; covers the three operators at 125:32, 125:51 and 125:69. Every '&' is killed."
+
+# crates/fairing/src/splash/run.rs
+
+[[survivor]]
+file = "crates/fairing/src/splash/run.rs"
+function = "start"
+replacement = ""
+at = ["523:21"]
+verdict = "equivalent"
+reason = "Covers deleting `hz` (523:21): PresenterConfig::default() is 30 Hz, which is SPLASH_HZ. Deleting origin, choice or reacquire_budget is killed by the_presenter_is_configured_for_the_splash."
