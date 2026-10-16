@@ -178,7 +178,12 @@ jobs:
         with:
           name: dist
       - run: sudo apt-get update && sudo apt-get install --yes guix
-      - run: guix pull --substitute-urls="https://bordeaux.guix.gnu.org https://ci.guix.gnu.org"
+      # From Codeberg, where Guix is developed; the Ubuntu release still names
+      # git.savannah.gnu.org, which answered 500. Same history and signing
+      # keys, so the channel is authenticated as before.
+      - run: >-
+          guix pull --url=https://codeberg.org/guix/guix.git
+          --substitute-urls="https://bordeaux.guix.gnu.org https://ci.guix.gnu.org"
       - run: ~/.config/guix/current/bin/guix describe
       # As for Nix: the archive goes into the store under the name and hash
       # the origin names, so the build fetches nothing.
