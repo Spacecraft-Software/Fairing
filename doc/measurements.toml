@@ -23,6 +23,13 @@ machine = "GitHub Actions ubuntu-latest"
 source = "CI size job at the M3 merge"
 
 [[measurement]]
+budget = "initrd-binary"
+value = 2335680
+date = "2026-10-16"
+machine = "CI container, x86-64, nixpkgs 7fd4004"
+source = "`nix build .#fairing-initrd`, `bin/fairing`, on the G1 tree; the build the budget binds from G1 (T-091)"
+
+[[measurement]]
 budget = "theme-artefact"
 value = 210
 date = "2026-10-16"

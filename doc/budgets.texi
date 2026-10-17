@@ -9,7 +9,7 @@ Reference workload: A cold boot from power-on to greetd with the reference theme
 
 @multitable @columnfractions .2 .16 .16 .16 .14 .18
 @headitem Budget @tab Requirement @tab Ceiling @tab Measured @tab Margin @tab Band
-@item initrd-binary @tab FRN-SRS-105 @tab 2.50 MiB @tab 1.86 MiB @tab 25.4% @tab green
+@item initrd-binary @tab FRN-SRS-105 @tab 2.50 MiB @tab 2.23 MiB @tab 10.9% @tab amber
 @item theme-artefact @tab FRN-SRS-047 @tab 4.00 MiB @tab 210 B @tab 99.9% @tab green
 @item first-frame @tab FRN-SRS-004 @tab 150 ms @tab 20.5 ms @tab 86.3% @tab green
 @item artefact-load @tab FRN-SRS-042 @tab 5 ms @tab --- @tab --- @tab unmeasured
@@ -23,7 +23,7 @@ Reference workload: A cold boot from power-on to greetd with the reference theme
 
 @table @code
 @item initrd-binary
-binary size (measured in CI on every build). The stripped release build without default features (`cargo build --release -p fairing --no-default-features`), the copy the initrd carries; CI's size job.
+binary size (measured in CI on every build). The binary the initrd carries: `bin/fairing` of the flake's `fairing-initrd` package, built by nixpkgs without default features as the NixOS module builds it (decided at G1, 2026-10-16); CI's `nix` job. A cargo build of the same features comes out smaller and is reported by the size job only.
 @item theme-artefact
 artefact size (measured in CI on every build). The reference theme compiled with `fairing theme compile themes/steelbore.ncl`; CI's size job.
 @item first-frame

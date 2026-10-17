@@ -19,9 +19,9 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [ ] T-085 SECURITY.md support window, RELEASING.md (clean-environment installs from all three packages, the signed tag), CHANGELOG `[0.1.0]` ready to date; `make pdf` from the dev shell (P-055)
 - [x] T-086 Manual (Releasing, Budgets chapter), README, AGENTS, SKILL, CHANGELOG
 - [x] T-087 Adversarial review folded in
-- [ ] T-088 M5 pull request reviewed and merged
+- [x] T-088 M5 pull request reviewed and merged
 - [ ] T-089 Time budgets measured on the T490s into `doc/measurements.toml` (maintainer)
-- [ ] T-091 Decide which build the initrd-binary budget binds: CI's `cargo build --release --no-default-features` measures 1,954,776 B (25.4 %, green), but nixpkgs' build of `fairing-initrd`, the copy the module puts in the initrd, measured 2,335,792 B locally on 2026-10-16 (10.9 %, amber) (maintainer)
+- [x] T-091 Decide which build the initrd-binary budget binds: CI's `cargo build --release --no-default-features` measures 1,954,776 B (25.4 %, green), but nixpkgs' build of `fairing-initrd`, the copy the module puts in the initrd, measured 2,335,792 B locally on 2026-10-16 (10.9 %, amber) (maintainer). Decided at G1: the shipped Nix build; CI's `nix` job measures `packages.fairing-initrd`
 - [ ] T-090 v0.1.0: G1 and G3 passed, installs verified, signed tag pushed, release published (maintainer)
 
 ## M4 — Operator and accessibility
@@ -78,7 +78,7 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [ ] T-050 Evaluate Nickel in a child process under memory and stack limits, so any runaway theme (unbounded recursion, a deep import) exits 2 instead of aborting; M2's mitigation is the 5 s deadline and the 256-level nesting bound on the theme file
 - [ ] T-051 A stage-2 splash with no D-Bus connection on a boot without greetd has nothing to end it but shutdown; decide a module-side stop (a oneshot after `multi-user.target`) or a time bound
 - [x] T-052 (scheduled for M4 as P-045) Event-driven failure detection (systemd's `JobRemoved` and `PropertiesChanged` signals) so FRN-SRS-034's 1 s holds when PID 1 is slow: polled, a failure shows within 250 ms plus five property reads, inside 1 s only while each read takes under about 140 ms
-- [ ] T-046 G1 decisions: the FRN-SRS-032 amendment (handoff by stop, not `Conflicts=`); the FRN-SRS-010 wording and carrier; FRN-SRS-034 as a transition (failures already present at the first reading do not count); `PrivateTmp=disconnected` for FRN-SRS-093 (`yes` orders the splash after tmpfiles setup); the third unit of FRN-SRS-090 at M4; nickel-lang-core's licence and advisory; the stage-2 binary over 2.5 MiB (maintainer)
+- [x] T-046 G1 decisions: the FRN-SRS-032 amendment (handoff by stop, not `Conflicts=`); the FRN-SRS-010 wording and carrier; FRN-SRS-034 as a transition (failures already present at the first reading do not count); `PrivateTmp=disconnected` for FRN-SRS-093 (`yes` orders the splash after tmpfiles setup); the third unit of FRN-SRS-090 at M4; nickel-lang-core's licence and advisory; the stage-2 binary over 2.5 MiB (maintainer). Decided 2026-10-16: every amendment as proposed, the third and fourth units named in FRN-SRS-090, nickel-lang-core kept with the malachite licence exception and its advisories accepted, the 2.5 MiB ceiling on the initrd build only (T-091)
 - [ ] T-047 Hardware run on the T490s with the module enabled: first frame, 30 Hz, added boot time (maintainer)
 - [x] T-048 M2 pull request reviewed and merged
 
@@ -116,4 +116,4 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-017 PRD doc: open questions Q-1 to Q-7 recorded as answered 2026-10-06
 - [x] T-018 Draft pull request open against main with CI green
 - [ ] T-019 PROJECTS.md row added in the Projects repository (maintainer)
-- [ ] T-020 G1: requirements baselined by the maintainer
+- [x] T-020 G1: requirements baselined by the maintainer (2026-10-16); 61 verified, 8 implemented until their figures are measured on the T490s (T-089)

@@ -42,8 +42,8 @@ private = { ignore = true }
 # malachite (arbitrary-precision numbers under nickel-lang-core) is
 # LGPL-3.0-only. It is linked only into the full `fairing` build (the
 # `theme-tool` feature), which is therefore conveyed under GPL-3.0; the splash
-# binaries the NixOS module runs contain none of it. DEPENDENCIES.md records
-# the decision.
+# binaries the NixOS module runs contain none of it. The maintainer confirmed
+# the exception at G1 (2026-10-16); DEPENDENCIES.md records the decision.
 [[licenses.exceptions]]
 crate = "malachite"
 allow = ["LGPL-3.0-only"]

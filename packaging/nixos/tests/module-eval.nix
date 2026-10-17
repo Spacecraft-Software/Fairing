@@ -5,7 +5,7 @@
 # without building or booting anything. A failed check fails evaluation and
 # names itself. `nix flake check` runs it as `checks.<system>.module-eval`.
 #
-# Verifies: FRN-SRS-027, FRN-SRS-030, FRN-SRS-031, FRN-SRS-032, FRN-SRS-035, FRN-SRS-091, FRN-SRS-093
+# Verifies: FRN-SRS-027, FRN-SRS-030, FRN-SRS-031, FRN-SRS-032, FRN-SRS-035, FRN-SRS-090, FRN-SRS-091, FRN-SRS-093
 {
   pkgs,
   lib ? pkgs.lib,
@@ -190,6 +190,15 @@ let
     ) config.boot.initrd.systemd.storePaths;
     "FRN-SRS-090: simpledrm is loaded in the initrd" =
       lib.elem "simpledrm" config.boot.initrd.kernelModules;
+    "FRN-SRS-090: the configured KMS drivers are loaded in the initrd" =
+      lib.elem "i915" (evaluate { steelbore.fairing.kmsModules = [ "i915" ]; }).config.boot.initrd.kernelModules;
+    "FRN-SRS-090: the module installs all four units" =
+      initrdUnits ? "fairing-initrd.service"
+      && lib.all (unit: systemUnits ? ${unit}) [
+        "fairing.service"
+        "fairing-handoff.service"
+        "fairing-shutdown.service"
+      ];
     "the agent's keyboards are readable in the initrd: evdev is loaded" =
       lib.elem "evdev" config.boot.initrd.kernelModules;
     "the overlay's keyboards are readable with the agent off too" =
@@ -229,7 +238,8 @@ let
     "FRN-SRS-093: fairing.service has ProtectSystem=strict" =
       hasLine systemText "ProtectSystem=strict";
     "FRN-SRS-093: fairing.service has ProtectHome=yes" = hasLine systemText "ProtectHome=yes";
-    "FRN-SRS-093: fairing.service has PrivateTmp=yes" = hasLine systemText "PrivateTmp=yes";
+    "FRN-SRS-093: fairing.service has PrivateTmp=disconnected" =
+      hasLine systemText "PrivateTmp=disconnected";
     "FRN-SRS-093: fairing.service writes only its two directories" =
       hasLine systemText "ReadWritePaths=/var/lib/fairing /run/fairing";
     "the module's own configuration raises no assertion" = failedAssertions (evaluate { }) == [ ];

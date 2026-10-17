@@ -33,6 +33,6 @@ Dates are ISO 8601. Entries are re-read at each G3 release gate.
 
 | Gate | State |
 |---|---|
-| G1 — Requirements | Open. 68 requirements drafted with ID, rationale, source, priority, method and status; the maintainer confirmed the seven open scoping questions on 2026-10-06. Baselining (`status = "baselined"`) is the maintainer's act. |
+| G1 — Requirements | Passed 2026-10-16. The maintainer baselined all 69 requirements, amending FRN-SRS-010, 032, 034, 090, 093 and 105 (T-046) and confirming the malachite licence exception and the accepted Nickel advisories. 61 are `verified`; 8 are `implemented` until their figures are measured on the reference machine (T-089). |
 | G2 — Design | Not started. Budgets (§22), the ICD (§23) and dependency pinning (§24) are declared in the PRD and move into the manual at G2. |
 | G3 — Release | Not started. |

@@ -17,9 +17,10 @@ Milestone state: M0 (repository and posture), M1 (draws a frame), M2 (boots on B
 themes, progress, `fairing splash`, the NixOS module), M3 (the password agent in
 `fairing-askpass`, run inside the splash) and M4 (journal overlay, accessible mode and the
 text backend, frame sequences and reduced motion, the shutdown splash, failure signals)
-are merged. M5 (release 0.1: budgets, coverage and mutation gates, the release archive and
-the three package definitions, SBOM, manifest, release workflow) is in progress on its
-branch; every requirement waits on G1 baselining. Do not advertise verbs, flags or files
+and M5 (release 0.1: budgets, coverage and mutation gates, the release archive and the
+three package definitions, SBOM, manifest, release workflow) are merged. G1 baselined the
+requirement set on 2026-10-16: 61 are `verified`, and 8 stay `implemented` until their
+figures are measured on the reference machine (T-089); the tag is the maintainer's. Do not advertise verbs, flags or files
 that do not exist yet.
 
 ## Build, test, lint
@@ -64,6 +65,9 @@ will not be green there.
 - Status flows `draft → baselined → implemented → verified`. Only the maintainer moves a
   requirement out of `draft` (the G1 gate). A `baselined` or `implemented` requirement
   with no `Verifies:` marker fails `cargo xtask trace`; a `draft` one owes nothing yet.
+  A requirement is `verified` once its evidence has passed: in CI, or for a hardware test
+  in a recorded run on the reference machine. One whose bound is a reference-machine
+  figure in `doc/budgets.toml` stays `implemented` until that figure is measured.
 - Cite requirements from code and tests, never from prose:
 
   ```rust
@@ -122,7 +126,8 @@ will not be green there.
   dropped as `Timeout`); `close` gives a flip in flight at most 50 ms.
 - Cargo features of `crates/fairing`: `theme-tool` (Nickel evaluation for `theme
   check|compile`) and `dbus` (the zbus client of `--stage system`), both default. The
-  initrd binary is built with neither and must stay within 2.5 MiB (CI `size` job); code
+  initrd binary is built with neither and must stay within 2.5 MiB, measured on the Nix
+  build the module ships (`packages.fairing-initrd`, CI `nix` job; G1, T-091); code
   that only one feature needs is `#[cfg]`-gated, and both feature-off builds are linted
   and tested in CI.
 - `fairing splash` never fails a boot: every path after argument checking exits 0, sends
@@ -186,6 +191,10 @@ will not be green there.
   the agent grabs, and only while a question is open. While a prompt is open the overlay
   is neither toggled nor drawn. journalctl runs as a child only once the overlay is first
   shown, is read without blocking once per frame, and is killed in `finish`.
+- `fairing.service` and `fairing-shutdown.service` run with `PrivateTmp=disconnected`
+  (FRN-SRS-093, G1): `PrivateTmp=yes` backs the private /tmp and /var/tmp on the host's,
+  which orders a unit after `systemd-tmpfiles-setup.service` and the /var mount, too
+  late for the splash.
 - `fairing-shutdown.service` has no default dependencies and must never conflict with or
   be ordered before `shutdown.target`: it draws until systemd-shutdown's final kill.
 - The D-Bus client forwards systemd's `NFailedUnits`, `JobNew` (rescue/emergency) and
@@ -200,9 +209,10 @@ will not be green there.
   `[WARN]`, an explicit device backend is exit 2. The theme resolver takes `no_color` from
   the `Context`; `SPACECRAFT_THEME` is read once, in `selection.rs` (`resolve_palette`),
   for both `preview` and `splash`.
-- Tests that need a DRM device or `/dev/fb0` are `#[ignore]`d and carry no `Verifies:`
-  marker (`cargo test --workspace -- --ignored` on a free text console; they fail without a
-  device, as they should). Everything else runs against the memory backend, fake sysfs
+- Tests that need a DRM device or `/dev/fb0` are `#[ignore]`d (`cargo test --workspace --
+  --ignored` on a free text console; they fail without a device, as they should). One
+  carries a `Verifies:` marker only where it is the requirement's evidence; that
+  requirement is `verified` by a recorded run on the reference machine, never by CI. Everything else runs against the memory backend, fake sysfs
   trees in temporary directories, and `MemoryBackend::fail_next` (test-only) for the
   lost-output path. The presenter re-opens through an injectable `Reopen` function.
 - Prose, comments and documentation use British spelling (colour, serialise); identifiers

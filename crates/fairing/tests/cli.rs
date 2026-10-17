@@ -5,8 +5,8 @@
 //! Black-box tests of the CLI skeleton (R-014) against the built binary.
 //!
 //! Each test names the requirement it is evidence for; `cargo xtask trace`
-//! collects those markers. The requirements stay `draft` until G1, so the
-//! markers document intent today and become binding when the set is baselined.
+//! collects those markers, and since G1 a baselined requirement without one
+//! fails the gate.
 
 use assert_cmd::Command;
 use fairing_theme::{Role, Theme};
@@ -1309,11 +1309,16 @@ fn schema_types_preview_parameters_and_hides_the_test_seams() {
 
 /// Draws on the real output; needs a DRM device or `/dev/fb0` and a free VT.
 ///
-/// `cargo test -p fairing -- --ignored` on a text console (TODO T-029). The
-/// FRN-SRS-083 evidence is the maintainer's hardware run, not this assertion.
+/// `cargo test -p fairing -- --ignored` on a free text console of the reference
+/// machine (TODO T-089): the first-frame figure binds only there. The console
+/// coming back is also watched by eye; what the test can read is fbcon's
+/// cursor blink, which the fbdev path pauses and must restore.
 #[test]
 #[ignore = "needs a DRM device or /dev/fb0 and a free VT"]
 fn preview_on_the_vt_draws_and_restores_the_console() {
+    // Verifies: FRN-SRS-004, FRN-SRS-083
+    let blink = || std::fs::read_to_string("/sys/class/graphics/fbcon/cursor_blink").ok();
+    let blink_before = blink();
     let out = fairing()
         .args(["preview", "--seconds", "1", "--json"])
         .assert()
@@ -1327,6 +1332,17 @@ fn preview_on_the_vt_draws_and_restores_the_console() {
     assert!(
         value["data"]["frames"].as_u64().is_some_and(|f| f >= 20),
         "{value}"
+    );
+    assert!(
+        value["data"]["first_frame_ms"]
+            .as_f64()
+            .is_some_and(|ms| ms <= 150.0),
+        "{value}"
+    );
+    assert_eq!(
+        blink(),
+        blink_before,
+        "fbcon's cursor blink was not restored"
     );
 }
 
