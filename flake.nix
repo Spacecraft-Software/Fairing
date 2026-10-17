@@ -36,6 +36,9 @@
           ./contracts
           ./themes
           ./doc
+          # Read by the posture tests (FRN-SRS-101, FRN-SRS-103).
+          ./.github/workflows/ci.yml
+          ./fuzz/fuzz_targets
         ]) (lib.fileset.maybeMissing ./doc/build);
       };
     in
