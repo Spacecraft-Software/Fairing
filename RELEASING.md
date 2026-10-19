@@ -35,6 +35,7 @@ checksums archives to the same bytes as the one before it.
 2. **Budgets.** Every reference-machine budget in `doc/budgets.toml` is measured on the
    ThinkPad T490s and appended to `doc/measurements.toml`. `cargo xtask budgets
    --release` passes: no red, exceeded or unmeasured budget.
+   The procedure is [Measuring on the reference machine](#measuring-on-the-reference-machine).
 3. **Coverage and mutation.** `cargo llvm-cov --workspace --exclude xtask --locked
    --json --summary-only --output-path target/llvm-cov.json` then `cargo xtask coverage`.
    Run the `mutants` workflow (Actions → mutants → Run workflow), download its
@@ -46,6 +47,47 @@ checksums archives to the same bytes as the one before it.
    severities (§25.2), and the conformance claim.
 5. **Merge.** These changes land on `main` like any other, through a reviewed pull
    request. `main`'s head is now the release content.
+
+## Measuring on the reference machine
+
+The eight time budgets marked "reference machine" in `doc/budgets.toml` are measured
+on the ThinkPad T490s running Bravais with `steelbore.fairing` enabled, a LUKS root and
+a checkout of the release candidate. Five come from the splash reports in the journal,
+three from commands run on a free VT. Each command below is a single external command,
+so it runs the same from Nushell as from sh.
+
+1. **Three boots.** Cold-boot the machine three times. At each, type the passphrase into
+   the splash, not into the console agent, and once it is accepted press Escape so the
+   journal overlay is up while stage 2 logs. Log in after the third boot.
+2. **On a free VT** (Ctrl+Alt+F3, logged in, the checkout as the current directory):
+
+   ```sh
+   mkdir -p target/measure
+   sh -c 'fairing preview --backend drm --seconds 5 --json > target/measure/preview-drm.json'
+   sudo unshare --mount sh -c 'mount -t tmpfs none /dev/dri && fairing preview --backend auto --seconds 5 --json > target/measure/preview-fbdev.json'
+   sh -c 'fairing theme compile themes/steelbore.ncl --output target/steelbore.fairing --json > target/measure/theme-compile.json'
+   ```
+
+   The second hides `/dev/dri` in a mount namespace of its own, so DRM fails and the
+   preview falls back to `/dev/fb0`; nothing outside that one command sees the change.
+3. **Collect.** `cargo xtask measure` reads the reports of the last three boots
+   (`--boots <n>` for another count) and the three files, and prints each figure: the
+   median over the boots and its range. A figure a boot did not produce is named: no
+   output swap means no `reacquire`, a passphrase typed elsewhere no `ask-detect`.
+   When all eight are there:
+
+   ```sh
+   cargo xtask measure --record --machine "ThinkPad T490s, kernel <uname -r>, 1920x1080"
+   cargo xtask budgets --release
+   ```
+
+   `--record` appends one dated entry per figure to `doc/measurements.toml`, then the
+   budgets show their margins. A red or exceeded margin blocks the release.
+4. **The hardware tests.** On the same free VT, `cargo test --workspace -- --ignored`
+   runs the tests that need a DRM device or `/dev/fb0` (FRN-SRS-001, 002, 004, 083).
+5. **Commit** the measurements, move each requirement whose budget is now measured and
+   in band from `implemented` to `verified` in `doc/requirements.toml`, run `cargo xtask
+   req-texi` and `cargo xtask budgets-texi`, and tick T-089.
 
 ## Cutting the release
 

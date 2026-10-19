@@ -233,6 +233,32 @@ pub struct Outcome {
     pub agent: bool,
     /// Questions answered.
     pub answered: u32,
+    /// The longest a lost output took to present again, from the first frame
+    /// that found it lost (FRN-SRS-006); `None` when it was never lost.
+    pub reacquire_ms: Option<f64>,
+    /// The longest a password question waited, from its file's last write to
+    /// the agent opening it (FRN-SRS-020).
+    pub ask_detect_ms: Option<f64>,
+    /// The longest agent frame that sent an answer or a cancel, the keyboards
+    /// released at its end: an upper bound on reply to release (FRN-SRS-028).
+    pub grab_release_ms: Option<f64>,
+    /// The longest a new journal entry took to reach the shown overlay
+    /// (FRN-SRS-062).
+    pub overlay_entry_ms: Option<f64>,
+}
+
+/// `ms` kept in `worst` if it is the longest seen.
+fn longest(worst: &mut Option<f64>, ms: f64) {
+    *worst = Some(worst.map_or(ms, |w| w.max(ms)));
+}
+
+/// Microseconds as fractional milliseconds, for the report.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "microsecond waits are far below 2^52"
+)]
+fn us_to_ms(us: u64) -> f64 {
+    us as f64 / 1000.0
 }
 
 /// What the loop needs from the process.
@@ -303,6 +329,10 @@ pub fn run_with(
         release_ms: None,
         agent: false,
         answered: 0,
+        reacquire_ms: None,
+        ask_detect_ms: None,
+        grab_release_ms: None,
+        overlay_entry_ms: None,
     };
     let mut output = match start(plan, env, open_chain) {
         Ok(output) => output,
@@ -567,6 +597,7 @@ fn finish(
     // Then the overlay's journalctl, whose reaping has no bound of its own.
     if let Some(overlay) = session.overlay.as_mut() {
         overlay.close();
+        outcome.overlay_entry_ms = overlay.worst_entry_us().map(us_to_ms);
     }
     outcome.release_ms = session
         .terminate_seen
@@ -791,6 +822,7 @@ impl Session {
             return Ok(None);
         };
         let now_us = monotonic_us();
+        let ticked = Instant::now();
         let activity = match agent.tick(now_us) {
             Ok(activity) => activity,
             Err(error) => {
@@ -808,7 +840,8 @@ impl Session {
                 return Err(Reason::AgentFailed);
             }
         };
-        report(env, activity, outcome);
+        let seen_after = record_waits(outcome, activity, agent.opened_after_us(), ticked.elapsed());
+        report(env, activity, seen_after, outcome);
         if agent.stranded(now_us) {
             (env.emit)(
                 Diagnostic::new(
@@ -896,7 +929,7 @@ impl Session {
             // modifier let go during the prompt would read as held after it.
             keys.release_modifiers();
         }
-        overlay.frame(&pressed, prompt_open)
+        overlay.frame(&pressed, prompt_open, monotonic_us())
     }
 
     /// Reports, once, that D-Bus missed its deadline (FRN-SRS-016).
@@ -938,7 +971,16 @@ impl Session {
         match presenter.present(scene) {
             Ok(()) => {
                 self.stall.clear();
-                self.lost_since = None;
+                if let Some(since) = self.lost_since.take() {
+                    let ms = now.saturating_sub(since).as_secs_f64() * 1000.0;
+                    longest(&mut outcome.reacquire_ms, ms);
+                    (env.emit)(Diagnostic::new(
+                        Severity::Ok,
+                        "OUTPUT_BACK",
+                        format!("the output is back after {ms:.0} ms"),
+                        env.invocation,
+                    ));
+                }
                 outcome.first_bar.get_or_insert(self.bar.shown());
                 outcome.last_status = scene.status().map(str::to_owned);
                 Ok(())
@@ -1138,12 +1180,43 @@ impl Session {
     }
 }
 
+/// Keeps the agent's two waits in `outcome`: how long an opened question had
+/// waited (FRN-SRS-020) and how long the frame that answered or cancelled one
+/// took, keyboards released at its end (FRN-SRS-028). Returns the first, in
+/// ms, for the journal line.
+fn record_waits(
+    outcome: &mut Outcome,
+    activity: Activity,
+    opened_after_us: Option<u64>,
+    tick: Duration,
+) -> Option<f64> {
+    match activity {
+        Activity::Opened(_) => {
+            let ms = opened_after_us.map(us_to_ms)?;
+            longest(&mut outcome.ask_detect_ms, ms);
+            Some(ms)
+        }
+        Activity::Answered | Activity::Cancelled => {
+            longest(&mut outcome.grab_release_ms, tick.as_secs_f64() * 1000.0);
+            None
+        }
+        _ => None,
+    }
+}
+
 /// One journal line for what the agent did; never the secret, nor its length.
 ///
 /// Each is an `[OK]` side effect or a `[WARN]`, never `[INFO]`, which the
 /// default severity floor hides: the journal must say when a question opened,
 /// which keyboards were grabbed and how it ended.
-fn report(env: &Environment<'_>, activity: Activity, outcome: &mut Outcome) {
+///
+/// `seen_after` is how long an opened question had waited, in ms.
+fn report(
+    env: &Environment<'_>,
+    activity: Activity,
+    seen_after: Option<f64>,
+    outcome: &mut Outcome,
+) {
     let (severity, code, message) = match activity {
         Activity::Idle => return,
         Activity::Opened(0) => (
@@ -1156,7 +1229,12 @@ fn report(env: &Environment<'_>, activity: Activity, outcome: &mut Outcome) {
         Activity::Opened(n) => (
             Severity::Ok,
             "ASK_OPENED",
-            format!("a password question is open; {n} keyboard(s) grabbed"),
+            format!(
+                "a password question is open; {n} keyboard(s) grabbed{}",
+                seen_after.map_or_else(String::new, |ms| format!(
+                    "; seen {ms:.1} ms after it was written"
+                ))
+            ),
         ),
         Activity::Keyboards(0) => (
             Severity::Warn,
@@ -1496,9 +1574,53 @@ mod tests {
             harness.codes()
         );
         assert!(
+            outcome.ask_detect_ms.is_some_and(|ms| ms < 5000.0),
+            "{:?}",
+            outcome.ask_detect_ms
+        );
+        assert!(
             !plan.paths.runtime.join(AGENT_FLAG).exists(),
             "flag lowered"
         );
+    }
+
+    #[test]
+    fn the_agent_waits_keep_the_longest() {
+        let mut outcome = blank();
+        let ms = |d: u64| Duration::from_millis(d);
+        assert_eq!(
+            record_waits(&mut outcome, Activity::Opened(1), Some(4_000), ms(9)),
+            Some(4.0)
+        );
+        assert_eq!(
+            record_waits(&mut outcome, Activity::Opened(1), Some(2_500), ms(9)),
+            Some(2.5)
+        );
+        assert_eq!(
+            record_waits(&mut outcome, Activity::Opened(1), None, ms(9)),
+            None
+        );
+        assert_eq!(outcome.ask_detect_ms, Some(4.0), "the longest wait");
+        assert_eq!(outcome.grab_release_ms, None, "opening releases nothing");
+        assert_eq!(
+            record_waits(&mut outcome, Activity::Answered, Some(1), ms(3)),
+            None
+        );
+        assert_eq!(
+            record_waits(&mut outcome, Activity::Cancelled, None, ms(7)),
+            None
+        );
+        assert_eq!(
+            record_waits(&mut outcome, Activity::Answered, None, ms(2)),
+            None
+        );
+        assert_eq!(outcome.grab_release_ms, Some(7.0));
+        assert_eq!(
+            record_waits(&mut outcome, Activity::Closed, Some(9_000), ms(50)),
+            None
+        );
+        assert_eq!(outcome.ask_detect_ms, Some(4.0));
+        assert_eq!(outcome.grab_release_ms, Some(7.0));
     }
 
     fn snapshot(progress: f64, failed: u32, state: &str, job: Option<&str>) -> Event {
@@ -1998,6 +2120,10 @@ mod tests {
             release_ms: None,
             agent: false,
             answered: 0,
+            reacquire_ms: None,
+            ask_detect_ms: None,
+            grab_release_ms: None,
+            overlay_entry_ms: None,
         }
     }
 
@@ -2327,10 +2453,15 @@ mod tests {
         });
         assert_eq!(
             harness.codes(),
-            ["OUTPUT_LOST"],
-            "said once, no prompt to strand"
+            ["OUTPUT_LOST", "OUTPUT_BACK"],
+            "said once, no prompt to strand, and its return said"
         );
         assert_eq!(session.lost_since, None, "a frame landed");
+        assert_eq!(
+            outcome.reacquire_ms,
+            Some((BLIND_PROMPT_LIMIT * 4).as_secs_f64() * 1000.0),
+            "timed from the first lost frame"
+        );
         assert_eq!(outcome.first_bar, Some(0.0));
     }
 

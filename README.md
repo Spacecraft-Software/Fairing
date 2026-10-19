@@ -49,6 +49,7 @@ make check info html           # manual: zero makeinfo warnings, then .info and 
 cargo deny check && cargo audit
 reuse lint
 cargo xtask budgets            # §22 margins; CI passes the sizes it measures with --measured
+cargo xtask measure            # reference-machine latencies from the last boots' splash reports
 cargo xtask coverage           # 80 % line floor per crate, from cargo llvm-cov's JSON summary
 cargo xtask dist               # reproducible, vendored release archive; stamps packaging/
 ```

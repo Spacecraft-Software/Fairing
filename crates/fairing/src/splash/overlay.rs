@@ -33,6 +33,12 @@ pub struct Overlay {
     scroll: usize,
     /// journalctl could not be started, or exited: said once, in the overlay.
     unavailable: bool,
+    /// When the overlay first read the running journalctl (`CLOCK_MONOTONIC`,
+    /// µs): entries stamped earlier are the backlog, not new ones.
+    following_since_us: Option<u64>,
+    /// The longest a new entry took from the journal to the overlay while it
+    /// was shown, in µs (FRN-SRS-062).
+    worst_entry_us: Option<u64>,
 }
 
 impl Overlay {
@@ -46,7 +52,17 @@ impl Overlay {
             shown: false,
             scroll: 0,
             unavailable: false,
+            following_since_us: None,
+            worst_entry_us: None,
         }
+    }
+
+    /// The longest a new journal entry took to reach the overlay while it was
+    /// shown, in µs: from the entry's `__MONOTONIC_TIMESTAMP` to the frame
+    /// that took it (FRN-SRS-062). `None` when no new entry arrived.
+    #[must_use]
+    pub const fn worst_entry_us(&self) -> Option<u64> {
+        self.worst_entry_us
     }
 
     /// Whether the overlay is up.
@@ -81,30 +97,48 @@ impl Overlay {
         }
     }
 
-    /// One frame: `keys` act unless a password prompt is open, journalctl's
-    /// new entries are taken, and the view is returned while shown and no
-    /// prompt covers the screen (FRN-SRS-060: "with no prompt active").
+    /// One frame at `now_us` (`CLOCK_MONOTONIC`, µs): `keys` act unless a
+    /// password prompt is open, journalctl's new entries are taken, and the
+    /// view is returned while shown and no prompt covers the screen
+    /// (FRN-SRS-060: "with no prompt active").
     ///
     /// Implements: FRN-SRS-060
-    pub fn frame(&mut self, keys: &[Nav], prompt_open: bool) -> Option<OverlayView> {
+    pub fn frame(&mut self, keys: &[Nav], prompt_open: bool, now_us: u64) -> Option<OverlayView> {
         if !prompt_open {
             for &key in keys {
                 self.key(key);
             }
         }
-        self.tick();
+        self.take(now_us, self.shown && !prompt_open);
         if prompt_open { None } else { self.view() }
     }
 
-    /// Takes what journalctl wrote since the last frame.
+    /// [`Self::take`] as a frame with no prompt open does.
+    #[cfg(test)]
+    fn tick(&mut self, now_us: u64) {
+        self.take(now_us, self.shown);
+    }
+
+    /// Takes what journalctl wrote since the last frame, at `now_us`
+    /// (`CLOCK_MONOTONIC`, µs, the clock of the journal's monotonic stamps),
+    /// timing the new entries only while they are `on_screen`.
     ///
     /// Implements: FRN-SRS-062
-    pub fn tick(&mut self) {
+    fn take(&mut self, now_us: u64, on_screen: bool) {
         let Some(journal) = self.journal.as_mut() else {
             return;
         };
+        let since = *self.following_since_us.get_or_insert(now_us);
+        let mut worst = self.worst_entry_us;
         let mut lines = Vec::new();
-        let alive = journal.read(|entry| lines.push(entry.line()));
+        let alive = journal.read(|entry| {
+            if let Some(stamp) = entry.monotonic_us.filter(|&t| on_screen && t >= since) {
+                let waited = now_us.saturating_sub(stamp);
+                worst = Some(worst.map_or(waited, |w| w.max(waited)));
+            }
+            lines.push(entry.line());
+        });
+        self.worst_entry_us = worst;
         for line in lines {
             self.push(line);
         }
@@ -187,7 +221,7 @@ mod tests {
     fn settle(overlay: &mut Overlay, want: usize) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while overlay.lines.len() < want && Instant::now() < deadline {
-            overlay.tick();
+            overlay.tick(fairing_askpass::watch::monotonic_us());
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -199,12 +233,12 @@ mod tests {
         let program = fake(dir.path(), &format!("{}sleep 5", entries(45)));
         let mut overlay = Overlay::new(program);
         assert_eq!(overlay.view(), None);
-        overlay.tick();
+        overlay.tick(fairing_askpass::watch::monotonic_us());
         assert!(overlay.journal.is_none(), "nothing runs until shown");
         overlay.key(Nav::Toggle);
         settle(&mut overlay, ENTRIES);
         std::thread::sleep(Duration::from_millis(100));
-        overlay.tick();
+        overlay.tick(fairing_askpass::watch::monotonic_us());
         let view = overlay.view().unwrap_or_else(|| panic!("hidden"));
         assert_eq!(view.lines.len(), ENTRIES);
         assert!(view.lines[0].ends_with("entry 6"), "{:?}", view.lines[0]);
@@ -216,14 +250,62 @@ mod tests {
     }
 
     #[test]
+    fn a_new_entry_is_timed_from_the_journal_to_the_overlay() {
+        // Verifies: FRN-SRS-062
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let entry = |stamp: u64, text: &str| {
+            format!(
+                "echo '{{\"PRIORITY\":\"5\",\"__MONOTONIC_TIMESTAMP\":\"{stamp}\",\"MESSAGE\":\"{text}\"}}'\n"
+            )
+        };
+        let script = format!(
+            "{}sleep 0.3\n{}sleep 5",
+            entry(500_000, "backlog"),
+            entry(1_002_000, "new")
+        );
+        let mut overlay = Overlay::new(fake(dir.path(), &script));
+        overlay.key(Nav::Toggle);
+        // The first frame marks where following begins; the backlog is older.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while overlay.lines.is_empty() && Instant::now() < deadline {
+            overlay.tick(1_000_000);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(overlay.worst_entry_us(), None, "the backlog is not timed");
+        while overlay.lines.len() < 2 && Instant::now() < deadline {
+            overlay.tick(1_010_000);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(overlay.worst_entry_us(), Some(8_000));
+        overlay.close();
+
+        // An entry that arrives under a prompt is not on screen: not timed.
+        let script = format!("sleep 0.3\n{}sleep 5", entry(1_002_000, "under the prompt"));
+        let mut overlay = Overlay::new(fake(dir.path(), &script));
+        overlay.key(Nav::Toggle);
+        overlay.frame(&[], true, 1_000_000);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while overlay.lines.is_empty() && Instant::now() < deadline {
+            overlay.frame(&[], true, 1_010_000);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(overlay.lines.len(), 1, "taken");
+        assert_eq!(overlay.worst_entry_us(), None, "but not timed");
+        overlay.close();
+    }
+
+    #[test]
     fn a_prompt_hides_the_overlay_and_escape_is_the_prompts() {
         // Verifies: FRN-SRS-060
         let mut overlay = Overlay::new(PathBuf::from("/nonexistent/journalctl"));
-        assert_eq!(overlay.frame(&[Nav::Toggle], true), None);
+        assert_eq!(overlay.frame(&[Nav::Toggle], true, 0), None);
         assert!(!overlay.shown(), "Escape during a prompt is the prompt's");
-        assert!(overlay.frame(&[Nav::Toggle], false).is_some());
-        assert_eq!(overlay.frame(&[], true), None, "the prompt covers it");
-        assert!(overlay.frame(&[], false).is_some(), "and it is back after");
+        assert!(overlay.frame(&[Nav::Toggle], false, 0).is_some());
+        assert_eq!(overlay.frame(&[], true, 0), None, "the prompt covers it");
+        assert!(
+            overlay.frame(&[], false, 0).is_some(),
+            "and it is back after"
+        );
     }
 
     #[test]
@@ -255,7 +337,7 @@ mod tests {
         overlay.key(Nav::Toggle);
         let deadline = Instant::now() + Duration::from_secs(5);
         while overlay.journal.is_some() && Instant::now() < deadline {
-            overlay.tick();
+            overlay.tick(fairing_askpass::watch::monotonic_us());
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(overlay.journal.is_none(), "reaped");

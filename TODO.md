@@ -20,7 +20,8 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-086 Manual (Releasing, Budgets chapter), README, AGENTS, SKILL, CHANGELOG
 - [x] T-087 Adversarial review folded in
 - [x] T-088 M5 pull request reviewed and merged
-- [ ] T-089 Time budgets measured on the T490s into `doc/measurements.toml` (maintainer)
+- [x] T-092 Measurement kit for T-089: the splash report times a lost output's return (`reacquire_ms`, with an `OUTPUT_BACK` line), a question's wait from its file's write (`ask_detect_ms`), the answering frame (`grab_release_ms`) and a journal entry's way to the shown overlay (`overlay_entry_ms`); `cargo xtask measure` collects them and the three VT figures, `--record` writes them; RELEASING.md has the procedure
+- [ ] T-089 Time budgets measured on the T490s into `doc/measurements.toml` (maintainer, RELEASING.md "Measuring on the reference machine")
 - [x] T-091 Decide which build the initrd-binary budget binds: CI's `cargo build --release --no-default-features` measures 1,954,776 B (25.4 %, green), but nixpkgs' build of `fairing-initrd`, the copy the module puts in the initrd, measured 2,335,792 B locally on 2026-10-16 (10.9 %, amber) (maintainer). Decided at G1: the shipped Nix build; CI's `nix` job measures `packages.fairing-initrd`
 - [ ] T-090 v0.1.0: G1 and G3 passed, installs verified, signed tag pushed, release published (maintainer)
 

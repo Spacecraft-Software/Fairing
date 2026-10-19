@@ -14,6 +14,7 @@
 //! - `check-eol` — the §6.5 text-file gate (stored line endings, BOM, final newline).
 //! - `budgets`, `budgets-texi` — the §22 resource budgets: margins and bands,
 //!   and the table the manual includes.
+//! - `measure` — the reference-machine figures from a boot's splash reports.
 //!
 //! This is an internal tool, not a shipped Spacecraft Software CLI: it accepts
 //! `--json` and emits the house `error` envelope on stderr, but does not carry the
@@ -28,6 +29,7 @@ pub mod coverage;
 pub mod dist;
 pub mod eol;
 pub mod manifest;
+pub mod measure;
 pub mod mutants;
 pub mod paths;
 pub mod progress;
@@ -50,6 +52,8 @@ verbs:
   check-eol
   budgets      [--measured id=value,...] [--release]
   budgets-texi [--check]
+  measure      [--boots <n>] [--journal <file>] [--preview-drm <json>] [--preview-fbdev <json>]
+               [--theme-compile <json>] [--record --machine <text>]
   dist         [--ref <commit>] [--out <dir>] [--check]
   coverage     [--report <json>] [--min <percent>]
   mutants      --outcomes <json> [--triage <toml>]
@@ -78,6 +82,7 @@ where
         "check-eol" => eol::run(&parsed),
         "budgets" => budgets::run(&parsed),
         "budgets-texi" => budgets::run_texi(&parsed),
+        "measure" => measure::run(&parsed),
         "dist" => dist::run_dist(&parsed),
         "coverage" => coverage::run(&parsed),
         "mutants" => mutants::run(&parsed),

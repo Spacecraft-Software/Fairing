@@ -325,6 +325,14 @@ impl<K: KeySource> Agent<K> {
                 .is_some_and(|since| now_us.saturating_sub(since) >= NO_KEYBOARD_LIMIT_US)
     }
 
+    /// How long the open question's file had waited when the agent saw it,
+    /// in µs (FRN-SRS-020); `None` with no question open or no usable
+    /// file time.
+    #[must_use]
+    pub fn opened_after_us(&self) -> Option<u64> {
+        self.current.and_then(|question| question.age_us)
+    }
+
     /// The open question as the splash draws it.
     #[must_use]
     pub fn view(&self) -> Option<View<'_>> {
@@ -469,9 +477,15 @@ mod tests {
         let mut f = fixture();
         assert_eq!(f.tick(1), Activity::Idle);
         assert!(!f.agent.keys().grabbed(), "no grab without a question");
+        assert_eq!(f.agent.opened_after_us(), None, "no question, no wait");
         f.ask("ask.1", "");
         assert_eq!(f.tick(2), Activity::Opened(1));
         assert!(f.agent.keys().grabbed());
+        assert!(
+            f.agent.opened_after_us().is_some_and(|us| us < 5_000_000),
+            "{:?}",
+            f.agent.opened_after_us()
+        );
         let view = f.agent.view().unwrap_or_else(|| panic!("no view"));
         assert_eq!(view.message, "Passphrase for root");
         assert_eq!((view.typed, view.echo, view.rejected), (0, None, false));
@@ -489,6 +503,7 @@ mod tests {
         // Released in the same tick the prompt closed, well within 50 ms.
         assert!(!f.agent.keys().grabbed());
         assert!(f.agent.view().is_none());
+        assert_eq!(f.agent.opened_after_us(), None);
         // systemd has not removed the file yet: it is not asked again.
         assert_eq!(f.tick(1_000_000), Activity::Idle);
         assert!(f.agent.view().is_none());

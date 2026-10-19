@@ -27,19 +27,19 @@ binary size (measured in CI on every build). The binary the initrd carries: `bin
 @item theme-artefact
 artefact size (measured in CI on every build). The reference theme compiled with `fairing theme compile themes/steelbore.ncl`; CI's size job.
 @item first-frame
-cold-start latency (measured on the reference machine). `first_frame_ms` of `fairing preview --backend drm`, process start to the first frame on screen, on a free VT.
+cold-start latency (measured on the reference machine). `first_frame_ms` of `fairing preview --backend drm --seconds 5 --json` on a free VT: process start to the first frame on screen. `cargo xtask measure --preview-drm` reads it (RELEASING.md).
 @item artefact-load
-theme load time (measured on the reference machine). `load_ms` of `fairing theme compile themes/steelbore.ncl --json`, the reference artefact decoded from its bytes.
+theme load time (measured on the reference machine). `load_ms` of `fairing theme compile themes/steelbore.ncl --json`, the median time to decode the reference artefact from its bytes. `cargo xtask measure --theme-compile` reads it.
 @item sigterm-release
-release latency (measured on the reference machine). `release_ms` of the stage-2 splash report at the greetd handoff, from the journal of a reference boot.
+release latency (measured on the reference machine). `release_ms` of the stage-2 splash report that ended in `handoff`, from the journal of a reference boot: the tick that saw greetd's SIGTERM to the output released. `cargo xtask measure` reads it.
 @item fbdev-fallback
-fallback latency (measured on the reference machine). The failed DRM attempt's `elapsed_ms` plus the fbdev first frame of `fairing preview --backend auto` with the DRM device withheld.
+fallback latency (measured on the reference machine). `first_frame_ms` of `fairing preview --backend auto --json` with the DRM devices withheld (`/dev/dri` hidden by a mount namespace), so the failed DRM attempt and the fbdev first frame both fall inside it: an upper bound. `cargo xtask measure --preview-fbdev` reads it.
 @item reacquire
-re-acquire latency (measured on the reference machine). From the simpledrm-to-i915 swap in the journal to the next presented frame, on a reference boot.
+re-acquire latency (measured on the reference machine). `reacquire_ms` of the splash reports of a reference boot: the longest a lost output (the simpledrm-to-i915 swap) took to present again, from the first frame that found it lost; `OUTPUT_LOST` and `OUTPUT_BACK` in the journal bracket it. `cargo xtask measure` reads it.
 @item ask-detect
-question latency (measured on the reference machine). From the `ask.*` file's creation to the `ASK_OPENED` journal line, on a reference boot with a LUKS root.
+question latency (measured on the reference machine). `ask_detect_ms` of the initrd splash report of a reference boot with a LUKS root: the `ask.*` file's last write to the agent opening the question, both on `CLOCK_REALTIME`. `cargo xtask measure` reads it.
 @item grab-release
-grab release latency (measured on the reference machine). From the answer's reply to the `ASK_CLOSED` journal line, on a reference boot with a LUKS root.
+grab release latency (measured on the reference machine). `grab_release_ms` of the initrd splash report of a reference boot with a LUKS root: the agent frame that sends the answer and releases the keyboards at its end, an upper bound on reply to release. `cargo xtask measure` reads it.
 @item overlay-entry
-journal overlay latency (measured on the reference machine). From a `logger -p notice` entry to its line in the overlay, timed on the reference machine.
+journal overlay latency (measured on the reference machine). `overlay_entry_ms` of the splash reports of a reference boot with the overlay shown (Escape) while the boot logs: an entry's `__MONOTONIC_TIMESTAMP` to the frame that takes it, entries under a prompt left out. `cargo xtask measure` reads it.
 @end table

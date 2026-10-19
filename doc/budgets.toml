@@ -39,7 +39,7 @@ resource = "cold-start latency"
 ceiling = 150
 unit = "ms"
 measured = "reference"
-method = "`first_frame_ms` of `fairing preview --backend drm`, process start to the first frame on screen, on a free VT."
+method = "`first_frame_ms` of `fairing preview --backend drm --seconds 5 --json` on a free VT: process start to the first frame on screen. `cargo xtask measure --preview-drm` reads it (RELEASING.md)."
 
 [[budget]]
 id = "artefact-load"
@@ -48,7 +48,7 @@ resource = "theme load time"
 ceiling = 5
 unit = "ms"
 measured = "reference"
-method = "`load_ms` of `fairing theme compile themes/steelbore.ncl --json`, the reference artefact decoded from its bytes."
+method = "`load_ms` of `fairing theme compile themes/steelbore.ncl --json`, the median time to decode the reference artefact from its bytes. `cargo xtask measure --theme-compile` reads it."
 
 [[budget]]
 id = "sigterm-release"
@@ -57,7 +57,7 @@ resource = "release latency"
 ceiling = 100
 unit = "ms"
 measured = "reference"
-method = "`release_ms` of the stage-2 splash report at the greetd handoff, from the journal of a reference boot."
+method = "`release_ms` of the stage-2 splash report that ended in `handoff`, from the journal of a reference boot: the tick that saw greetd's SIGTERM to the output released. `cargo xtask measure` reads it."
 
 [[budget]]
 id = "fbdev-fallback"
@@ -66,7 +66,7 @@ resource = "fallback latency"
 ceiling = 200
 unit = "ms"
 measured = "reference"
-method = "The failed DRM attempt's `elapsed_ms` plus the fbdev first frame of `fairing preview --backend auto` with the DRM device withheld."
+method = "`first_frame_ms` of `fairing preview --backend auto --json` with the DRM devices withheld (`/dev/dri` hidden by a mount namespace), so the failed DRM attempt and the fbdev first frame both fall inside it: an upper bound. `cargo xtask measure --preview-fbdev` reads it."
 
 [[budget]]
 id = "reacquire"
@@ -75,7 +75,7 @@ resource = "re-acquire latency"
 ceiling = 500
 unit = "ms"
 measured = "reference"
-method = "From the simpledrm-to-i915 swap in the journal to the next presented frame, on a reference boot."
+method = "`reacquire_ms` of the splash reports of a reference boot: the longest a lost output (the simpledrm-to-i915 swap) took to present again, from the first frame that found it lost; `OUTPUT_LOST` and `OUTPUT_BACK` in the journal bracket it. `cargo xtask measure` reads it."
 
 [[budget]]
 id = "ask-detect"
@@ -84,7 +84,7 @@ resource = "question latency"
 ceiling = 50
 unit = "ms"
 measured = "reference"
-method = "From the `ask.*` file's creation to the `ASK_OPENED` journal line, on a reference boot with a LUKS root."
+method = "`ask_detect_ms` of the initrd splash report of a reference boot with a LUKS root: the `ask.*` file's last write to the agent opening the question, both on `CLOCK_REALTIME`. `cargo xtask measure` reads it."
 
 [[budget]]
 id = "grab-release"
@@ -93,7 +93,7 @@ resource = "grab release latency"
 ceiling = 50
 unit = "ms"
 measured = "reference"
-method = "From the answer's reply to the `ASK_CLOSED` journal line, on a reference boot with a LUKS root."
+method = "`grab_release_ms` of the initrd splash report of a reference boot with a LUKS root: the agent frame that sends the answer and releases the keyboards at its end, an upper bound on reply to release. `cargo xtask measure` reads it."
 
 [[budget]]
 id = "overlay-entry"
@@ -102,4 +102,4 @@ resource = "journal overlay latency"
 ceiling = 250
 unit = "ms"
 measured = "reference"
-method = "From a `logger -p notice` entry to its line in the overlay, timed on the reference machine."
+method = "`overlay_entry_ms` of the splash reports of a reference boot with the overlay shown (Escape) while the boot logs: an entry's `__MONOTONIC_TIMESTAMP` to the frame that takes it, entries under a prompt left out. `cargo xtask measure` reads it."

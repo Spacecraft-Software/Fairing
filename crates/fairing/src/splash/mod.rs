@@ -91,6 +91,10 @@ struct Report {
     release_ms: Option<f64>,
     agent: bool,
     answered: u32,
+    reacquire_ms: Option<f64>,
+    ask_detect_ms: Option<f64>,
+    grab_release_ms: Option<f64>,
+    overlay_entry_ms: Option<f64>,
     accessible: bool,
     reduced_motion: bool,
     planned: bool,
@@ -121,6 +125,10 @@ impl Report {
             release_ms: None,
             agent: false,
             answered: 0,
+            reacquire_ms: None,
+            ask_detect_ms: None,
+            grab_release_ms: None,
+            overlay_entry_ms: None,
             accessible: false,
             reduced_motion: false,
             planned: false,
@@ -354,6 +362,10 @@ fn fill(report: &mut Report, outcome: &Outcome) {
     report.release_ms = outcome.release_ms;
     report.agent = outcome.agent;
     report.answered = outcome.answered;
+    report.reacquire_ms = outcome.reacquire_ms;
+    report.ask_detect_ms = outcome.ask_detect_ms;
+    report.grab_release_ms = outcome.grab_release_ms;
+    report.overlay_entry_ms = outcome.overlay_entry_ms;
     if outcome.reason == Reason::NoBackend {
         report.chain.clear();
     }

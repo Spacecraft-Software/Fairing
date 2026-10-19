@@ -259,6 +259,7 @@ pub const DIAGNOSTIC_CODES: &[&str] = &[
     "RENDER_FAILED",
     "FLIP_LATE",
     "OUTPUT_LOST",
+    "OUTPUT_BACK",
     "DBUS_DEGRADED",
     "DBUS_LOST",
     "UNIT_FAILED",
@@ -576,6 +577,10 @@ fn splash_data() -> Value {
             "release_ms": { "type": ["number", "null"], "description": "From the tick that first saw SIGTERM to the output released; the signal can arrive up to one frame period (33 ms) earlier" },
             "agent": { "type": "boolean", "description": "Whether the password agent was up (in a plan: whether it would be)" },
             "answered": { "type": "integer", "minimum": 0, "description": "Password questions answered" },
+            "reacquire_ms": { "type": ["number", "null"], "description": "The longest a lost output took to present again, from the first frame that found it lost (FRN-SRS-006)" },
+            "ask_detect_ms": { "type": ["number", "null"], "description": "The longest a password question waited, from its file's last write to the agent opening it (FRN-SRS-020)" },
+            "grab_release_ms": { "type": ["number", "null"], "description": "The longest agent frame that sent an answer or cancel and released the keyboards: an upper bound on reply to release (FRN-SRS-028)" },
+            "overlay_entry_ms": { "type": ["number", "null"], "description": "The longest a new journal entry took to reach the shown overlay (FRN-SRS-062)" },
             "accessible": { "type": "boolean", "description": "Accessible mode: lines of text on the console instead of frames" },
             "reduced_motion": { "type": "boolean", "description": "Reduced motion: the bar jumps and frame sequences hold their first frame" },
             "planned": { "type": "boolean" }
