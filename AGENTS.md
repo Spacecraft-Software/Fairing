@@ -35,7 +35,8 @@ that do not exist yet.
 - Requirements chapters current: `cargo xtask req-texi --check`
 - Traceability gate: `cargo xtask trace` (artifacts in `target/trace/`)
 - Progress block: `cargo xtask progress` (add `--explain` for denominators)
-- Budgets: `cargo xtask budgets` (CI passes `--measured`), `cargo xtask budgets-texi --check`
+- Budgets: `cargo xtask budgets` (CI passes `--measured`), `cargo xtask budgets-texi --check`;
+  on the reference machine `cargo xtask measure [--record --machine <text>]` (RELEASING.md)
 - Coverage: `cargo llvm-cov --workspace --exclude xtask --locked --json --summary-only
   --output-path target/llvm-cov.json`, then `cargo xtask coverage` (80 % per crate)
 - Mutation: `cargo mutants -p fairing-askpass`, `cargo mutants -p fairing --file
@@ -307,6 +308,7 @@ will not be green there.
 | Dependency qualification | `DEPENDENCIES.md` |
 | Third-party credits (§15.3) | `CREDITS.md` |
 | Budgets, coverage and mutation gates | `xtask/src/{budgets,coverage,mutants}.rs`, `doc/{budgets,measurements,mutants}.toml` |
+| Reference-machine measurement | `xtask/src/measure.rs`, the `*_ms` fields of the splash report, RELEASING.md |
 | Release archive, SBOM, manifest | `xtask/src/{dist,sbom,manifest}.rs`, `doc/releases/`, `RELEASING.md`, `.github/workflows/release.yml` |
 | Package definitions | `packaging/{default.nix,guix.scm,PKGBUILD}` |
 | Plan and task list | `PLAN.md`, `TODO.md` |

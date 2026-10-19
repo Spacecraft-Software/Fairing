@@ -31,6 +31,15 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 
 ### Changed
 
+- The splash report times the waits the reference-machine budgets bound, each the
+  longest of the run: `reacquire_ms` (a lost output to its next frame, with an
+  `OUTPUT_BACK` journal line), `ask_detect_ms` (a question's file written to the agent
+  opening it, also in the `ASK_OPENED` line), `grab_release_ms` (the frame that answers
+  and releases the keyboards) and `overlay_entry_ms` (a journal entry to the shown
+  overlay). `cargo xtask measure` collects them from the last boots' journal, with the
+  first-frame, fbdev and artefact-load figures from `fairing preview` and `fairing theme
+  compile`, and `--record` appends them to `doc/measurements.toml`; RELEASING.md has the
+  T490s procedure (T-092, for T-089).
 - G1: the maintainer baselined the 69 requirements on 2026-10-16. FRN-SRS-010 names the
   first-boot curve until the cached duration is readable under `/sysroot`; FRN-SRS-032
   names `fairing-handoff.service`; FRN-SRS-034 counts a rise in the failed-unit count

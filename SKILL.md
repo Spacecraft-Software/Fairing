@@ -119,6 +119,7 @@ cargo xtask trace --json       # traceability matrix as an envelope
 cargo xtask progress           # §17.1 progress block
 cargo xtask check-eol          # §6.5 text-file gate
 cargo xtask budgets --json     # §22 margins and bands
+cargo xtask measure --json     # reference-machine latencies from the boot journal (RELEASING.md)
 cargo xtask coverage --json    # per-crate line coverage from target/llvm-cov.json
 cargo xtask mutants --outcomes mutants.out/outcomes.json   # survivors triaged?
 cargo xtask dist --json        # release archive; stamps packaging/ (RELEASING.md)

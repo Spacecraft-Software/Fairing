@@ -54,6 +54,11 @@ pub struct Question {
     pub name: Text<NAME_CAPACITY>,
     /// The parsed question.
     pub ask: Ask,
+    /// How long ago the file was last written when it was read, in µs of
+    /// `CLOCK_REALTIME`, the clock of its modification time: how long the
+    /// question waited to be seen (FRN-SRS-020). `None` when the file's time
+    /// is later than the clock's, as after the clock was set back.
+    pub age_us: Option<u64>,
 }
 
 /// The directory systemd asks its questions in, under inotify.
@@ -179,7 +184,7 @@ impl Watcher {
             let Some(text) = Text::exact(name) else {
                 continue;
             };
-            let Some(ask) = self.read(&entry.path()) else {
+            let Some((ask, age_us)) = self.read(&entry.path()) else {
                 continue;
             };
             if !socket_inside(&self.dir, ask.socket.as_str())
@@ -189,16 +194,24 @@ impl Watcher {
                 continue;
             }
             if kept {
-                return Ok(Some(Question { name: text, ask }));
+                return Ok(Some(Question {
+                    name: text,
+                    ask,
+                    age_us,
+                }));
             }
-            best = Some(Question { name: text, ask });
+            best = Some(Question {
+                name: text,
+                ask,
+                age_us,
+            });
         }
         Ok(best)
     }
 
-    /// Reads and parses one file into the fixed buffer; `None` on any
-    /// failure.
-    fn read(&mut self, path: &Path) -> Option<Ask> {
+    /// Reads and parses one file into the fixed buffer, with how long ago it
+    /// was written; `None` on any failure.
+    fn read(&mut self, path: &Path) -> Option<(Ask, Option<u64>)> {
         let fd = rustix::fs::open(
             path,
             OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY,
@@ -220,8 +233,21 @@ impl Watcher {
                 Err(_e) => return None,
             }
         }
-        Ask::parse(&self.file[..len]).ok()
+        let age_us = age_us(
+            &stat,
+            rustix::time::clock_gettime(rustix::time::ClockId::Realtime),
+        );
+        Ask::parse(&self.file[..len]).ok().map(|ask| (ask, age_us))
     }
+}
+
+/// Microseconds from `stat`'s modification time to `now`, both
+/// `CLOCK_REALTIME`; `None` when the file is newer than the clock.
+fn age_us(stat: &rustix::fs::Stat, now: rustix::time::Timespec) -> Option<u64> {
+    let micros = |secs: i128, nanos: i128| secs * 1_000_000 + nanos / 1_000;
+    let written = micros(stat.st_mtime.into(), stat.st_mtime_nsec.into());
+    let now = micros(now.tv_sec.into(), now.tv_nsec.into());
+    u64::try_from(now - written).ok()
 }
 
 /// Whether `socket` names an entry directly inside `dir` (T-061). A last
@@ -494,6 +520,50 @@ mod tests {
         // The kernel drops the watch with IN_IGNORED, an event with no name.
         fs::remove_dir(&dir).unwrap_or_else(|e| panic!("{e}"));
         assert!(watcher.changed().unwrap_or_else(|e| panic!("{e}")));
+    }
+
+    /// Sets `path`'s modification time `offset_secs` from now.
+    fn written(path: &Path, offset_secs: i64) {
+        let now = rustix::time::clock_gettime(rustix::time::ClockId::Realtime);
+        let then = rustix::time::Timespec {
+            tv_sec: now.tv_sec + offset_secs,
+            tv_nsec: now.tv_nsec,
+        };
+        let times = rustix::fs::Timestamps {
+            last_access: then,
+            last_modification: then,
+        };
+        rustix::fs::utimensat(rustix::fs::CWD, path, &times, rustix::fs::AtFlags::empty())
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+
+    #[test]
+    fn a_question_carries_how_long_its_file_waited() {
+        // Verifies: FRN-SRS-020
+        let (dir, mut watcher) = open();
+        ask(dir.path(), "ask.1", &question("/run/sck.1", ""));
+        let fresh = watcher
+            .first(0, None, None)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .and_then(|q| q.age_us)
+            .unwrap_or_else(|| panic!("no age"));
+        assert!(fresh < 5_000_000, "{fresh} µs for a file just written");
+        written(&dir.path().join("ask.1"), -5);
+        let old = watcher
+            .first(0, None, None)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .and_then(|q| q.age_us)
+            .unwrap_or_else(|| panic!("no age"));
+        assert!((5_000_000..60_000_000).contains(&old), "{old} µs");
+        written(&dir.path().join("ask.1"), 3600);
+        let future = watcher
+            .first(0, None, None)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .unwrap_or_else(|| panic!("the question is still shown"));
+        assert_eq!(
+            future.age_us, None,
+            "a file newer than the clock has no age"
+        );
     }
 
     #[test]
