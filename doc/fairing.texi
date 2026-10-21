@@ -153,6 +153,7 @@ the whole tool or one verb.  This chapter describes the verbs of version
 @example
 fairing splash --stage initrd|system|shutdown [--theme @var{file.fairing}]
                [--palette @var{slug}] [--no-agent] [--reduced-motion]
+               [--handoff-console @var{path}]
 @end example
 
 The boot splash itself.  The systemd units run it, once per boot stage
@@ -192,6 +193,16 @@ Without it the splash answers them itself (@pxref{Password agent}).
 @item --reduced-motion
 Keep the theme's frame sequence on its first frame and move the bar without
 easing (@pxref{Accessibility}).
+@item --handoff-console
+The greeter's console, for example @file{/dev/tty1}.  At the greetd handoff,
+before it lets the display go, stage 2 sets the console's default background
+and foreground to the theme's canvas and text colours, hides its cursor and
+clears it.  The kernel then brings back a console that already shows the
+splash's canvas, and the greeter draws on it, with no black screen between
+the two.  A console that cannot be opened costs a @code{HANDOFF_CONSOLE}
+warning, never the handoff.  Under an agent or CI harness the option is
+ignored, since Fairing opens no VT there.  The NixOS module passes greetd's
+console.
 @end table
 
 Escape shows the journal over the splash (@pxref{Journal overlay}).

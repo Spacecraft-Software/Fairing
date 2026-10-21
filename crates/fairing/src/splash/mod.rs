@@ -19,6 +19,7 @@ pub mod dbus;
 #[path = "dbus_off.rs"]
 pub mod dbus;
 pub mod events;
+pub mod greeter;
 pub mod journal;
 pub mod keys;
 pub mod notify;
@@ -28,7 +29,7 @@ pub mod run;
 pub mod state;
 
 use std::io::Read as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
@@ -242,6 +243,7 @@ pub fn run(
         overlay: text.is_none().then(|| overlay_paths(args)),
         text,
         reduced_motion,
+        handoff_console: handoff_console(args, context),
     };
     let emit_diagnostic = |diagnostic: Diagnostic| diagnostic.emit(context);
     let environment = Environment {
@@ -256,6 +258,21 @@ pub fn run(
     let outcome = run::run(&plan, &environment);
     fill(&mut report, &outcome);
     emit(&report, context, invocation, flags)
+}
+
+/// The greeter's console to ready at the handoff (FRN-SRS-106). Under an
+/// agent or CI harness there is none: Fairing opens no VT there
+/// (FRN-SRS-084), and any path could name one by the time it is opened.
+fn handoff_console(args: &SplashArgs, context: &Context) -> Option<PathBuf> {
+    handoff_console_for(
+        args.handoff_console.as_ref(),
+        context.is_agent_environment(),
+    )
+}
+
+/// [`handoff_console`] without the context, for tests.
+fn handoff_console_for(path: Option<&PathBuf>, agent_environment: bool) -> Option<PathBuf> {
+    path.filter(|_| !agent_environment).cloned()
 }
 
 /// The password agent's directories, unless `--no-agent`.
@@ -437,7 +454,18 @@ mod tests {
         let Some(Command::Splash(args)) = cli.command else {
             panic!("not a splash invocation: {words:?}");
         };
-        (args, cli.global)
+        (*args, cli.global)
+    }
+
+    #[test]
+    fn agents_get_no_handoff_console_at_all() {
+        // Verifies: FRN-SRS-106, FRN-SRS-084
+        let tty = PathBuf::from("/dev/tty1");
+        let file = PathBuf::from("/tmp/not-a-console");
+        assert_eq!(handoff_console_for(Some(&tty), true), None);
+        assert_eq!(handoff_console_for(Some(&file), true), None);
+        assert_eq!(handoff_console_for(Some(&tty), false), Some(tty.clone()));
+        assert_eq!(handoff_console_for(None, false), None);
     }
 
     #[test]

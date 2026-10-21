@@ -25,10 +25,10 @@ use fairing_askpass::agent::{Activity, Agent};
 use fairing_askpass::input::Keyboards;
 use fairing_askpass::watch::monotonic_us;
 use fairing_render::{
-    Cadence, Choice, Compositor, EchoText, Field, NoBackend, Opened, Presenter, PresenterConfig,
-    PromptView, RenderErrorKind, Scene, Size, TextConsole, open,
+    Cadence, Choice, Compositor, EchoText, Field, NoBackend, Opened, Palette, Presenter,
+    PresenterConfig, PromptView, RenderErrorKind, Scene, Size, TextConsole, open,
 };
-use fairing_theme::{CompiledTheme, Selection};
+use fairing_theme::{CompiledTheme, Role, Selection};
 use serde::Serialize;
 
 use crate::diagnostic::{Diagnostic, Priority, Severity};
@@ -145,6 +145,9 @@ pub struct Plan {
     /// The journal overlay; `None` in accessible mode, where the console
     /// already shows the log, and in tests.
     pub overlay: Option<OverlayPaths>,
+    /// The greeter's console, readied with the theme's canvas at the greetd
+    /// handoff (FRN-SRS-106); `None` leaves it alone.
+    pub handoff_console: Option<PathBuf>,
 }
 
 /// Why the loop ended.
@@ -592,6 +595,14 @@ fn finish(
     }
     outcome.bar = session.bar.shown();
     outcome.dbus = session.latest.is_some();
+    // The greeter's console takes the canvas while the splash still holds the
+    // display, so the kernel brings it back already painted (FRN-SRS-106).
+    if outcome.reason == Reason::Handoff
+        && matches!(output, Output::Pixels(_))
+        && let Some(console) = &plan.handoff_console
+    {
+        ready_greeter_console(plan, env, console);
+    }
     // Release the output first: greetd is waiting for it (FRN-SRS-033).
     let closed = output.close();
     // Then the overlay's journalctl, whose reaping has no bound of its own.
@@ -629,6 +640,29 @@ fn finish(
     }
     notify(env, Notifier::stopping, "STOPPING=1");
     outcome
+}
+
+/// Paints the greeter's console with the theme's canvas and text colours. A
+/// console that cannot be readied costs a warning, never the handoff.
+///
+/// Implements: FRN-SRS-106
+fn ready_greeter_console(plan: &Plan, env: &Environment<'_>, console: &std::path::Path) {
+    let palette = Palette::from_selection(plan.selection);
+    if let Err(error) = crate::splash::greeter::prepare(
+        console,
+        palette.color(Role::Background),
+        palette.color(Role::Foreground),
+    ) {
+        (env.emit)(Diagnostic::new(
+            Severity::Warn,
+            "HANDOFF_CONSOLE",
+            format!(
+                "cannot ready {} for the greeter: {error}",
+                console.display()
+            ),
+            env.invocation,
+        ));
+    }
 }
 
 /// Frames dropped in a row because the display had not completed its last
@@ -1431,6 +1465,7 @@ mod tests {
                 text: None,
                 reduced_motion: false,
                 overlay: None,
+                handoff_console: None,
             }
         }
 
@@ -1719,6 +1754,71 @@ mod tests {
         assert!(
             !plan.paths.state.join(DURATIONS_FILE).exists(),
             "a stop is not a measurement"
+        );
+    }
+
+    #[test]
+    fn the_handoff_readies_the_greeter_console_with_the_canvas() {
+        // Verifies: FRN-SRS-106
+        let harness = Harness::new();
+        let console = harness.dir.path().join("tty1");
+        std::fs::write(&console, b"").unwrap_or_else(|e| panic!("{e}"));
+        let mut plan = harness.plan(Stage::System, None);
+        plan.handoff_console = Some(console.clone());
+        harness.mark_handoff();
+        let outcome = harness.run(
+            &plan,
+            true,
+            vec![snapshot(0.4, 0, "starting", None)],
+            memory,
+        );
+        assert_eq!(outcome.reason, Reason::Handoff);
+        let palette = Palette::from_selection(plan.selection);
+        assert_eq!(
+            std::fs::read_to_string(&console).unwrap_or_default(),
+            crate::splash::greeter::sequence(
+                palette.color(Role::Background),
+                palette.color(Role::Foreground)
+            )
+        );
+    }
+
+    #[test]
+    fn only_the_handoff_touches_the_greeter_console() {
+        // Verifies: FRN-SRS-106
+        let harness = Harness::new();
+        let console = harness.dir.path().join("tty1");
+        std::fs::write(&console, b"").unwrap_or_else(|e| panic!("{e}"));
+        let mut plan = harness.plan(Stage::System, None);
+        plan.handoff_console = Some(console.clone());
+        let outcome = harness.run(
+            &plan,
+            true,
+            vec![snapshot(0.4, 0, "starting", None)],
+            memory,
+        );
+        assert_eq!(outcome.reason, Reason::Stopped);
+        assert_eq!(std::fs::read_to_string(&console).unwrap_or_default(), "");
+    }
+
+    #[test]
+    fn a_greeter_console_that_cannot_be_readied_is_a_warning() {
+        // Verifies: FRN-SRS-106
+        let harness = Harness::new();
+        let mut plan = harness.plan(Stage::System, None);
+        plan.handoff_console = Some(harness.dir.path().join("missing-tty"));
+        harness.mark_handoff();
+        let outcome = harness.run(
+            &plan,
+            true,
+            vec![snapshot(0.4, 0, "starting", None)],
+            memory,
+        );
+        assert_eq!(outcome.reason, Reason::Handoff, "the handoff still happens");
+        assert!(
+            harness.codes().contains(&"HANDOFF_CONSOLE"),
+            "{:?}",
+            harness.codes()
         );
     }
 

@@ -70,6 +70,10 @@ reads this file.
 - [ ] P-054 SBOM, release manifest, signed tag (§24.3, §25.3)
 - [ ] P-055 Texinfo manual builds to info, html, pdf (§8) (optional)
 
+## M6 — Greeter handoff
+
+- [ ] P-060 Seamless handoff to the greeter: greetd's console painted with the theme canvas before the display is released, so no black console shows between the splash and Gantry (FRN-SRS-106)
+
 ## Gates
 
 Maintainer actions that unblock ticks above; counted in the PLAN row, not in a milestone.

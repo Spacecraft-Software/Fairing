@@ -727,6 +727,26 @@ verified
 M2
 @end table
 
+@anchor{FRN-SRS-106}
+@subheading FRN-SRS-106 --- The greeter's console shows the theme canvas at the handoff
+@cindex FRN-SRS-106
+@table @asis
+@item Requirement
+When given the greeter's virtual console, Fairing shall, at the greetd handoff and before releasing the display, set that console's default background and foreground palette entries to the theme's canvas and text colours, hide its cursor and clear it.
+@item Rationale
+The kernel puts the text console back when the splash lets the display go; unprepared, it shows black and boot text until the greeter's first frame (Gantry P-021, the seamless handoff).
+@item Source
+@ref{FRN-NEED-001}, Gantry PRD: seamless Fairing handoff.
+@item Priority
+mandatory
+@item Verification
+test
+@item Status
+draft
+@item Milestone
+M6
+@end table
+
 @node Theme Requirements
 @section Theme
 
