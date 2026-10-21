@@ -147,7 +147,7 @@ pub struct Plan {
     pub overlay: Option<OverlayPaths>,
     /// The greeter's console, readied with the theme's canvas at the greetd
     /// handoff (FRN-SRS-106); `None` leaves it alone.
-    pub handoff_console: Option<PathBuf>,
+    pub handoff_console: Option<crate::splash::greeter::Target>,
 }
 
 /// Why the loop ended.
@@ -646,7 +646,11 @@ fn finish(
 /// console that cannot be readied costs a warning, never the handoff.
 ///
 /// Implements: FRN-SRS-106
-fn ready_greeter_console(plan: &Plan, env: &Environment<'_>, console: &std::path::Path) {
+fn ready_greeter_console(
+    plan: &Plan,
+    env: &Environment<'_>,
+    console: &crate::splash::greeter::Target,
+) {
     let palette = Palette::from_selection(plan.selection);
     if let Err(error) = crate::splash::greeter::prepare(
         console,
@@ -658,7 +662,7 @@ fn ready_greeter_console(plan: &Plan, env: &Environment<'_>, console: &std::path
             "HANDOFF_CONSOLE",
             format!(
                 "cannot ready {} for the greeter: {error}",
-                console.display()
+                console.path.display()
             ),
             env.invocation,
         ));
@@ -1764,7 +1768,10 @@ mod tests {
         let console = harness.dir.path().join("tty1");
         std::fs::write(&console, b"").unwrap_or_else(|e| panic!("{e}"));
         let mut plan = harness.plan(Stage::System, None);
-        plan.handoff_console = Some(console.clone());
+        plan.handoff_console = Some(crate::splash::greeter::Target {
+            path: console.clone(),
+            devices: false,
+        });
         harness.mark_handoff();
         let outcome = harness.run(
             &plan,
@@ -1790,7 +1797,10 @@ mod tests {
         let console = harness.dir.path().join("tty1");
         std::fs::write(&console, b"").unwrap_or_else(|e| panic!("{e}"));
         let mut plan = harness.plan(Stage::System, None);
-        plan.handoff_console = Some(console.clone());
+        plan.handoff_console = Some(crate::splash::greeter::Target {
+            path: console.clone(),
+            devices: false,
+        });
         let outcome = harness.run(
             &plan,
             true,
@@ -1806,7 +1816,10 @@ mod tests {
         // Verifies: FRN-SRS-106
         let harness = Harness::new();
         let mut plan = harness.plan(Stage::System, None);
-        plan.handoff_console = Some(harness.dir.path().join("missing-tty"));
+        plan.handoff_console = Some(crate::splash::greeter::Target {
+            path: harness.dir.path().join("missing-tty"),
+            devices: false,
+        });
         harness.mark_handoff();
         let outcome = harness.run(
             &plan,

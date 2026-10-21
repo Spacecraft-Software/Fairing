@@ -47,6 +47,7 @@ use crate::output::write_line;
 use crate::selection::{PaletteSources, choose_backend, report_accessible, resolve_palette};
 use crate::splash::clock::Boottime;
 use crate::splash::console::TextTarget;
+use crate::splash::greeter::Target;
 use crate::splash::notify::Notifier;
 use crate::splash::progress::Stage;
 use crate::splash::run::{AgentPaths, Environment, Outcome, OverlayPaths, Paths, Plan, Reason};
@@ -261,11 +262,18 @@ pub fn run(
 }
 
 /// The greeter's console to ready at the handoff (FRN-SRS-106). A real
-/// console is never touched under an agent or CI harness.
-fn handoff_console(args: &SplashArgs, context: &Context) -> Option<std::path::PathBuf> {
+/// console is never touched under an agent or CI harness: a path that names
+/// one is dropped here, and the opened descriptor is checked again at the
+/// handoff in case the path changed in between.
+fn handoff_console(args: &SplashArgs, context: &Context) -> Option<Target> {
+    let agent = context.is_agent_environment();
     args.handoff_console
         .clone()
-        .filter(|path| allowed_handoff_console(path, context.is_agent_environment()))
+        .filter(|path| allowed_handoff_console(path, agent))
+        .map(|path| Target {
+            path,
+            devices: !agent,
+        })
 }
 
 /// Under an agent or CI harness a path is kept only when it resolves, and to
