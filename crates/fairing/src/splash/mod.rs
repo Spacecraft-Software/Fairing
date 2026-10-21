@@ -29,7 +29,7 @@ pub mod run;
 pub mod state;
 
 use std::io::Read as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
@@ -47,7 +47,6 @@ use crate::output::write_line;
 use crate::selection::{PaletteSources, choose_backend, report_accessible, resolve_palette};
 use crate::splash::clock::Boottime;
 use crate::splash::console::TextTarget;
-use crate::splash::greeter::Target;
 use crate::splash::notify::Notifier;
 use crate::splash::progress::Stage;
 use crate::splash::run::{AgentPaths, Environment, Outcome, OverlayPaths, Paths, Plan, Reason};
@@ -261,26 +260,19 @@ pub fn run(
     emit(&report, context, invocation, flags)
 }
 
-/// The greeter's console to ready at the handoff (FRN-SRS-106). A real
-/// console is never touched under an agent or CI harness: a path that names
-/// one is dropped here, and the opened descriptor is checked again at the
-/// handoff in case the path changed in between.
-fn handoff_console(args: &SplashArgs, context: &Context) -> Option<Target> {
-    let agent = context.is_agent_environment();
-    args.handoff_console
-        .clone()
-        .filter(|path| allowed_handoff_console(path, agent))
-        .map(|path| Target {
-            path,
-            devices: !agent,
-        })
+/// The greeter's console to ready at the handoff (FRN-SRS-106). Under an
+/// agent or CI harness there is none: Fairing opens no VT there
+/// (FRN-SRS-084), and any path could name one by the time it is opened.
+fn handoff_console(args: &SplashArgs, context: &Context) -> Option<PathBuf> {
+    handoff_console_for(
+        args.handoff_console.as_ref(),
+        context.is_agent_environment(),
+    )
 }
 
-/// Under an agent or CI harness a path is kept only when it resolves, and to
-/// somewhere outside `/dev`: `/tmp/../dev/tty1` or a link to a VT names the
-/// same console as `/dev/tty1`. Anything goes otherwise.
-fn allowed_handoff_console(path: &Path, agent_environment: bool) -> bool {
-    !agent_environment || std::fs::canonicalize(path).is_ok_and(|real| !real.starts_with("/dev"))
+/// [`handoff_console`] without the context, for tests.
+fn handoff_console_for(path: Option<&PathBuf>, agent_environment: bool) -> Option<PathBuf> {
+    path.filter(|_| !agent_environment).cloned()
 }
 
 /// The password agent's directories, unless `--no-agent`.
@@ -466,21 +458,14 @@ mod tests {
     }
 
     #[test]
-    fn agents_never_reach_a_console_through_another_path() {
-        // Verifies: FRN-SRS-106
-        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let file = dir.path().join("tty1");
-        std::fs::write(&file, b"").unwrap_or_else(|e| panic!("{e}"));
-        let dotted = dir.path().join("../".repeat(32)).join("dev/null");
-        assert!(
-            !allowed_handoff_console(&dotted, true),
-            "{}",
-            dotted.display()
-        );
-        assert!(!allowed_handoff_console(Path::new("/dev/null"), true));
-        assert!(!allowed_handoff_console(&dir.path().join("missing"), true));
-        assert!(allowed_handoff_console(&file, true));
-        assert!(allowed_handoff_console(Path::new("/dev/tty1"), false));
+    fn agents_get_no_handoff_console_at_all() {
+        // Verifies: FRN-SRS-106, FRN-SRS-084
+        let tty = PathBuf::from("/dev/tty1");
+        let file = PathBuf::from("/tmp/not-a-console");
+        assert_eq!(handoff_console_for(Some(&tty), true), None);
+        assert_eq!(handoff_console_for(Some(&file), true), None);
+        assert_eq!(handoff_console_for(Some(&tty), false), Some(tty.clone()));
+        assert_eq!(handoff_console_for(None, false), None);
     }
 
     #[test]
