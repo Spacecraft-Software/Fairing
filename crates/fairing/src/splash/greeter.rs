@@ -28,14 +28,16 @@ use fairing_theme::Rgb;
 use rustix::fs::{Mode, OFlags};
 
 /// The Linux console sequence that readies it: palette entry 0 is `canvas`,
-/// entry 7 is `text`, attributes reset to that default, cursor hidden,
-/// cursor home, screen cleared.
+/// entry 7 is `text`, then entries 7 on 0 selected explicitly (a plain reset
+/// would restore whatever default pair an earlier program set, and the clear
+/// paints with the current background), cursor hidden, cursor home, screen
+/// cleared.
 ///
 /// Implements: FRN-SRS-106
 #[must_use]
 pub fn sequence(canvas: Rgb, text: Rgb) -> String {
     format!(
-        "\x1b]P0{:02x}{:02x}{:02x}\x1b]P7{:02x}{:02x}{:02x}\x1b[0m\x1b[?25l\x1b[H\x1b[2J",
+        "\x1b]P0{:02x}{:02x}{:02x}\x1b]P7{:02x}{:02x}{:02x}\x1b[0;37;40m\x1b[?25l\x1b[H\x1b[2J",
         canvas.r, canvas.g, canvas.b, text.r, text.g, text.b
     )
 }
@@ -68,7 +70,7 @@ mod tests {
         // Verifies: FRN-SRS-106
         let text = sequence(Rgb::new(0x00, 0x0b, 0x1e), Rgb::new(0xd0, 0xd8, 0xe8));
         assert_eq!(
-            text, "\x1b]P0000b1e\x1b]P7d0d8e8\x1b[0m\x1b[?25l\x1b[H\x1b[2J",
+            text, "\x1b]P0000b1e\x1b]P7d0d8e8\x1b[0;37;40m\x1b[?25l\x1b[H\x1b[2J",
             "palette first, so the clear paints the canvas"
         );
     }
