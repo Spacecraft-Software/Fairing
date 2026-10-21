@@ -9,6 +9,11 @@ Fine-grained tasks for the milestone in progress. `PLAN.md` holds the milestone 
 this file holds the steps behind them and is rewritten as milestones open. Ticked means
 done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 
+## M6 — Greeter handoff
+
+- [x] T-093 `--handoff-console <path>`: at the greetd handoff, before the display is released, stage 2 writes the theme's canvas and text colours into the console's palette entries 0 and 7, hides the cursor and clears it; a console that cannot be opened is a `HANDOFF_CONSOLE` warning, never a failed handoff; the NixOS module passes greetd's VT; draft requirement FRN-SRS-106 with tests (Gantry P-021)
+- [ ] T-094 FRN-SRS-106 baselined and verified by a recorded boot on the T490s with Gantry: no black console between the splash and the login screen (maintainer)
+
 ## M5 — Release 0.1
 
 - [x] T-080 Budget register: the initrd binary ceiling as a draft requirement; `doc/budgets.toml` (ceilings, requirements, reference machine and workload) and `doc/measurements.toml` (dated figures); `cargo xtask budgets` computes margins and §22.3 bands, blocks a red or exceeded margin, and generates `doc/budgets.texi`; CI measures binary and artefact size on every build

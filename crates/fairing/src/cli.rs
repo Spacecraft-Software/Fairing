@@ -272,6 +272,9 @@ pub struct SplashArgs {
     /// Where accessible mode writes its lines (test seam).
     #[arg(long, value_name = "path", default_value = crate::splash::console::CONSOLE, hide = true)]
     pub console: PathBuf,
+    /// The greeter's console (e.g. `/dev/tty1`): at the greetd handoff it is cleared to the theme's canvas.
+    #[arg(long, value_name = "path")]
+    pub handoff_console: Option<PathBuf>,
 }
 
 /// Seconds as a finite number in `0.0..=3600.0`.
@@ -339,7 +342,7 @@ pub enum Command {
     #[command(
         after_help = "Examples:\n  fairing splash --stage initrd --theme steelbore.fairing\n  fairing splash --stage system --theme steelbore.fairing\n  fairing splash --stage system --dry-run --json"
     )]
-    Splash(SplashArgs),
+    Splash(Box<SplashArgs>),
 }
 
 /// The `theme` verbs.

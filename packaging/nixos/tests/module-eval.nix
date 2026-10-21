@@ -181,6 +181,9 @@ let
       !(lib.hasInfix "/run/fairing/agent" (
         noAgent.systemd.units."systemd-ask-password-console.service".text or ""
       ));
+    "FRN-SRS-106: stage 2 readies greetd's console at the handoff, the initrd does not" =
+      lib.hasInfix "--handoff-console /dev/tty1" systemText
+      && !(lib.hasInfix "--handoff-console" initrdText);
     "fairing.service starts only during a boot" =
       hasLine systemText "ConditionPathIsDirectory=/run/fairing";
     "the initrd keeps /run/fairing across switch-root" =

@@ -64,6 +64,13 @@ let
         cfg.palette
       ]
       ++ lib.optional (!cfg.agent.enable) "--no-agent"
+      # At the greetd handoff stage 2 paints greetd's console with the theme
+      # canvas before letting the display go, so the kernel never shows a
+      # black console between the splash and the greeter (FRN-SRS-106).
+      ++ lib.optionals (stage == "system") [
+        "--handoff-console"
+        "/dev/tty${toString config.services.greetd.settings.terminal.vt}"
+      ]
     );
 
   # The console agent's unit, either stage.

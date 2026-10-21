@@ -147,6 +147,9 @@ will not be green there.
   stage-2 SIGTERM is reason `stopped`, and a boot that finishes without greetd ends
   the splash with reason `boot-finished`. Never add
   `Conflicts=greetd.service` (systemd drops greetd's start from the boot transaction).
+  At the handoff, and only then, `--handoff-console` (greetd's VT, from the
+  module) is painted with the theme canvas before the output is released
+  (FRN-SRS-106); never write it on any other reason or under an agent harness.
   `fairing.service` only starts while `/run/fairing` exists (the initrd unit leaves it,
   the stage-2 unit removes it), so `nixos-rebuild switch` never restarts the splash.
 - The password agent (`fairing_askpass::agent::Agent`) is one more non-blocking input of

@@ -14,6 +14,12 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 
 ### Added
 
+- `fairing splash --handoff-console <path>` (FRN-SRS-106, draft): at the greetd handoff,
+  before the display is released, stage 2 paints the greeter's console with the theme's
+  canvas and text colours (palette entries 0 and 7), hides its cursor and clears it, so
+  the kernel never shows a black console between the splash and the greeter. The NixOS
+  module passes greetd's VT. Gantry sets its own palette over it when it starts.
+
 - M5 release 0.1. `cargo xtask dist` builds the release archive: the tree at a commit with
   every crate vendored, bit-reproducible, built offline by all three package definitions,
   `packaging/default.nix` (now the §5.5 release form; the flake still builds its own
