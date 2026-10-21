@@ -265,7 +265,14 @@ pub fn run(
 fn handoff_console(args: &SplashArgs, context: &Context) -> Option<std::path::PathBuf> {
     args.handoff_console
         .clone()
-        .filter(|path| !(context.is_agent_environment() && path.starts_with("/dev")))
+        .filter(|path| allowed_handoff_console(path, context.is_agent_environment()))
+}
+
+/// Under an agent or CI harness a path is kept only when it resolves, and to
+/// somewhere outside `/dev`: `/tmp/../dev/tty1` or a link to a VT names the
+/// same console as `/dev/tty1`. Anything goes otherwise.
+fn allowed_handoff_console(path: &Path, agent_environment: bool) -> bool {
+    !agent_environment || std::fs::canonicalize(path).is_ok_and(|real| !real.starts_with("/dev"))
 }
 
 /// The password agent's directories, unless `--no-agent`.
@@ -448,6 +455,24 @@ mod tests {
             panic!("not a splash invocation: {words:?}");
         };
         (*args, cli.global)
+    }
+
+    #[test]
+    fn agents_never_reach_a_console_through_another_path() {
+        // Verifies: FRN-SRS-106
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let file = dir.path().join("tty1");
+        std::fs::write(&file, b"").unwrap_or_else(|e| panic!("{e}"));
+        let dotted = dir.path().join("../".repeat(32)).join("dev/null");
+        assert!(
+            !allowed_handoff_console(&dotted, true),
+            "{}",
+            dotted.display()
+        );
+        assert!(!allowed_handoff_console(Path::new("/dev/null"), true));
+        assert!(!allowed_handoff_console(&dir.path().join("missing"), true));
+        assert!(allowed_handoff_console(&file, true));
+        assert!(allowed_handoff_console(Path::new("/dev/tty1"), false));
     }
 
     #[test]
