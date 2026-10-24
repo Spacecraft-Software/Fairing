@@ -14,6 +14,11 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 
 ### Added
 
+- The built-in logo is now the Steelbore logo, drawn as a vector in the theme's accent
+  role from `crates/fairing-render/assets/logo/steelbore.svg` (the branding trace,
+  recoloured to `currentColor`). It replaces the payload-fairing mark, scales to any
+  mode and follows the high-contrast and mono variants like the rest of the theme.
+
 - `fairing splash --handoff-console <path>` (FRN-SRS-106, draft): at the greetd handoff,
   before the display is released, stage 2 paints the greeter's console with the theme's
   canvas and text colours (palette entries 0 and 7), hides its cursor and clears it, so

@@ -494,10 +494,18 @@ fn preview_memory_snapshot_reports_and_writes_a_ppm_with_the_percentage() {
         "canvas is the background role"
     );
     assert!(paints(Role::Accent) > 100, "the bar is full at 100%");
-    assert!(
-        paints(Role::Foreground) > 20,
-        "percentage and status text are drawn"
-    );
+    // Text is anti-aliased and too small at this size for many pure foreground
+    // pixels, so count those at least half way from the canvas to the foreground.
+    let (bg, fg) = (theme.color(Role::Background), theme.color(Role::Foreground));
+    let text = pixels
+        .clone()
+        .filter(|p| {
+            p[0] >= bg.r.midpoint(fg.r)
+                && p[1] >= bg.g.midpoint(fg.g)
+                && p[2] >= bg.b.midpoint(fg.b)
+        })
+        .count();
+    assert!(text > 20, "percentage and status text are drawn ({text})");
     let background = theme.color(Role::Background);
     let inked = |bytes: &[u8]| {
         bytes[header.len()..]

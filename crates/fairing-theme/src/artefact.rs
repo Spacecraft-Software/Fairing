@@ -123,7 +123,8 @@ impl fmt::Display for RectSpec {
 /// Where the logo comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LogoImage {
-    /// Fairing's built-in vector mark, drawn at any resolution.
+    /// Fairing's built-in vector mark, the Steelbore logo in the accent role,
+    /// drawn at any resolution.
     Builtin,
     /// The image at this index of [`Meta::images`].
     Image(u32),
