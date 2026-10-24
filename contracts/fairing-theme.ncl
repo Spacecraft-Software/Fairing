@@ -70,9 +70,9 @@ let Logo = {
   image
     | std.contract.any_of [ Image, ImageFile ]
     | doc m%"
-      `'builtin` for Fairing's vector mark, or `{ file = "logo.png" }`. Every
-      opaque pixel of a PNG must be a colour of the declared palette, unless
-      `tint` is set.
+      `'builtin` for Fairing's vector mark (the Steelbore logo, in the accent
+      role), or `{ file = "logo.png" }`. Every opaque pixel of a PNG must be a
+      colour of the declared palette, unless `tint` is set.
     "%,
   tint
     | Color
