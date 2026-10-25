@@ -519,8 +519,9 @@ palette without any extra file.
 
 @cindex logo
 @cindex frame sequence
-A logo is @code{'builtin}, Fairing's vector mark, or a PNG file named
-relative to the theme.  Every opaque pixel of a PNG must be a colour of the
+A logo is @code{'builtin}, Fairing's vector mark (the Steelbore logo, drawn
+in the @code{accent} role at any resolution), or a PNG file named relative to
+the theme.  Every opaque pixel of a PNG must be a colour of the
 declared palette, unless the logo sets @code{tint}, in which case only the
 image's alpha channel is used and drawn in that colour.  A frame sequence is
 a list of PNG frames of one size, played at up to 30 frames per second, under
