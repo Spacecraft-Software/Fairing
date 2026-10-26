@@ -50,6 +50,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 
 ### Changed
 
+- The initrd copy of the splash (`fairing-initrd`) is built with `opt-level = "s"`,
+  which keeps it inside its 2.5 MiB budget (2.13 MiB, a 14.8 % margin); the stage-2 and
+  full builds are unchanged.
+
 - The compiled theme format is version 2 (the per-action shutdown messages). A version 1
   artefact is refused; rebuild themes with this release, as the NixOS module does.
 

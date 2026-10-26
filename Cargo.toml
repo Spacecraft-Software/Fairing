@@ -110,6 +110,9 @@ struct_excessive_bools = "allow"
 #   not applied: PGO — deferred until §22 budgets are measured at G2.
 #   note:        Rust LTO is LLVM-internal; §3.2.1's GCC plugin caveat does not
 #                apply. Re-verify when the Nix build lands.
+#   applied:     opt-level = "s" for the initrd copy only (`fairing-initrd`, set by
+#                packaging/default.nix): it keeps the 2.5 MiB initrd-binary budget
+#                in band; the stage-2 and full builds keep opt-level 3 (2026-10-26).
 #   note:        panic = "abort" skips `Drop`, so fairing-askpass zeroises
 #                secrets eagerly rather than relying on drop glue (M3 design input).
 [profile.release]

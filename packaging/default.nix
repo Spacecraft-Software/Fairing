@@ -17,6 +17,9 @@
 #
 # `fairing-splash` (no theme tool) is the stage-2 splash; `fairing-initrd`
 # (neither) is the copy the initrd carries, the one the 2.5 MiB budget binds.
+# That one alone is optimised for size (`opt-level = "s"`, the §3.2 flag
+# register in Cargo.toml): it draws a few frames a second, far inside its
+# first-frame budget, and every byte of it is in the initrd.
 {
   lib,
   rustPlatform,
@@ -29,6 +32,7 @@
 }:
 let
   full = withThemeTool && withDbus;
+  initrd = !withThemeTool && !withDbus;
   version = "0.1.0";
   # The release archive: the tree at the tag with every crate vendored.
   release = fetchurl {
@@ -75,6 +79,9 @@ rustPlatform.buildRustPackage (finalAttrs: {
   # The workspace suite runs once, in the full build; the others differ only
   # by feature switches, which CI tests separately.
   doCheck = full;
+
+  # The initrd copy is built for size (maintainer decision, 2026-10-26).
+  env = lib.optionalAttrs initrd { CARGO_PROFILE_RELEASE_OPT_LEVEL = "s"; };
 
   nativeBuildInputs = [
     texinfo
