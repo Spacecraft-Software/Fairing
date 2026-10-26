@@ -5,7 +5,7 @@
 # without building or booting anything. A failed check fails evaluation and
 # names itself. `nix flake check` runs it as `checks.<system>.module-eval`.
 #
-# Verifies: FRN-SRS-027, FRN-SRS-030, FRN-SRS-031, FRN-SRS-032, FRN-SRS-035, FRN-SRS-090, FRN-SRS-091, FRN-SRS-093
+# Verifies: FRN-SRS-027, FRN-SRS-030, FRN-SRS-031, FRN-SRS-032, FRN-SRS-035, FRN-SRS-090, FRN-SRS-091, FRN-SRS-093, FRN-SRS-108
 {
   pkgs,
   lib ? pkgs.lib,
@@ -47,7 +47,16 @@ let
   initrdText = initrdUnits."fairing-initrd.service".text;
   systemText = systemUnits."fairing.service".text;
   handoffText = systemUnits."fairing-handoff.service".text;
-  shutdownText = systemUnits."fairing-shutdown.service".text;
+  # The final actions, one shutdown unit each (FRN-SRS-108).
+  actions = [
+    "poweroff"
+    "reboot"
+    "halt"
+    "kexec"
+    "soft-reboot"
+  ];
+  shutdownUnit = action: "fairing-shutdown@${action}.service";
+  shutdownTexts = map (action: systemUnits.${shutdownUnit action}.text) actions;
   greetdText = systemUnits."greetd.service".text;
   consoleAgentText = systemUnits."systemd-ask-password-console.service".text;
   initrdConsoleAgentText = initrdUnits."systemd-ask-password-console.service".text;
@@ -200,8 +209,9 @@ let
       && lib.all (unit: systemUnits ? ${unit}) [
         "fairing.service"
         "fairing-handoff.service"
-        "fairing-shutdown.service"
-      ];
+      ]
+      && lib.all (action: systemUnits ? ${shutdownUnit action}) actions
+      && !(systemUnits ? "fairing-shutdown.service");
     "the agent's keyboards are readable in the initrd: evdev is loaded" =
       lib.elem "evdev" config.boot.initrd.kernelModules;
     "the overlay's keyboards are readable with the agent off too" =
@@ -211,26 +221,36 @@ let
     ) config.boot.initrd.systemd.storePaths;
     "FRN-SRS-060: every splash is told which journalctl to run" = lib.all (
       text: lib.hasInfix "--journalctl /nix/store/" text
-    ) [ initrdText systemText shutdownText ];
-    "FRN-SRS-035: shutdown.target pulls in the shutdown splash" =
-      lib.elem "shutdown.target" systemUnits."fairing-shutdown.service".wantedBy
-      && hasLine shutdownText "DefaultDependencies=no";
-    "FRN-SRS-035: the shutdown splash runs the shutdown stage" =
-      lib.hasInfix "--stage shutdown" shutdownText;
-    "FRN-SRS-035: nothing stops the shutdown splash before the final kill" =
-      !(lib.elem "shutdown.target" (directive shutdownText "Conflicts"))
-      && !(lib.elem "shutdown.target" (directive shutdownText "Before"));
-    "FRN-SRS-035: the shutdown splash waits for the screen to be free" = lib.all (
-      unit: lib.elem unit (directive shutdownText "After")
-    ) [ "greetd.service" "fairing.service" "user.slice" ];
-    "FRN-SRS-035: the machine goes down only once the shutdown splash is drawn" =
-      lib.all (unit: lib.elem unit (directive shutdownText "Before")) [
-        "systemd-poweroff.service"
-        "systemd-reboot.service"
-        "systemd-halt.service"
-        "systemd-kexec.service"
+    ) ([ initrdText systemText ] ++ shutdownTexts);
+    "FRN-SRS-108: each final target pulls in its own shutdown splash alone" = lib.all (
+      action: systemUnits.${shutdownUnit action}.wantedBy == [ "${action}.target" ]
+    ) actions;
+    "FRN-SRS-108: each shutdown splash names its action on the command line" = lib.all (
+      action:
+      lib.hasInfix "--stage shutdown " systemUnits.${shutdownUnit action}.text
+      && lib.hasInfix " --action ${action}\n" systemUnits.${shutdownUnit action}.text
+    ) actions;
+    "FRN-SRS-035: no shutdown splash has default dependencies" = lib.all (
+      text: hasLine text "DefaultDependencies=no"
+    ) shutdownTexts;
+    "FRN-SRS-035: nothing stops a shutdown splash before the final kill" = lib.all (
+      text:
+      !(lib.elem "shutdown.target" (directive text "Conflicts"))
+      && !(lib.elem "shutdown.target" (directive text "Before"))
+    ) shutdownTexts;
+    "FRN-SRS-035: each shutdown splash waits for the screen to be free" = lib.all (
+      text:
+      lib.all (unit: lib.elem unit (directive text "After")) [
+        "greetd.service"
+        "fairing.service"
+        "user.slice"
       ]
-      && hasLine shutdownText "Type=notify";
+    ) shutdownTexts;
+    "FRN-SRS-035: the machine goes down only once the shutdown splash is drawn" = lib.all (
+      action:
+      lib.elem "systemd-${action}.service" (directive systemUnits.${shutdownUnit action}.text "Before")
+      && hasLine systemUnits.${shutdownUnit action}.text "Type=notify"
+    ) actions;
     "FRN-SRS-090: quiet and splash are on the kernel command line" =
       lib.all (p: lib.elem p config.boot.kernelParams) [
         "quiet"

@@ -28,7 +28,7 @@ use fairing_render::{
     Cadence, Choice, Compositor, EchoText, Field, NoBackend, Opened, Palette, Presenter,
     PresenterConfig, PromptView, RenderErrorKind, Scene, Size, TextConsole, open,
 };
-use fairing_theme::{CompiledTheme, Role, Selection};
+use fairing_theme::{CompiledTheme, Role, Selection, ShutdownAction};
 use serde::Serialize;
 
 use crate::diagnostic::{Diagnostic, Priority, Severity};
@@ -123,6 +123,8 @@ pub struct Paths {
 pub struct Plan {
     /// Which instance this is.
     pub stage: Stage,
+    /// At shutdown, what follows: it picks the line drawn (FRN-SRS-107).
+    pub action: Option<ShutdownAction>,
     /// Backends to try.
     pub choice: Choice,
     /// Size of the memory backend.
@@ -799,7 +801,7 @@ impl Session {
             // The shutdown layout: the logo and its one line (FRN-SRS-035).
             Stage::Shutdown => Scene::new(0)
                 .without_progress()
-                .with_status(plan.theme.meta().shutdown.message.as_str()),
+                .with_status(plan.theme.meta().shutdown.line(plan.action)),
             Stage::Initrd | Stage::System => Scene::from_fraction(shown).with_status(
                 self.latest
                     .as_ref()
@@ -1455,6 +1457,7 @@ mod tests {
         fn plan(&self, stage: Stage, exit_after: Option<Duration>) -> Plan {
             Plan {
                 stage,
+                action: None,
                 choice: Choice::Memory,
                 memory_size: Size::new(160, 90).unwrap_or_else(|e| panic!("{e}")),
                 theme: CompiledTheme::builtin(),
@@ -2018,6 +2021,27 @@ mod tests {
         let outcome = harness.run(&plan, false, Vec::new(), memory);
         assert_eq!(outcome.reason, Reason::NoBackend);
         assert!(harness.notifications().contains(&"READY=1".to_owned()));
+    }
+
+    #[test]
+    fn the_shutdown_line_names_what_follows() {
+        // Verifies: FRN-SRS-107
+        let harness = Harness::new();
+        for (action, line) in [
+            (Some(ShutdownAction::Reboot), "Restarting"),
+            (Some(ShutdownAction::Poweroff), "Powering off"),
+            (Some(ShutdownAction::Halt), "Halting"),
+            (Some(ShutdownAction::Kexec), "Restarting"),
+            (Some(ShutdownAction::SoftReboot), "Restarting"),
+            (None, "Shutting down"),
+        ] {
+            let plan = Plan {
+                action,
+                ..harness.plan(Stage::Shutdown, Some(Duration::from_millis(50)))
+            };
+            let outcome = harness.run(&plan, true, Vec::new(), memory);
+            assert_eq!(outcome.last_status.as_deref(), Some(line), "{action:?}");
+        }
     }
 
     #[test]

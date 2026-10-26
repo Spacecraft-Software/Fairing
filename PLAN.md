@@ -74,6 +74,10 @@ reads this file.
 
 - [ ] P-060 Seamless handoff to the greeter: greetd's console painted with the theme canvas before the display is released, so no black console shows between the splash and Gantry (FRN-SRS-106)
 
+## M7 — Shutdown actions
+
+- [ ] P-070 The shutdown splash says what follows: "Restarting" on reboot, kexec and soft reboot, "Powering off" on power-off, "Halting" on halt, from one unit per final target (FRN-SRS-107, FRN-SRS-108)
+
 ## Gates
 
 Maintainer actions that unblock ticks above; counted in the PLAN row, not in a milestone.

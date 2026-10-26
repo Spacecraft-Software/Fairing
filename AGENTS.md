@@ -196,12 +196,17 @@ will not be green there.
   the agent grabs, and only while a question is open. While a prompt is open the overlay
   is neither toggled nor drawn. journalctl runs as a child only once the overlay is first
   shown, is read without blocking once per frame, and is killed in `finish`.
-- `fairing.service` and `fairing-shutdown.service` run with `PrivateTmp=disconnected`
+- `fairing.service` and every `fairing-shutdown@<action>.service` run with `PrivateTmp=disconnected`
   (FRN-SRS-093, G1): `PrivateTmp=yes` backs the private /tmp and /var/tmp on the host's,
   which orders a unit after `systemd-tmpfiles-setup.service` and the /var mount, too
   late for the splash.
-- `fairing-shutdown.service` has no default dependencies and must never conflict with or
-  be ordered before `shutdown.target`: it draws until systemd-shutdown's final kill.
+- The shutdown splash is one `fairing-shutdown@<action>.service` per final target
+  (poweroff, reboot, halt, kexec, soft-reboot), each wanted by its target alone and
+  passing `--action <action>` (FRN-SRS-108); never infer the action at shutdown from
+  D-Bus, the kernel or a file. Each has no default dependencies and must never conflict
+  with or be ordered before `shutdown.target`: it draws until systemd-shutdown's final
+  kill. The theme's `layouts.shutdown.messages` give each action its line, falling back
+  to `message` (FRN-SRS-107); artefact format 2 carries them, and format 1 is refused.
 - The D-Bus client forwards systemd's `NFailedUnits`, `JobNew` (rescue/emergency) and
   `JobRemoved` (`failed`/`timeout`) signals from a second thread on the same connection;
   on the system bus only signals whose sender is the unique name owning

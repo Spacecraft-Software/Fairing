@@ -55,7 +55,7 @@ pub enum Stage {
     Initrd,
     /// `fairing.service`, after switch-root until greetd.
     System,
-    /// `fairing-shutdown.service`, from shutdown.target until the final kill:
+    /// `fairing-shutdown@<action>.service`, from its final target until the final kill:
     /// no bar (FRN-SRS-035).
     Shutdown,
 }

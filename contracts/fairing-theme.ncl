@@ -155,7 +155,18 @@ in
         | {
           logo | Logo | doc "The logo.",
           status | Status | doc "The line under the logo.",
-          message | String | doc "What the line says, e.g. \"Shutting down\".",
+          message | String | doc "What the line says when the action has no message of its own, e.g. \"Shutting down\".",
+          messages
+            | doc "What the line says for each final action; any left out falls back to `message` (FRN-SRS-107)."
+            | {
+              poweroff | String | optional | doc "On power-off, e.g. \"Powering off\".",
+              reboot | String | optional | doc "On reboot, e.g. \"Restarting\".",
+              halt | String | optional | doc "On halt.",
+              kexec | String | optional | doc "On a kexec into another kernel.",
+              soft-reboot | String | optional | doc "On a soft reboot of user space.",
+            }
+            | default
+            = {},
           sequence | Sequence | optional | doc "A frame sequence played while shutting down.",
         },
     },

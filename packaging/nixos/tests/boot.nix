@@ -4,7 +4,7 @@
 # NixOS VM test: an unencrypted Bravais-shaped machine boots through both
 # splash instances to greetd. CI runs it under KVM.
 #
-# Verifies: FRN-SRS-014, FRN-SRS-015, FRN-SRS-017, FRN-SRS-032, FRN-SRS-035, FRN-SRS-036, FRN-SRS-070
+# Verifies: FRN-SRS-014, FRN-SRS-015, FRN-SRS-017, FRN-SRS-032, FRN-SRS-035, FRN-SRS-036, FRN-SRS-070, FRN-SRS-107
 #
 # What it checks:
 #   - the initrd instance drew on DRM and stopped at switch-root;
@@ -14,10 +14,11 @@
 #   - the duration cache was written and /run/fairing is gone afterwards;
 #   - switch-to-configuration, as nixos-rebuild switch runs it, does not
 #     start the splash again over the running session;
-#   - the shutdown splash, started as shutdown.target starts it, draws on DRM
-#     and holds until it is killed, and Escape starts the overlay's
-#     journalctl inside its hardened unit, where it keeps running;
-#   - with SPACECRAFT_A11Y=1 it writes plain lines on the console instead.
+#   - the reboot shutdown splash, started as reboot.target starts it, draws
+#     "Restarting" on DRM and holds until it is killed, and Escape starts the
+#     overlay's journalctl inside its hardened unit, where it keeps running;
+#   - with SPACECRAFT_A11Y=1 the power-off one writes "Powering off" as a
+#     plain line on the console instead.
 #
 # `tcg = true` runs it without KVM, under QEMU's emulator: about ten times
 # slower, so the units' 5 s start timeout is relaxed for the run.
@@ -46,7 +47,10 @@ pkgs.testers.runNixOSTest {
       boot.initrd.systemd.services.fairing-initrd.serviceConfig.TimeoutStartSec = lib.mkIf tcg (
         lib.mkForce "120s"
       );
-      systemd.services.fairing-shutdown.serviceConfig.TimeoutStartSec = lib.mkIf tcg (
+      systemd.services."fairing-shutdown@reboot".serviceConfig.TimeoutStartSec = lib.mkIf tcg (
+        lib.mkForce "120s"
+      );
+      systemd.services."fairing-shutdown@poweroff".serviceConfig.TimeoutStartSec = lib.mkIf tcg (
         lib.mkForce "120s"
       );
       services.greetd = {
@@ -112,10 +116,10 @@ pkgs.testers.runNixOSTest {
     machine.succeed("test \"$(systemctl show fairing.service -p ActiveState --value)\" = inactive")
     machine.succeed("test \"$(systemctl show fairing.service -p ConditionResult --value)\" = no")
 
-    # The shutdown splash, as shutdown.target starts it: Type=notify, so the
-    # start returns once the first frame is drawn.
-    machine.succeed("systemctl start fairing-shutdown.service")
-    machine.succeed("systemctl is-active --quiet fairing-shutdown.service")
+    # The reboot shutdown splash, as reboot.target starts it: Type=notify,
+    # so the start returns once the first frame is drawn.
+    machine.succeed("systemctl start fairing-shutdown@reboot.service")
+    machine.succeed("systemctl is-active --quiet fairing-shutdown@reboot.service")
     # Escape opens the journal overlay; its journalctl must survive the
     # unit's sandbox, or the overlay could only say it cannot read.
     # The bracket keeps the pattern from matching the shell that runs pgrep.
@@ -124,29 +128,31 @@ pkgs.testers.runNixOSTest {
     machine.wait_until_succeeds(follow, timeout=30)
     machine.sleep(2)
     machine.succeed(follow)
-    machine.succeed("systemctl stop fairing-shutdown.service")
+    machine.succeed("systemctl stop fairing-shutdown@reboot.service")
     machine.fail(follow)
-    shutdown = report("fairing-shutdown.service")
+    shutdown = report("fairing-shutdown@reboot.service")
     assert shutdown["stage"] == "shutdown", shutdown
+    assert shutdown["action"] == "reboot", shutdown
     assert shutdown["reason"] == "shutdown", shutdown
     assert shutdown["backend"] == "drm", shutdown
-    assert shutdown["last_status"] == "Shutting down", shutdown
+    assert shutdown["last_status"] == "Restarting", shutdown
     assert shutdown["frames"] >= 1, shutdown
 
     # Accessible mode, from the environment the manager hands its units:
     # plain lines on the console instead of frames.
     machine.succeed("systemctl set-environment SPACECRAFT_A11Y=1")
-    machine.succeed("systemctl start fairing-shutdown.service")
+    machine.succeed("systemctl start fairing-shutdown@poweroff.service")
     # /dev/console is the last console= of the test VM, tty0, not the serial
     # port the driver reads: the line is read back from the VT itself.
-    machine.wait_until_succeeds("grep -q 'Fairing Shutting down' /dev/vcs", timeout=30)
-    machine.succeed("systemctl stop fairing-shutdown.service")
+    machine.wait_until_succeeds("grep -q 'Fairing Powering off' /dev/vcs", timeout=30)
+    machine.succeed("systemctl stop fairing-shutdown@poweroff.service")
     machine.succeed("systemctl unset-environment SPACECRAFT_A11Y")
     lines = machine.succeed(
-        "journalctl -b -u fairing-shutdown.service -o cat --no-pager | grep '^{\"data\"'"
+        "journalctl -b -u fairing-shutdown@poweroff.service -o cat --no-pager | grep '^{\"data\"'"
     ).strip().splitlines()
     accessible = json.loads(lines[-1])["data"]
     assert accessible["backend"] == "text", accessible
+    assert accessible["action"] == "poweroff", accessible
     assert accessible["accessible"], accessible
   '';
 }

@@ -206,8 +206,24 @@ pub enum StageArg {
     Initrd,
     /// `fairing.service`: from switch-root until greetd takes the screen.
     System,
-    /// `fairing-shutdown.service`: from shutdown.target until the final kill.
+    /// `fairing-shutdown@<action>.service`: from its final target until the final kill.
     Shutdown,
+}
+
+/// What the machine does after the shutdown splash, one per systemd final target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ActionArg {
+    /// `poweroff.target`.
+    Poweroff,
+    /// `reboot.target`.
+    Reboot,
+    /// `halt.target`.
+    Halt,
+    /// `kexec.target`.
+    Kexec,
+    /// `soft-reboot.target`.
+    SoftReboot,
 }
 
 /// Arguments of `fairing splash`.
@@ -216,6 +232,9 @@ pub struct SplashArgs {
     /// Which instance this is: `initrd` before switch-root, `system` after it, `shutdown` at the end.
     #[arg(long, value_enum, value_name = "stage")]
     pub stage: StageArg,
+    /// With `--stage shutdown`: what follows, which picks the theme's line ("Restarting", "Powering off").
+    #[arg(long, value_enum, value_name = "action")]
+    pub action: Option<ActionArg>,
     /// Compiled theme (`fairing theme compile`); the built-in theme without it.
     #[arg(long, value_name = "file.fairing")]
     pub theme: Option<PathBuf>,

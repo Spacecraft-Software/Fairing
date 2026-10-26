@@ -26,7 +26,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::artefact::{
-    BarSpec, BootLayout, CompiledTheme, Encoding, ImageMeta, LogoImage, LogoSpec,
+    ActionMessages, BarSpec, BootLayout, CompiledTheme, Encoding, ImageMeta, LogoImage, LogoSpec,
     MAX_ARTEFACT_BYTES, MAX_IMAGE_SIDE, MAX_IMAGES, Meta, PercentSpec, PromptSpec, RectSpec,
     SequenceSpec, ShutdownLayout, StatusSpec,
 };
@@ -293,6 +293,13 @@ impl Builder<'_> {
             logo: self.logo(&shutdown.logo)?,
             status: self.status(&shutdown.status)?,
             message: shutdown.message.clone(),
+            messages: ActionMessages {
+                poweroff: shutdown.messages.poweroff.clone(),
+                reboot: shutdown.messages.reboot.clone(),
+                halt: shutdown.messages.halt.clone(),
+                kexec: shutdown.messages.kexec.clone(),
+                soft_reboot: shutdown.messages.soft_reboot.clone(),
+            },
             sequence: shutdown
                 .sequence
                 .as_ref()
@@ -497,7 +504,25 @@ struct ShutdownSource {
     status: StatusSource,
     message: String,
     #[serde(default)]
+    messages: MessagesSource,
+    #[serde(default)]
     sequence: Option<SequenceSource>,
+}
+
+/// `layouts.shutdown.messages`: each one optional (FRN-SRS-107).
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MessagesSource {
+    #[serde(default)]
+    poweroff: Option<String>,
+    #[serde(default)]
+    reboot: Option<String>,
+    #[serde(default)]
+    halt: Option<String>,
+    #[serde(default)]
+    kexec: Option<String>,
+    #[serde(default, rename = "soft-reboot")]
+    soft_reboot: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -623,7 +648,14 @@ mod tests {
                 "shutdown": {
                     "logo": { "x": 840, "y": 300, "width": 240, "height": 240, "image": "builtin" },
                     "status": { "show": true, "top": 640, "size": 26, "color": "foreground" },
-                    "message": "Shutting down"
+                    "message": "Shutting down",
+                    "messages": {
+                        "poweroff": "Powering off",
+                        "reboot": "Restarting",
+                        "halt": "Halting",
+                        "kexec": "Restarting",
+                        "soft-reboot": "Restarting"
+                    }
                 }
             }
         })
@@ -710,6 +742,7 @@ mod tests {
                 json!({ "token": "rgb(255, 94, 0)" }),
             ),
             ("/layouts/shutdown/message", json!("0xFF5E00")),
+            ("/layouts/shutdown/messages/reboot", json!("#FF5E00")),
         ] {
             let mut theme = reference();
             if let Some(slot) = theme.pointer_mut(pointer) {

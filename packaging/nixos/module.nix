@@ -8,8 +8,9 @@
 # until switch-root and leaves the bar value in /run/fairing/state;
 # `fairing.service` picks it up after switch-root and holds the screen until
 # greetd starts, when `fairing-handoff.service` stops it. A third,
-# `fairing-shutdown.service`, draws the theme's shutdown layout from
-# shutdown.target until the final kill (FRN-SRS-035).
+# `fairing-shutdown@<action>.service`, one per final target (poweroff,
+# reboot, halt, kexec, soft-reboot), draws the theme's shutdown layout with
+# that action's line until the final kill (FRN-SRS-035, FRN-SRS-107).
 #
 # Escape shows the journal over any of the three; each runs journalctl for
 # it, from the initrd's systemd or the system's.
@@ -132,6 +133,57 @@ let
     TimeoutStartSec = "5s";
     TimeoutStopSec = "1s";
     LimitCORE = 0;
+  };
+
+  # The shutdown splash (FRN-SRS-035), one unit per final action
+  # (FRN-SRS-108). `systemctl reboot`, `poweroff`, `halt`, `kexec` and
+  # `soft-reboot` each start their own target, which pulls in its own unit
+  # alone; the unit names its action on the command line, so the line drawn
+  # ("Restarting", "Powering off") is never guessed at shutdown (FRN-SRS-107).
+  # Each target also activates shutdown.target. A unit starts once the
+  # sessions, greetd and any boot splash have let the screen go: systemd runs
+  # a stop before a start whenever the two units are ordered either way.
+  # Nothing stops it, since it neither conflicts with shutdown.target nor has
+  # default dependencies: it draws until systemd-shutdown's final SIGTERM.
+  # The action's service waits for its READY=1, sent after the first frame,
+  # so the screen is drawn before the machine goes down.
+  # Implements: FRN-SRS-035, FRN-SRS-108
+  shutdownUnit = action: {
+    description = "Fairing shutdown splash (${action})";
+    unitConfig.DefaultDependencies = "no";
+    wantedBy = [ "${action}.target" ];
+    after = [
+      "fairing.service"
+      "greetd.service"
+      "user.slice"
+      "getty@tty1.service"
+    ];
+    before = [ "systemd-${action}.service" ];
+    restartIfChanged = false;
+    stopIfChanged = false;
+    serviceConfig = common // {
+      ExecStart = "${splash cfg.splashPackage config.systemd.package "shutdown"} --action ${action}";
+      # As fairing.service, less the directories a shutdown never writes.
+      CapabilityBoundingSet = "CAP_SYS_ADMIN CAP_SYS_TTY_CONFIG";
+      ProtectSystem = "strict";
+      ProtectHome = "yes";
+      PrivateTmp = "disconnected";
+      NoNewPrivileges = true;
+      PrivateNetwork = true;
+      RestrictAddressFamilies = [ "AF_UNIX" ];
+      ProtectKernelModules = true;
+      ProtectKernelLogs = true;
+      ProtectControlGroups = true;
+      ProtectClock = true;
+      ProtectHostname = true;
+      RestrictNamespaces = true;
+      RestrictRealtime = true;
+      RestrictSUIDSGID = true;
+      LockPersonality = true;
+      MemoryDenyWriteExecute = true;
+      SystemCallArchitectures = "native";
+      UMask = "0077";
+    };
   };
 in
 {
@@ -390,58 +442,12 @@ in
       lib.mkIf cfg.agent.enable initrdConsoleAgentDropIn;
     systemd.paths.systemd-ask-password-console = lib.mkIf cfg.agent.enable consoleAgentDropIn;
 
-    # The shutdown splash (FRN-SRS-035). Every shutdown, reboot and power-off
-    # activates shutdown.target, which pulls this in. It starts once the
-    # sessions, greetd and any boot splash have let the screen go: systemd
-    # runs a stop before a start whenever the two units are ordered either
-    # way. Nothing stops it, since it neither conflicts with shutdown.target
-    # nor has default dependencies: it draws until systemd-shutdown's final
-    # SIGTERM. The halt, power-off, reboot and kexec services wait for its
-    # READY=1, sent after the first frame, so the screen is drawn before the
-    # machine goes down.
-    # Implements: FRN-SRS-035
-    systemd.services.fairing-shutdown = {
-      description = "Fairing shutdown splash";
-      unitConfig.DefaultDependencies = "no";
-      wantedBy = [ "shutdown.target" ];
-      after = [
-        "fairing.service"
-        "greetd.service"
-        "user.slice"
-        "getty@tty1.service"
-      ];
-      before = [
-        "systemd-halt.service"
-        "systemd-poweroff.service"
-        "systemd-reboot.service"
-        "systemd-kexec.service"
-      ];
-      restartIfChanged = false;
-      stopIfChanged = false;
-      serviceConfig = common // {
-        ExecStart = splash cfg.splashPackage config.systemd.package "shutdown";
-        # As fairing.service, less the directories a shutdown never writes.
-        CapabilityBoundingSet = "CAP_SYS_ADMIN CAP_SYS_TTY_CONFIG";
-        ProtectSystem = "strict";
-        ProtectHome = "yes";
-        PrivateTmp = "disconnected";
-        NoNewPrivileges = true;
-        PrivateNetwork = true;
-        RestrictAddressFamilies = [ "AF_UNIX" ];
-        ProtectKernelModules = true;
-        ProtectKernelLogs = true;
-        ProtectControlGroups = true;
-        ProtectClock = true;
-        ProtectHostname = true;
-        RestrictNamespaces = true;
-        RestrictRealtime = true;
-        RestrictSUIDSGID = true;
-        LockPersonality = true;
-        MemoryDenyWriteExecute = true;
-        SystemCallArchitectures = "native";
-        UMask = "0077";
-      };
-    };
+    # The shutdown splash, one unit per final action (see shutdownUnit).
+    systemd.services."fairing-shutdown@poweroff" = shutdownUnit "poweroff";
+    systemd.services."fairing-shutdown@reboot" = shutdownUnit "reboot";
+    systemd.services."fairing-shutdown@halt" = shutdownUnit "halt";
+    systemd.services."fairing-shutdown@kexec" = shutdownUnit "kexec";
+    systemd.services."fairing-shutdown@soft-reboot" = shutdownUnit "soft-reboot";
 
     # The handoff (FRN-SRS-017, FRN-SRS-032): greetd's start pulls this in and
     # waits for it. It marks the handoff, then stops the splash and waits for

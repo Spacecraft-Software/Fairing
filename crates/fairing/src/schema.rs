@@ -221,6 +221,10 @@ pub const SPECS: &[CommandSpec] = &[
                 "Draw the initrd's share of the bar until switch-root",
             ),
             (
+                "fairing splash --stage shutdown --action reboot --theme steelbore.fairing",
+                "Draw the restart line until the final kill (what fairing-shutdown@reboot.service runs)",
+            ),
+            (
                 "fairing splash --stage system --dry-run --json",
                 "Report the backend chain, theme and palette without drawing",
             ),
@@ -558,6 +562,11 @@ fn splash_data() -> Value {
         "required": ["stage", "reason", "chain", "theme", "palette", "frames", "bar", "planned"],
         "properties": {
             "stage": { "type": "string", "enum": ["initrd", "system", "shutdown"] },
+            "action": {
+                "type": ["string", "null"],
+                "enum": ["poweroff", "reboot", "halt", "kexec", "soft-reboot", null],
+                "description": "At shutdown, what follows (--action); null otherwise"
+            },
             "reason": {
                 "type": ["string", "null"],
                 "enum": ["handoff", "stopped", "boot-finished", "switch-root", "shutdown", "failed-unit", "maintenance",
