@@ -38,7 +38,7 @@ use fairing_render::Size;
 use fairing_theme::{CompiledTheme, Resolution, ShutdownAction};
 use serde::Serialize;
 
-use crate::cli::{ActionArg, GlobalFlags, SplashArgs, StageArg};
+use crate::cli::{GlobalFlags, SplashArgs, StageArg};
 use crate::diagnostic::{Diagnostic, Priority, Severity};
 use crate::error::AppError;
 use crate::output::envelope::Response;
@@ -158,7 +158,7 @@ pub fn run(
     origin: Instant,
 ) -> Result<(), AppError> {
     let stage = stage_of(args.stage);
-    let action = shutdown_action(args.action, stage)
+    let action = shutdown_action(args.action.as_deref(), stage)
         .map_err(|why| AppError::invalid_argument(why, HINT, invocation))?;
     let memory_size = Size::new(args.size.0, args.size.1)
         .map_err(|e| AppError::invalid_argument(e.to_string(), HINT, invocation))?;
@@ -458,22 +458,19 @@ const fn stage_of(stage: StageArg) -> Stage {
 ///
 /// Implements: FRN-SRS-108
 fn shutdown_action(
-    action: Option<ActionArg>,
+    action: Option<&str>,
     stage: Stage,
 ) -> Result<Option<ShutdownAction>, &'static str> {
-    let Some(action) = action else {
+    let Some(name) = action else {
         return Ok(None);
     };
     if stage != Stage::Shutdown {
         return Err("--action is only for --stage shutdown");
     }
-    Ok(Some(match action {
-        ActionArg::Poweroff => ShutdownAction::Poweroff,
-        ActionArg::Reboot => ShutdownAction::Reboot,
-        ActionArg::Halt => ShutdownAction::Halt,
-        ActionArg::Kexec => ShutdownAction::Kexec,
-        ActionArg::SoftReboot => ShutdownAction::SoftReboot,
-    }))
+    // clap has checked the name against the same list.
+    ShutdownAction::from_name(name)
+        .map(Some)
+        .ok_or("--action names no final action")
 }
 
 #[cfg(test)]
@@ -608,11 +605,18 @@ mod tests {
         // Verifies: FRN-SRS-108
         assert_eq!(shutdown_action(None, Stage::Shutdown), Ok(None));
         assert_eq!(
-            shutdown_action(Some(ActionArg::SoftReboot), Stage::Shutdown),
+            shutdown_action(Some("soft-reboot"), Stage::Shutdown),
             Ok(Some(ShutdownAction::SoftReboot))
         );
         for stage in [Stage::Initrd, Stage::System] {
-            assert!(shutdown_action(Some(ActionArg::Reboot), stage).is_err());
+            assert!(shutdown_action(Some("reboot"), stage).is_err());
+        }
+        assert!(shutdown_action(Some("shutdown"), Stage::Shutdown).is_err());
+        for name in ShutdownAction::NAMES {
+            assert!(
+                shutdown_action(Some(name), Stage::Shutdown).is_ok(),
+                "{name}"
+            );
         }
         assert_eq!(
             dry_run("--stage shutdown --action reboot")["action"],

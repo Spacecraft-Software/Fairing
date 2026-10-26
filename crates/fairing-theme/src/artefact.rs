@@ -69,6 +69,17 @@ pub const MAX_OUTLINE: f32 = 16.0;
 
 const HEADER_LEN: usize = 14;
 
+/// What [`Meta::validate`] calls each per-action message, in the order of
+/// [`ShutdownAction::ALL`]. Static: a `format!` per action costs the initrd
+/// binary more than the five strings do (its size budget, doc/budgets.toml).
+const SHUTDOWN_MESSAGE_LABELS: [&str; 5] = [
+    "shutdown message for poweroff",
+    "shutdown message for reboot",
+    "shutdown message for halt",
+    "shutdown message for kexec",
+    "shutdown message for soft-reboot",
+];
+
 /// A rectangle in reference pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct RectSpec {
@@ -290,22 +301,20 @@ impl ShutdownAction {
         Self::SoftReboot,
     ];
 
+    /// Every action's name, in the order of [`ShutdownAction::ALL`]: its
+    /// systemd target without `.target`.
+    pub const NAMES: [&'static str; 5] = ["poweroff", "reboot", "halt", "kexec", "soft-reboot"];
+
     /// The action's name: its systemd target without `.target`.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Poweroff => "poweroff",
-            Self::Reboot => "reboot",
-            Self::Halt => "halt",
-            Self::Kexec => "kexec",
-            Self::SoftReboot => "soft-reboot",
-        }
+        Self::NAMES[self as usize]
     }
-}
 
-impl fmt::Display for ShutdownAction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+    /// The action named `name`, one of [`ShutdownAction::NAMES`].
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.as_str() == name)
     }
 }
 
@@ -482,9 +491,9 @@ impl Meta {
     pub fn validate(&self, blob_len: usize) -> Result<(), ThemeError> {
         check_text("name", &self.name)?;
         check_text("shutdown message", &self.shutdown.message)?;
-        for action in ShutdownAction::ALL {
+        for (action, label) in ShutdownAction::ALL.into_iter().zip(SHUTDOWN_MESSAGE_LABELS) {
             if let Some(text) = self.shutdown.messages.get(action) {
-                check_text(&format!("shutdown message for {action}"), text)?;
+                check_text(label, text)?;
             }
         }
         let palette = Theme::find(&self.palette).ok_or_else(|| {
@@ -992,8 +1001,10 @@ mod tests {
         assert_eq!(layout.line(None), "Shutting down");
         layout.messages = ActionMessages::default();
         for action in ShutdownAction::ALL {
-            assert_eq!(layout.line(Some(action)), "Shutting down", "{action}");
+            assert_eq!(layout.line(Some(action)), "Shutting down", "{action:?}");
+            assert_eq!(ShutdownAction::from_name(action.as_str()), Some(action));
         }
+        assert_eq!(ShutdownAction::from_name("shutdown"), None);
         layout.messages.halt = Some("Stopping".to_owned());
         assert_eq!(layout.line(Some(ShutdownAction::Halt)), "Stopping");
         assert_eq!(layout.line(Some(ShutdownAction::Reboot)), "Shutting down");

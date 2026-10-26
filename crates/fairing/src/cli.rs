@@ -210,22 +210,6 @@ pub enum StageArg {
     Shutdown,
 }
 
-/// What the machine does after the shutdown splash, one per systemd final target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ActionArg {
-    /// `poweroff.target`.
-    Poweroff,
-    /// `reboot.target`.
-    Reboot,
-    /// `halt.target`.
-    Halt,
-    /// `kexec.target`.
-    Kexec,
-    /// `soft-reboot.target`.
-    SoftReboot,
-}
-
 /// Arguments of `fairing splash`.
 #[derive(Debug, Args)]
 pub struct SplashArgs {
@@ -233,8 +217,11 @@ pub struct SplashArgs {
     #[arg(long, value_enum, value_name = "stage")]
     pub stage: StageArg,
     /// With `--stage shutdown`: what follows, which picks the theme's line ("Restarting", "Powering off").
-    #[arg(long, value_enum, value_name = "action")]
-    pub action: Option<ActionArg>,
+    // The names are `fairing_theme::ShutdownAction::NAMES`, checked by clap:
+    // a list of strings rather than a second `ValueEnum`, whose generic parser
+    // costs the initrd binary more (its size budget, doc/budgets.toml).
+    #[arg(long, value_name = "action", value_parser = fairing_theme::ShutdownAction::NAMES)]
+    pub action: Option<String>,
     /// Compiled theme (`fairing theme compile`); the built-in theme without it.
     #[arg(long, value_name = "file.fairing")]
     pub theme: Option<PathBuf>,
