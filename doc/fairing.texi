@@ -152,8 +152,8 @@ the whole tool or one verb.  This chapter describes the verbs of version
 @cindex splash
 @example
 fairing splash --stage initrd|system|shutdown [--theme @var{file.fairing}]
-               [--palette @var{slug}] [--no-agent] [--reduced-motion]
-               [--handoff-console @var{path}]
+               [--action @var{action}] [--palette @var{slug}] [--no-agent]
+               [--reduced-motion] [--handoff-console @var{path}]
 @end example
 
 The boot splash itself.  The systemd units run it, once per boot stage
@@ -180,9 +180,18 @@ is the handoff: the splash shows the full bar, releases the display within
 releases the display just as fast, without the full bar or the
 measurement.
 @item --stage shutdown
-From @code{shutdown.target} until the final kill: the theme's shutdown layout,
-its logo and one line (``Shutting down'' in the built-in theme), with no bar.
-Nothing but a signal ends it, and it asks no password question.
+From the final target until the final kill: the theme's shutdown layout, its
+logo and one line, with no bar.  Nothing but a signal ends it, and it asks no
+password question.
+@item --action
+With @option{--stage shutdown} only: what follows the shutdown,
+@code{poweroff}, @code{reboot}, @code{halt}, @code{kexec} or
+@code{soft-reboot}.  It picks the line: in the built-in theme
+``Restarting'' for a reboot, a kexec or a soft reboot, ``Powering off'' and
+``Halting'' for the other two.  Without it, or when the theme gives the
+action no line of its own, the line is the theme's general message
+(``Shutting down'').  The report names the action as @code{action}.  Any
+other stage refuses it with exit 2.
 @item --theme
 A compiled theme (@pxref{Themes}).  Without it the built-in theme is drawn.
 @item --palette
@@ -503,7 +512,10 @@ track and border), the percentage (gap and size), the status line (whether it
 is shown, its top and size), the prompt region, and optionally a frame
 sequence.
 @item layouts.shutdown
-The logo, a status line and its message, and optionally a frame sequence.
+The logo, a status line and its message, optionally a message for each final
+action (@code{messages.poweroff}, @code{reboot}, @code{halt}, @code{kexec},
+@code{soft-reboot}; any left out fall back to the message), and optionally a
+frame sequence.
 @end table
 
 @cindex colour
@@ -598,13 +610,15 @@ read-only except its own two directories, and no network.
 @item fairing-handoff.service
 Runs once logins are allowed, just before greetd: writes the handoff marker,
 stops @code{fairing.service} and waits for it to exit.
-@item fairing-shutdown.service
+@item fairing-shutdown@@@var{action}.service
 @cindex shutdown splash
-Runs @code{fairing splash --stage shutdown} whenever @code{shutdown.target}
-is reached for a halt, a power-off, a reboot or a kexec.  It starts once the
-user sessions, greetd and any boot splash have let the screen go, and the
-service that halts, powers off or reboots the machine waits until its first
-frame is drawn.  Nothing stops it: it neither conflicts with
+One unit for each final action, @code{poweroff}, @code{reboot}, @code{halt},
+@code{kexec} and @code{soft-reboot}.  Each is pulled in by its own target
+alone and runs @code{fairing splash --stage shutdown --action @var{action}},
+so the line it draws names what follows; nothing guesses the action at
+shutdown.  It starts once the user sessions, greetd and any boot splash have
+let the screen go, and the service that carries the action out waits until
+its first frame is drawn.  Nothing stops it: it neither conflicts with
 @code{shutdown.target} nor has default dependencies, so it draws until
 @command{systemd-shutdown} kills every process at the very end.  It runs in
 the same sandbox as @code{fairing.service}, without its directories.
@@ -848,8 +862,8 @@ mode and the source that decided it.
 
 In accessible mode the splash writes one line, @samp{Fairing @var{NN}%
 @var{status}}, when the progress or the status changes, at most once a
-second, to @file{/dev/console}; at shutdown the line is @samp{Fairing
-Shutting down}.  A password question is written as the plain text of its
+second, to @file{/dev/console}; at shutdown the line is
+@samp{Fairing} and the shutdown line, such as @samp{Fairing Restarting}.  A password question is written as the plain text of its
 message, and a rejected answer as one more line; what is typed is never
 written, not even as a count.  Every control character is replaced by a
 space, so no colour or cursor sequence reaches the console.  The splash opens

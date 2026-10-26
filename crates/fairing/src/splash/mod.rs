@@ -35,7 +35,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use fairing_render::Size;
-use fairing_theme::{CompiledTheme, Resolution};
+use fairing_theme::{CompiledTheme, Resolution, ShutdownAction};
 use serde::Serialize;
 
 use crate::cli::{GlobalFlags, SplashArgs, StageArg};
@@ -77,6 +77,7 @@ struct PaletteReport {
 #[derive(Debug, Serialize)]
 struct Report {
     stage: &'static str,
+    action: Option<&'static str>,
     reason: Option<&'static str>,
     chain: Vec<&'static str>,
     backend: Option<&'static str>,
@@ -106,6 +107,7 @@ impl Report {
     fn new(stage: Stage) -> Self {
         Self {
             stage: stage.as_str(),
+            action: None,
             reason: None,
             chain: Vec::new(),
             backend: None,
@@ -141,8 +143,9 @@ impl Report {
 ///
 /// # Errors
 ///
-/// `INVALID_ARGUMENT` for an unregistered `--palette`, a bad `--size`, or a
-/// device backend under an agent harness; `INTERNAL_ERROR` when the signal
+/// `INVALID_ARGUMENT` for an unregistered `--palette`, a bad `--size`, an
+/// `--action` outside `--stage shutdown`, or a device backend under an agent
+/// harness; `INTERNAL_ERROR` when the signal
 /// handler cannot be installed. A missing output, an unreadable theme or a
 /// failed boot are not errors: the splash steps aside with exit 0.
 ///
@@ -154,11 +157,9 @@ pub fn run(
     flags: &GlobalFlags,
     origin: Instant,
 ) -> Result<(), AppError> {
-    let stage = match args.stage {
-        StageArg::Initrd => Stage::Initrd,
-        StageArg::System => Stage::System,
-        StageArg::Shutdown => Stage::Shutdown,
-    };
+    let stage = stage_of(args.stage);
+    let action = shutdown_action(args.action.as_deref(), stage)
+        .map_err(|why| AppError::invalid_argument(why, HINT, invocation))?;
     let memory_size = Size::new(args.size.0, args.size.1)
         .map_err(|e| AppError::invalid_argument(e.to_string(), HINT, invocation))?;
     dbus::check_bus(&args.bus).map_err(|why| AppError::invalid_argument(why, HINT, invocation))?;
@@ -213,6 +214,7 @@ pub fn run(
         accessible: accessible.on,
         reduced_motion,
         planned: flags.dry_run,
+        action: action.map(ShutdownAction::as_str),
         ..Report::new(stage)
     };
     if flags.dry_run {
@@ -227,6 +229,7 @@ pub fn run(
     };
     let plan = Plan {
         stage,
+        action,
         choice,
         memory_size,
         theme,
@@ -439,6 +442,37 @@ fn emit(
     write_line(&line, invocation)
 }
 
+/// The progress stage `--stage` names.
+const fn stage_of(stage: StageArg) -> Stage {
+    match stage {
+        StageArg::Initrd => Stage::Initrd,
+        StageArg::System => Stage::System,
+        StageArg::Shutdown => Stage::Shutdown,
+    }
+}
+
+/// The final action `--action` names, which only the shutdown splash takes.
+///
+/// The module passes it on each per-target unit's command line, so the line
+/// the splash draws never rests on a guess (FRN-SRS-108).
+///
+/// Implements: FRN-SRS-108
+fn shutdown_action(
+    action: Option<&str>,
+    stage: Stage,
+) -> Result<Option<ShutdownAction>, &'static str> {
+    let Some(name) = action else {
+        return Ok(None);
+    };
+    if stage != Stage::Shutdown {
+        return Err("--action is only for --stage shutdown");
+    }
+    // clap has checked the name against the same list.
+    ShutdownAction::from_name(name)
+        .map(Some)
+        .ok_or("--action names no final action")
+}
+
 #[cfg(test)]
 mod tests {
     use clap::Parser as _;
@@ -564,6 +598,31 @@ mod tests {
             .unwrap_or_else(|| panic!("no report in {stdout:?}"));
         let value: Value = serde_json::from_str(report).unwrap_or_else(|e| panic!("{e}"));
         value["data"].clone()
+    }
+
+    #[test]
+    fn only_the_shutdown_splash_takes_an_action() {
+        // Verifies: FRN-SRS-108
+        assert_eq!(shutdown_action(None, Stage::Shutdown), Ok(None));
+        assert_eq!(
+            shutdown_action(Some("soft-reboot"), Stage::Shutdown),
+            Ok(Some(ShutdownAction::SoftReboot))
+        );
+        for stage in [Stage::Initrd, Stage::System] {
+            assert!(shutdown_action(Some("reboot"), stage).is_err());
+        }
+        assert!(shutdown_action(Some("shutdown"), Stage::Shutdown).is_err());
+        for name in ShutdownAction::NAMES {
+            assert!(
+                shutdown_action(Some(name), Stage::Shutdown).is_ok(),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            dry_run("--stage shutdown --action reboot")["action"],
+            "reboot"
+        );
+        assert_eq!(dry_run("--stage shutdown")["action"], Value::Null);
     }
 
     #[test]

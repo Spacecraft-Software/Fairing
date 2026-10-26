@@ -42,10 +42,10 @@ mod tokens;
 pub use ansi::{Ansi, MonoRoles};
 #[doc(inline)]
 pub use artefact::{
-    BarSpec, BootLayout, CompiledTheme, Encoding, FORMAT_VERSION, ImageMeta, ImageView, LogoImage,
-    LogoSpec, MAGIC, MAX_ARTEFACT_BYTES, MAX_IMAGE_SIDE, MAX_IMAGES, MAX_SEQUENCE_FPS, Meta,
-    PercentSpec, PromptSpec, REFERENCE_HEIGHT, REFERENCE_WIDTH, RectSpec, SequenceSpec,
-    ShutdownLayout, StatusSpec,
+    ActionMessages, BarSpec, BootLayout, CompiledTheme, Encoding, FORMAT_VERSION, ImageMeta,
+    ImageView, LogoImage, LogoSpec, MAGIC, MAX_ARTEFACT_BYTES, MAX_IMAGE_SIDE, MAX_IMAGES,
+    MAX_SEQUENCE_FPS, Meta, PercentSpec, PromptSpec, REFERENCE_HEIGHT, REFERENCE_WIDTH, RectSpec,
+    SequenceSpec, ShutdownAction, ShutdownLayout, StatusSpec,
 };
 #[doc(inline)]
 pub use fault::{ThemeError, ThemeErrorKind};

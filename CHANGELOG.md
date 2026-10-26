@@ -14,6 +14,14 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 
 ### Added
 
+- The shutdown splash says what follows (FRN-SRS-107, FRN-SRS-108, draft): "Restarting" on
+  a reboot, kexec or soft reboot, "Powering off" on power-off, "Halting" on halt.
+  `fairing splash --stage shutdown --action <action>` picks the line and reports it as
+  `action`; the theme contract's optional `layouts.shutdown.messages` give each action
+  its line and fall back to `message`. The NixOS module installs one
+  `fairing-shutdown@<action>.service` per final target in place of
+  `fairing-shutdown.service`, so the action is fixed by the target, never guessed.
+
 - The built-in logo is now the Steelbore logo, drawn as a vector in the theme's accent
   role from `crates/fairing-render/assets/logo/steelbore.svg` (the branding trace,
   recoloured to `currentColor`). It replaces the payload-fairing mark, scales to any
@@ -41,6 +49,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
   support window, and the dev shell carries pdfTeX for `make pdf`.
 
 ### Changed
+
+- The initrd copy of the splash (`fairing-initrd`) is built with `opt-level = "s"`,
+  which keeps it inside its 2.5 MiB budget (2.13 MiB, a 14.8 % margin); the stage-2 and
+  full builds are unchanged.
+
+- The compiled theme format is version 2 (the per-action shutdown messages). A version 1
+  artefact is refused; rebuild themes with this release, as the NixOS module does.
 
 - The splash report times the waits the reference-machine budgets bound, each the
   longest of the run: `reacquire_ms` (a lost output to its next frame, with an

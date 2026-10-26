@@ -37,7 +37,11 @@ use crate::theme::Theme;
 /// First eight bytes of every artefact.
 pub const MAGIC: [u8; 8] = *b"FRNTHEME";
 /// The format this build reads and writes; bumped on any change to [`Meta`].
-pub const FORMAT_VERSION: u16 = 1;
+///
+/// Version 2 added [`ShutdownLayout::messages`]. An artefact of another
+/// version is refused, never upgraded: the module compiles the theme with the
+/// package it ships, so the two cannot drift.
+pub const FORMAT_VERSION: u16 = 2;
 /// The largest artefact, assets included (FRN-SRS-047).
 pub const MAX_ARTEFACT_BYTES: usize = 4 * 1024 * 1024;
 /// Width of the reference frame every layout is authored in (FRN-SRS-007).
@@ -53,7 +57,7 @@ pub const MAX_IMAGE_SIDE: u32 = 3840;
 pub const MAX_IMAGES: usize = 512;
 /// The fastest frame sequence (FRN-SRS-051).
 pub const MAX_SEQUENCE_FPS: u8 = 30;
-/// Longest theme name and shutdown message, in characters.
+/// Longest theme name and shutdown message (each per-action one too), in characters.
 pub const MAX_TEXT_CHARS: usize = 120;
 /// Smallest and largest text size, in reference pixels.
 ///
@@ -64,6 +68,17 @@ pub const TEXT_SIZE_RANGE: std::ops::RangeInclusive<f32> = 8.0..=200.0;
 pub const MAX_OUTLINE: f32 = 16.0;
 
 const HEADER_LEN: usize = 14;
+
+/// What [`Meta::validate`] calls each per-action message, in the order of
+/// [`ShutdownAction::ALL`]. Static: a `format!` per action costs the initrd
+/// binary more than the five strings do (its size budget, doc/budgets.toml).
+const SHUTDOWN_MESSAGE_LABELS: [&str; 5] = [
+    "shutdown message for poweroff",
+    "shutdown message for reboot",
+    "shutdown message for halt",
+    "shutdown message for kexec",
+    "shutdown message for soft-reboot",
+];
 
 /// A rectangle in reference pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -257,15 +272,93 @@ impl BootLayout {
     }
 }
 
+/// What the machine does once the shutdown splash is killed.
+///
+/// Each value is one of systemd's final targets; the module starts one splash
+/// unit per target and names its action on the command line, so nothing is
+/// guessed at shutdown (FRN-SRS-108).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShutdownAction {
+    /// `poweroff.target`.
+    Poweroff,
+    /// `reboot.target`.
+    Reboot,
+    /// `halt.target`.
+    Halt,
+    /// `kexec.target`: the next kernel starts without the firmware.
+    Kexec,
+    /// `soft-reboot.target`: user space restarts on the running kernel.
+    SoftReboot,
+}
+
+impl ShutdownAction {
+    /// Every action, in the order the theme contract lists them.
+    pub const ALL: [Self; 5] = [
+        Self::Poweroff,
+        Self::Reboot,
+        Self::Halt,
+        Self::Kexec,
+        Self::SoftReboot,
+    ];
+
+    /// Every action's name, in the order of [`ShutdownAction::ALL`]: its
+    /// systemd target without `.target`.
+    pub const NAMES: [&'static str; 5] = ["poweroff", "reboot", "halt", "kexec", "soft-reboot"];
+
+    /// The action's name: its systemd target without `.target`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        Self::NAMES[self as usize]
+    }
+
+    /// The action named `name`, one of [`ShutdownAction::NAMES`].
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.as_str() == name)
+    }
+}
+
+/// The shutdown line for each action; an absent one falls back to
+/// [`ShutdownLayout::message`] (FRN-SRS-107).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionMessages {
+    /// Power-off.
+    pub poweroff: Option<String>,
+    /// Reboot.
+    pub reboot: Option<String>,
+    /// Halt.
+    pub halt: Option<String>,
+    /// Kexec.
+    pub kexec: Option<String>,
+    /// Soft reboot.
+    pub soft_reboot: Option<String>,
+}
+
+impl ActionMessages {
+    /// The message the theme gives `action`, if it gives one.
+    #[must_use]
+    pub fn get(&self, action: ShutdownAction) -> Option<&str> {
+        match action {
+            ShutdownAction::Poweroff => self.poweroff.as_deref(),
+            ShutdownAction::Reboot => self.reboot.as_deref(),
+            ShutdownAction::Halt => self.halt.as_deref(),
+            ShutdownAction::Kexec => self.kexec.as_deref(),
+            ShutdownAction::SoftReboot => self.soft_reboot.as_deref(),
+        }
+    }
+}
+
 /// The shutdown layout (FRN-SRS-035, from M4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShutdownLayout {
     /// The logo.
     pub logo: LogoSpec,
-    /// The line under the logo; its text is [`ShutdownLayout::message`].
+    /// The line under the logo; its text is [`ShutdownLayout::line`].
     pub status: StatusSpec,
-    /// What the line says.
+    /// What the line says when the action is unknown or has no message of its own.
     pub message: String,
+    /// What the line says for each action (FRN-SRS-107).
+    pub messages: ActionMessages,
     /// An optional frame sequence.
     pub sequence: Option<SequenceSpec>,
 }
@@ -283,8 +376,25 @@ impl ShutdownLayout {
                 color: Role::Foreground,
             },
             message: "Shutting down".to_owned(),
+            messages: ActionMessages {
+                poweroff: Some("Powering off".to_owned()),
+                reboot: Some("Restarting".to_owned()),
+                halt: Some("Halting".to_owned()),
+                kexec: Some("Restarting".to_owned()),
+                soft_reboot: Some("Restarting".to_owned()),
+            },
             sequence: None,
         }
+    }
+
+    /// What the line says for `action`: its own message, else the general one.
+    ///
+    /// Implements: FRN-SRS-107
+    #[must_use]
+    pub fn line(&self, action: Option<ShutdownAction>) -> &str {
+        action
+            .and_then(|a| self.messages.get(a))
+            .unwrap_or(self.message.as_str())
     }
 }
 
@@ -381,6 +491,11 @@ impl Meta {
     pub fn validate(&self, blob_len: usize) -> Result<(), ThemeError> {
         check_text("name", &self.name)?;
         check_text("shutdown message", &self.shutdown.message)?;
+        for (action, label) in ShutdownAction::ALL.into_iter().zip(SHUTDOWN_MESSAGE_LABELS) {
+            if let Some(text) = self.shutdown.messages.get(action) {
+                check_text(label, text)?;
+            }
+        }
         let palette = Theme::find(&self.palette).ok_or_else(|| {
             layout_error(format!(
                 "palette `{}` is not a registered colour theme",
@@ -854,6 +969,11 @@ mod tests {
         let mut version = good.clone();
         version[8] = 9;
         assert_eq!(kind(&version), Some(ThemeErrorKind::InvalidArtefact));
+        // A version 1 artefact, written before the per-action messages, is
+        // refused rather than read with the fields shifted.
+        let mut previous = good.clone();
+        previous[8..10].copy_from_slice(&1_u16.to_le_bytes());
+        assert_eq!(kind(&previous), Some(ThemeErrorKind::InvalidArtefact));
         let mut long_meta = good.clone();
         long_meta[10..14].copy_from_slice(&u32::MAX.to_le_bytes());
         assert_eq!(kind(&long_meta), Some(ThemeErrorKind::InvalidArtefact));
@@ -867,6 +987,27 @@ mod tests {
             bytes[at] = bytes[at].wrapping_add(0x5B);
             let _ = CompiledTheme::from_bytes(&bytes);
         }
+    }
+
+    #[test]
+    fn each_action_has_its_line_and_falls_back_to_the_message() {
+        // Verifies: FRN-SRS-107
+        let mut layout = ShutdownLayout::builtin();
+        assert_eq!(layout.line(Some(ShutdownAction::Reboot)), "Restarting");
+        assert_eq!(layout.line(Some(ShutdownAction::Poweroff)), "Powering off");
+        assert_eq!(layout.line(Some(ShutdownAction::Halt)), "Halting");
+        assert_eq!(layout.line(Some(ShutdownAction::Kexec)), "Restarting");
+        assert_eq!(layout.line(Some(ShutdownAction::SoftReboot)), "Restarting");
+        assert_eq!(layout.line(None), "Shutting down");
+        layout.messages = ActionMessages::default();
+        for action in ShutdownAction::ALL {
+            assert_eq!(layout.line(Some(action)), "Shutting down", "{action:?}");
+            assert_eq!(ShutdownAction::from_name(action.as_str()), Some(action));
+        }
+        assert_eq!(ShutdownAction::from_name("shutdown"), None);
+        layout.messages.halt = Some("Stopping".to_owned());
+        assert_eq!(layout.line(Some(ShutdownAction::Halt)), "Stopping");
+        assert_eq!(layout.line(Some(ShutdownAction::Reboot)), "Shutting down");
     }
 
     #[test]
@@ -893,6 +1034,14 @@ mod tests {
         );
         assert_eq!(refuse(|m| m.boot.logo.image = LogoImage::Image(0)), layout);
         assert_eq!(refuse(|m| m.shutdown.message = "a\nb".to_owned()), layout);
+        assert_eq!(
+            refuse(|m| m.shutdown.messages.reboot = Some("a\nb".to_owned())),
+            layout
+        );
+        assert_eq!(
+            refuse(|m| m.shutdown.messages.soft_reboot = Some("x".repeat(MAX_TEXT_CHARS + 1))),
+            layout
+        );
         assert_eq!(
             refuse(|m| {
                 m.boot.sequence = Some(SequenceSpec {

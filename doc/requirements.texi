@@ -672,9 +672,9 @@ M2
 @cindex FRN-SRS-035
 @table @asis
 @item Requirement
-@code{fairing-shutdown.service} shall present the theme's shutdown layout from activation of @code{shutdown.target} until the process is killed by the final kill.
+Each @code{fairing-shutdown@@<action>.service} shall present the theme's shutdown layout from activation of its final target, which activates @code{shutdown.target}, until the process is killed by the final kill.
 @item Rationale
-Decision 5: shutdown splash, on reboot and power-off alike.
+Decision 5: shutdown splash, on reboot and power-off alike. Amended in draft on 2026-10-26 from one @code{fairing-shutdown.service} to one unit per final action (FRN-SRS-108), for the maintainer's confirmation.
 @item Source
 @ref{FRN-NEED-008}, decision 5.
 @item Priority
@@ -745,6 +745,46 @@ test
 draft
 @item Milestone
 M6
+@end table
+
+@anchor{FRN-SRS-107}
+@subheading FRN-SRS-107 --- The shutdown line names what follows
+@cindex FRN-SRS-107
+@table @asis
+@item Requirement
+The shutdown splash shall draw the theme's message for the final action it was started for (power-off, reboot, halt, kexec or soft reboot), and the theme's general shutdown message when the theme gives that action none or no action is named.
+@item Rationale
+A restart that says "Shutting down" tells the operator the wrong thing. Each message is optional, so a theme written before the field still compiles and draws its one line.
+@item Source
+@ref{FRN-NEED-008}, decision 5.
+@item Priority
+expected
+@item Verification
+test
+@item Status
+draft
+@item Milestone
+M7
+@end table
+
+@anchor{FRN-SRS-108}
+@subheading FRN-SRS-108 --- One shutdown unit per final action
+@cindex FRN-SRS-108
+@table @asis
+@item Requirement
+The NixOS module shall install one shutdown splash unit for each of @code{poweroff.target}, @code{reboot.target}, @code{halt.target}, @code{kexec.target} and @code{soft-reboot.target}, pulled in by that target alone and naming its action with @code{--action}; @code{fairing splash} shall refuse @code{--action} outside @code{--stage shutdown}.
+@item Rationale
+The action is fixed by the target that started the unit, never inferred at shutdown from D-Bus, the kernel or a file another process could write: the stricter choice.
+@item Source
+@ref{FRN-NEED-008}, decision 5.
+@item Priority
+expected
+@item Verification
+test
+@item Status
+draft
+@item Milestone
+M7
 @end table
 
 @node Theme Requirements
@@ -1302,9 +1342,9 @@ Source: FRN-NEED-001; decision 8 (Bravais only for v1). The NixOS module and ini
 @cindex FRN-SRS-090
 @table @asis
 @item Requirement
-The NixOS module @code{steelbore.fairing} shall, when enabled, install @code{fairing-initrd.service}, @code{fairing.service}, @code{fairing-handoff.service} and @code{fairing-shutdown.service}, compile the configured theme into the initrd, add the KMS and simpledrm modules to @code{boot.initrd.kernelModules}, and set the @code{quiet} and @code{splash} kernel parameters.
+The NixOS module @code{steelbore.fairing} shall, when enabled, install @code{fairing-initrd.service}, @code{fairing.service}, @code{fairing-handoff.service} and one @code{fairing-shutdown@@<action>.service} for each final action, compile the configured theme into the initrd, add the KMS and simpledrm modules to @code{boot.initrd.kernelModules}, and set the @code{quiet} and @code{splash} kernel parameters.
 @item Rationale
-One switch enables the whole feature. Amended and baselined at G1 (2026-10-16).
+One switch enables the whole feature. Amended and baselined at G1 (2026-10-16). Amended in draft on 2026-10-26 for the per-action shutdown units (FRN-SRS-108), for the maintainer's confirmation.
 @item Source
 @ref{FRN-NEED-001}, decision 8.
 @item Priority

@@ -206,7 +206,7 @@ pub enum StageArg {
     Initrd,
     /// `fairing.service`: from switch-root until greetd takes the screen.
     System,
-    /// `fairing-shutdown.service`: from shutdown.target until the final kill.
+    /// `fairing-shutdown@<action>.service`: from its final target until the final kill.
     Shutdown,
 }
 
@@ -216,6 +216,12 @@ pub struct SplashArgs {
     /// Which instance this is: `initrd` before switch-root, `system` after it, `shutdown` at the end.
     #[arg(long, value_enum, value_name = "stage")]
     pub stage: StageArg,
+    /// With `--stage shutdown`: what follows, which picks the theme's line ("Restarting", "Powering off").
+    // The names are `fairing_theme::ShutdownAction::NAMES`, checked by clap:
+    // a list of strings rather than a second `ValueEnum`, whose generic parser
+    // costs the initrd binary more (its size budget, doc/budgets.toml).
+    #[arg(long, value_name = "action", value_parser = fairing_theme::ShutdownAction::NAMES)]
+    pub action: Option<String>,
     /// Compiled theme (`fairing theme compile`); the built-in theme without it.
     #[arg(long, value_name = "file.fairing")]
     pub theme: Option<PathBuf>,
