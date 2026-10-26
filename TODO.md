@@ -12,6 +12,7 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 ## M7 — Shutdown actions
 
 - [x] T-095 Per-action shutdown line: `fairing splash --stage shutdown --action <poweroff|reboot|halt|kexec|soft-reboot>` (refused on other stages, reported as `action`); the theme contract's optional `layouts.shutdown.messages`, falling back to `message`; artefact format version 2, version 1 refused; the module's `fairing-shutdown@<action>.service`, one per final target, replacing `fairing-shutdown.service`; draft requirements FRN-SRS-107 and FRN-SRS-108, FRN-SRS-035 and FRN-SRS-090 amended in draft, with unit, module-eval and VM tests; the initrd copy built with `opt-level = "s"` to keep its size budget in band
+- [x] T-097 A diagnostic written after stderr has closed no longer crashes the splash: `eprintln!` panicked on `EPIPE` and the release profile aborted, so the shutdown splash dumped core at the final kill, when journald exits with it (reported on the T490s, 2026-10-26); stderr writes now drop a failed line, with a regression test
 - [ ] T-096 FRN-SRS-107 and FRN-SRS-108 baselined, the FRN-SRS-035 and FRN-SRS-090 amendments confirmed, and a reboot and a power-off on the T490s seen to show "Restarting" and "Powering off"; the first-frame figure re-measured with the size-optimised initrd binary (maintainer)
 
 ## M6 — Greeter handoff

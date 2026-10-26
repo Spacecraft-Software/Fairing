@@ -1737,3 +1737,32 @@ fn the_shutdown_stage_draws_until_it_is_stopped() {
     assert_eq!(data["last_status"], "Shutting down");
     assert!(!dir.path().join("run/state").exists());
 }
+
+#[test]
+fn a_closed_stderr_never_crashes_the_shutdown_splash() {
+    // Verifies: FRN-SRS-035
+    // At the final kill journald exits with the splash, and a diagnostic
+    // written after it answers EPIPE. `eprintln!` would panic there, which the
+    // release profile turns into an abort and a core dump.
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (reader, writer) = std::io::pipe().unwrap_or_else(|e| panic!("{e}"));
+    drop(reader);
+    let mut args = splash_args(dir.path(), "shutdown");
+    // `--backend auto` rather than memory: under an agent harness the splash
+    // then warns that it draws to memory, a diagnostic on every run.
+    for arg in &mut args {
+        if arg == "memory" {
+            *arg = "auto".into();
+        }
+    }
+    let status = std::process::Command::new(assert_cmd::cargo::cargo_bin("fairing"))
+        .env_clear()
+        .args(args)
+        .args(["--action", "reboot", "--exit-after", "0.3"])
+        .env("AI_AGENT", "1")
+        .stdout(std::process::Stdio::null())
+        .stderr(writer)
+        .status()
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(status.code(), Some(0), "{status}");
+}
