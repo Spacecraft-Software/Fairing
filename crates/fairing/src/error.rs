@@ -12,6 +12,7 @@ use std::fmt;
 
 use serde::Serialize;
 
+use crate::diagnostic::write_stderr;
 use crate::output::mode::Context;
 use crate::time::now_iso8601;
 
@@ -196,28 +197,28 @@ impl AppError {
     #[must_use]
     pub fn report(&self, context: &Context) -> u8 {
         if context.journal {
-            eprintln!(
+            write_stderr(format_args!(
                 "<3>[ERROR] {} (hint: {})",
                 crate::diagnostic::single_line(&self.message),
                 self.hint
-            );
+            ));
         } else if context.mode.is_machine() {
             #[derive(Serialize)]
             struct Wrapper<'a> {
                 error: &'a AppError,
             }
             match serde_json::to_string(&Wrapper { error: self }) {
-                Ok(line) => eprintln!("{line}"),
-                Err(_) => eprintln!("[ERROR] {}", self.message),
+                Ok(line) => write_stderr(format_args!("{line}")),
+                Err(_) => write_stderr(format_args!("[ERROR] {}", self.message)),
             }
         } else {
-            eprintln!("[ERROR] {}", self.message);
+            write_stderr(format_args!("[ERROR] {}", self.message));
             if let Some(detail) = &self.detail {
                 for line in detail.trim_end().lines() {
-                    eprintln!("  {line}");
+                    write_stderr(format_args!("  {line}"));
                 }
             }
-            eprintln!("  hint: {}", self.hint);
+            write_stderr(format_args!("  hint: {}", self.hint));
         }
         self.exit_code
     }

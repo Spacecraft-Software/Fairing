@@ -48,6 +48,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
   `doc/mutants.toml`. `RELEASING.md` is the release procedure, `SECURITY.md` states the
   support window, and the dev shell carries pdfTeX for `make pdf`.
 
+### Fixed
+
+- A diagnostic written after stderr has closed no longer crashes the splash. `eprintln!`
+  panicked on `EPIPE`, and the release profile turns a panic into an abort, so the
+  shutdown splash dumped core at the final kill, when journald exits with it. Stderr
+  writes now drop a line that cannot be written.
+
 ### Changed
 
 - The initrd copy of the splash (`fairing-initrd`) is built with `opt-level = "s"`,

@@ -12,6 +12,9 @@
 //! as the entry's priority (`SyslogLevelPrefix=yes`, the default), whatever
 //! the output mode: the journal is read by people, not parsed as JSON.
 
+use std::fmt;
+use std::io::{self, Write as _};
+
 use serde::Serialize;
 
 use crate::output::mode::Context;
@@ -163,22 +166,38 @@ impl Diagnostic {
             return;
         }
         if context.journal {
-            eprintln!("{}", self.journal_line());
+            write_stderr(format_args!("{}", self.journal_line()));
         } else if context.mode.is_machine() {
             #[derive(Serialize)]
             struct Wrapper<'a> {
                 diagnostic: &'a Diagnostic,
             }
             if let Ok(line) = serde_json::to_string(&Wrapper { diagnostic: self }) {
-                eprintln!("{line}");
+                write_stderr(format_args!("{line}"));
             }
         } else {
-            eprintln!("{} {}", self.severity.tag(), self.message);
+            write_stderr(format_args!("{} {}", self.severity.tag(), self.message));
             if let Some(hint) = &self.hint {
-                eprintln!("  hint: {hint}");
+                write_stderr(format_args!("  hint: {hint}"));
             }
         }
     }
+}
+
+/// Writes one line to stderr, ignoring a failed write.
+///
+/// `eprintln!` panics when stderr cannot be written, and the release profile
+/// aborts on panic: at shutdown journald stops before the final kill, its
+/// stream socket answers `EPIPE`, and the next diagnostic would crash the
+/// shutdown splash with a core dump instead of letting it draw until killed.
+/// A diagnostic nobody can read is dropped; nothing else can be done with it.
+///
+/// Implements: FRN-SRS-035
+pub(crate) fn write_stderr(line: fmt::Arguments<'_>) {
+    let mut handle = io::stderr().lock();
+    let _ = handle
+        .write_fmt(line)
+        .and_then(|()| handle.write_all(b"\n"));
 }
 
 /// `text` with every line break replaced by a space: journald splits on newlines,
