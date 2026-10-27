@@ -213,3 +213,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
   `withDbus` switches.
 
 [Unreleased]: https://github.com/Spacecraft-Software/Fairing/commits/main
+
+### Fixed
+
+- The NixOS module evaluates on NixOS 26.11, which removed the scripted initrd and with
+  it `boot.initrd.systemd.enable`: the systemd-initrd assertion now holds there without
+  reading the removed option, and still applies on earlier releases.

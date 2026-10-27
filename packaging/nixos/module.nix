@@ -285,7 +285,10 @@ in
         message = "steelbore.fairing replaces Plymouth; set boot.plymouth.enable = false.";
       }
       {
-        assertion = config.boot.initrd.systemd.enable;
+        # NixOS 26.11 removed the scripted initrd and, with it, the option:
+        # the systemd initrd is the only one there, and reading the removed
+        # option fails evaluation.
+        assertion = lib.versionAtLeast lib.trivial.release "26.11" || config.boot.initrd.systemd.enable;
         message = "steelbore.fairing runs in the systemd initrd; set boot.initrd.systemd.enable = true.";
       }
       {
