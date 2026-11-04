@@ -50,6 +50,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 
 ### Fixed
 
+- Replace the yanked async-executor release with its compatible patch so the
+  dependency-policy check passes without weakening the yanked-crate policy.
+
 - A diagnostic written after stderr has closed no longer crashes the splash. `eprintln!`
   panicked on `EPIPE`, and the release profile turns a panic into an abort, so the
   shutdown splash dumped core at the final kill, when journald exits with it. Stderr
