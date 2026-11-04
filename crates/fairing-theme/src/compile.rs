@@ -638,7 +638,7 @@ mod tests {
             "palette": "steelbore",
             "layouts": {
                 "boot": {
-                    "logo": { "x": 840, "y": 300, "width": 240, "height": 240, "image": "builtin" },
+                    "logo": { "x": 660, "y": 290, "width": 600, "height": 257, "image": "builtin" },
                     "bar": { "x": 640, "y": 640, "width": 640, "height": 14, "radius": 7,
                              "outline": 1.5, "fill": "accent", "track": "surface", "border": "border" },
                     "percent": { "gap": 28, "size": 30, "color": "foreground" },
@@ -646,7 +646,7 @@ mod tests {
                     "prompt": { "x": 560, "y": 780, "width": 800, "height": 140, "size": 28 }
                 },
                 "shutdown": {
-                    "logo": { "x": 840, "y": 300, "width": 240, "height": 240, "image": "builtin" },
+                    "logo": { "x": 660, "y": 290, "width": 600, "height": 257, "image": "builtin" },
                     "status": { "show": true, "top": 640, "size": 26, "color": "foreground" },
                     "message": "Shutting down",
                     "messages": {
