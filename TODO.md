@@ -15,6 +15,10 @@ done and checked. `cargo xtask progress` reads this file for the `TODO` row.
 - [x] T-097 A diagnostic written after stderr has closed no longer crashes the splash: `eprintln!` panicked on `EPIPE` and the release profile aborted, so the shutdown splash dumped core at the final kill, when journald exits with it (reported on the T490s, 2026-10-26); stderr writes now drop a failed line, with a regression test
 - [ ] T-096 FRN-SRS-107 and FRN-SRS-108 baselined, the FRN-SRS-035 and FRN-SRS-090 amendments confirmed, and a reboot and a power-off on the T490s seen to show "Restarting" and "Powering off"; the first-frame figure re-measured with the size-optimised initrd binary (maintainer)
 
+## Branding refresh
+
+- [x] T-098 Vendor the current square emblem and full Steelbore wordmark; fit both without distortion, use the wordmark in the reference boot/shutdown layouts, and verify palette colouring and memory-backend previews
+
 ## M6 — Greeter handoff
 
 - [x] T-093 `--handoff-console <path>`: at the greetd handoff, before the display is released, stage 2 writes the theme's canvas and text colours into the console's palette entries 0 and 7, hides the cursor and clears it; a console that cannot be opened is a `HANDOFF_CONSOLE` warning, never a failed handoff; the NixOS module passes greetd's VT; draft requirement FRN-SRS-106 with tests (Gantry P-021)

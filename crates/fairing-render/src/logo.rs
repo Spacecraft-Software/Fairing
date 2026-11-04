@@ -2,16 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Rust guideline compliant 2026-05-18
 
-//! The built-in vector mark: the Steelbore logo, drawn in the accent role.
+//! The built-in Steelbore emblem and wordmark, filled in the accent role.
 //!
-//! Fairing draws it whenever a theme names `'builtin` and has no PNG of its
-//! own. The outline comes from `assets/logo/steelbore.svg` (a potrace trace,
-//! paths only, recoloured to `currentColor`) and is filled in one role, so it
-//! scales to any mode and survives every palette, mono included.
+//! The branding repository's square emblem fills compact logo boxes; its
+//! full wordmark fills wide ones. Both use top-left SVG coordinates without
+//! transforms and scale uniformly, retaining the active palette's colour.
 //!
-//! The path data is read again on every draw rather than cached: it is nine
-//! short paths, a few microseconds of parsing next to the fill itself, and it
-//! keeps the mark free of shared state.
+//! Only bundled path data is parsed. The small path-only assets need no
+//! runtime SVG dependency or shared cache in the initrd.
 
 use fairing_theme::Role;
 use tiny_skia::{Path, PathBuilder};
@@ -21,40 +19,49 @@ use crate::geometry::Rect;
 use crate::palette::Palette;
 use crate::shapes;
 
-/// The logo, as the branding repository ships it bar the fill colour.
-const SVG: &str = include_str!("../assets/logo/steelbore.svg");
+/// The branding assets, recoloured to currentColor when vendored.
+const EMBLEM: Mark = Mark {
+    svg: include_str!("../assets/logo/steelbore.svg"),
+    width: 213.0,
+    height: 213.0,
+};
+const WORDMARK: Mark = Mark {
+    svg: include_str!("../assets/logo/steelbore-wordmark.svg"),
+    width: 600.0,
+    height: 257.0,
+};
 
-/// Side of the SVG's square `viewBox`.
-const VIEW_BOX: f32 = 213.0;
+#[derive(Clone, Copy)]
+struct Mark {
+    svg: &'static str,
+    width: f32,
+    height: f32,
+}
 
-/// Size of one path-data unit in `viewBox` units.
-///
-/// Potrace writes path data in tenths of a unit with y pointing up; the SVG's
-/// group transform, `translate(0,213) scale(0.1,-0.1)`, undoes both. A test
-/// pins that transform, so a re-traced logo with another one fails loudly.
-const UNIT: f32 = 0.1;
-
-/// Draws the mark inside `bounds` (a square in output pixels).
+/// Draws the emblem or wordmark uniformly fitted and centred in `bounds`.
 pub(crate) fn draw(frame: &mut Frame, palette: &Palette, bounds: Rect) {
     if bounds.width < 4.0 || bounds.height < 4.0 {
         return;
     }
-    if let Some(mark) = outline(bounds) {
+    // Wide theme boxes use the wordmark; square or tall ones use the emblem.
+    let asset = if bounds.width >= 2.0 * bounds.height {
+        WORDMARK
+    } else {
+        EMBLEM
+    };
+    if let Some(mark) = outline(asset, bounds) {
         shapes::fill(frame, &mark, palette.color(Role::Accent));
     }
 }
 
 /// The logo's outline fitted into `bounds`; `None` if the path data is malformed.
-fn outline(bounds: Rect) -> Option<Path> {
-    let scale = bounds.width.min(bounds.height) / VIEW_BOX;
-    let map = |x: f32, y: f32| {
-        (
-            bounds.x + x * UNIT * scale,
-            bounds.y + (VIEW_BOX - y * UNIT) * scale,
-        )
-    };
+fn outline(asset: Mark, bounds: Rect) -> Option<Path> {
+    let scale = (bounds.width / asset.width).min(bounds.height / asset.height);
+    let left = bounds.x + (bounds.width - asset.width * scale) / 2.0;
+    let top = bounds.y + (bounds.height - asset.height * scale) / 2.0;
+    let map = |x: f32, y: f32| (left + x * scale, top + y * scale);
     let mut pb = PathBuilder::new();
-    for data in path_data(SVG) {
+    for data in path_data(asset.svg) {
         trace(data, &map, &mut pb)?;
     }
     pb.finish()
@@ -69,7 +76,7 @@ fn path_data(svg: &str) -> impl Iterator<Item = &str> {
 
 /// Appends one path's data to `pb`, mapping each point through `map`.
 ///
-/// Understands the commands potrace emits, `M`/`m`, `L`/`l`, `C`/`c` and
+/// Understands the commands the bundled branding assets use, `M`/`m`, `L`/`l`, `C`/`c` and
 /// `Z`/`z`, with implicit repetition; anything else is refused with `None`.
 fn trace(data: &str, map: &impl Fn(f32, f32) -> (f32, f32), pb: &mut PathBuilder) -> Option<()> {
     let mut tokens = Tokens { rest: data };
@@ -169,22 +176,69 @@ mod tests {
     use crate::geometry::Size;
 
     #[test]
-    fn the_svg_is_the_potrace_layout_the_mark_assumes() {
-        assert!(SVG.contains(r#"viewBox="0 0 213.000000 213.000000""#));
-        assert!(SVG.contains("translate(0.000000,213.000000) scale(0.100000,-0.100000)"));
-        assert!(SVG.contains(r#"fill="currentColor""#), "no literal colour");
-        assert_eq!(path_data(SVG).count(), 9);
+    fn branding_assets_have_the_expected_coordinate_system() {
+        for (asset, view_box, count) in [(EMBLEM, "0 0 213 213", 7), (WORDMARK, "0 0 600 257", 30)]
+        {
+            assert!(asset.svg.contains(&format!("viewBox=\"{view_box}\"")));
+            assert!(!asset.svg.contains("transform="));
+            assert!(
+                !asset.svg.contains("<polygon"),
+                "polygons must be normalised to paths"
+            );
+            assert!(asset.svg.contains("fill=\"currentColor\""));
+            assert_eq!(path_data(asset.svg).count(), count);
+        }
     }
 
     #[test]
-    fn the_outline_parses_and_fits_its_box() {
-        let bounds = Rect::new(10.0, 20.0, 213.0, 213.0);
-        let mark = outline(bounds).unwrap_or_else(|| panic!("the logo's path data parses"));
-        let b = mark.bounds();
-        assert!(b.left() >= 10.0 && b.top() >= 20.0, "{b:?}");
-        assert!(b.right() <= 223.0 && b.bottom() <= 233.0, "{b:?}");
-        // The glyph spans most of the box, not a corner of it.
-        assert!(b.width() > 150.0 && b.height() > 150.0, "{b:?}");
+    fn both_outlines_fit_wide_and_tall_boxes_without_distortion() {
+        for asset in [EMBLEM, WORDMARK] {
+            for bounds in [
+                Rect::new(10.0, 20.0, 600.0, 300.0),
+                Rect::new(10.0, 20.0, 200.0, 500.0),
+            ] {
+                let mark = outline(asset, bounds).unwrap_or_else(|| panic!("bundled paths parse"));
+                let b = mark.bounds();
+                assert!(b.left() >= bounds.x && b.top() >= bounds.y, "{b:?}");
+                assert!(
+                    b.right() <= bounds.x + bounds.width && b.bottom() <= bounds.y + bounds.height,
+                    "{b:?}"
+                );
+                assert!(b.width() > bounds.width.min(bounds.height) * 0.8, "{b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn wide_boxes_draw_the_wordmark_in_the_active_role() {
+        let theme = Theme::family_default();
+        let palette = Palette::from_theme(theme);
+        let size = Size::new(800, 400).unwrap_or_else(|e| panic!("{e}"));
+        let mut frame = Frame::new(size, PixelFormat::Rgba8888).unwrap_or_else(|e| panic!("{e}"));
+        let background = theme.color(Role::Background);
+        shapes::fill_rect(
+            &mut frame,
+            Rect::new(0.0, 0.0, 800.0, 400.0),
+            background,
+            false,
+        );
+        draw(&mut frame, &palette, Rect::new(100.0, 50.0, 600.0, 257.0));
+        let accent = theme.color(Role::Accent);
+        let (mut left, mut right) = (800_u32, 0_u32);
+        for y in 0..400 {
+            for x in 0..800 {
+                let pixel = frame.pixel(x, y);
+                if !(100..700).contains(&x) || !(50..307).contains(&y) {
+                    assert_eq!(pixel, Some(background));
+                }
+                if pixel == Some(accent) {
+                    left = left.min(x);
+                    right = right.max(x);
+                }
+            }
+        }
+        // The wordmark spans the wide box; a centred square emblem cannot.
+        assert!(right.saturating_sub(left) > 500);
     }
 
     #[test]

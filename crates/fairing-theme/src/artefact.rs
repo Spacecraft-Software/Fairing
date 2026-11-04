@@ -241,7 +241,7 @@ impl BootLayout {
     pub const fn builtin() -> Self {
         Self {
             logo: LogoSpec {
-                rect: RectSpec::new(840.0, 300.0, 240.0, 240.0),
+                rect: RectSpec::new(660.0, 290.0, 600.0, 257.0),
                 image: LogoImage::Builtin,
             },
             bar: BarSpec {

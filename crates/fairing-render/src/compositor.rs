@@ -191,8 +191,8 @@ impl Compositor {
         let logo_box = viewport.rect(self.layout.logo);
         match &mut self.logo {
             Some(sprite) => sprite.draw(frame, &self.palette, logo_box),
-            // The mark is square: fitted uniformly, centred, like an image.
-            None => logo::draw(frame, &self.palette, square_in(logo_box)),
+            // The built-in asset is fitted to the theme box, like an image.
+            None => logo::draw(frame, &self.palette, logo_box),
         }
         if let Some(sequence) = &mut self.sequence {
             let index = sequence_frame(scene.time(), sequence.fps, sequence.frames.len());
@@ -467,17 +467,6 @@ impl fmt::Debug for Compositor {
             .field("echoed", &self.echoed)
             .finish()
     }
-}
-
-/// The largest square centred in `rect`.
-fn square_in(rect: Rect) -> Rect {
-    let side = rect.width.min(rect.height);
-    Rect::new(
-        rect.x + (rect.width - side) / 2.0,
-        rect.y + (rect.height - side) / 2.0,
-        side,
-        side,
-    )
 }
 
 #[cfg(test)]
@@ -919,13 +908,5 @@ mod tests {
             PixelFormat::Rgba8888,
         );
         assert!(count(&noticed, below, theme.color(Role::Error)) > 100);
-    }
-
-    #[test]
-    fn the_builtin_mark_is_fitted_into_a_centred_square() {
-        let wide = square_in(Rect::new(360.0, 300.0, 1200.0, 240.0));
-        assert_eq!(wide, Rect::new(840.0, 300.0, 240.0, 240.0));
-        let tall = square_in(Rect::new(0.0, 0.0, 100.0, 300.0));
-        assert_eq!(tall, Rect::new(0.0, 100.0, 100.0, 100.0));
     }
 }

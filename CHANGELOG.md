@@ -64,6 +64,11 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 - The compiled theme format is version 2 (the per-action shutdown messages). A version 1
   artefact is refused; rebuild themes with this release, as the NixOS module does.
 
+- Refresh the built-in Steelbore branding from `sb_logo.svg` and
+  `steelbore_logo.svg`. Wide logo boxes draw the full wordmark; compact boxes
+  draw the square emblem. Both retain palette-role colouring, and the default
+  boot and shutdown layouts now use the full wordmark.
+
 - The splash report times the waits the reference-machine budgets bound, each the
   longest of the run: `reacquire_ms` (a lost output to its next frame, with an
   `OUTPUT_BACK` journal line), `ask_detect_ms` (a question's file written to the agent
