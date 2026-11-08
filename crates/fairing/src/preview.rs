@@ -34,6 +34,7 @@ use crate::output::envelope::Response;
 use crate::output::mode::Context;
 use crate::output::write_line;
 use crate::selection::{PaletteSources, choose_backend, report_accessible, resolve_palette};
+use crate::term_protocols::Progress;
 
 /// The runnable hint for every "could not draw" failure.
 const MEMORY_HINT: &str = "fairing preview --backend memory --snapshot frame.ppm";
@@ -232,6 +233,16 @@ pub fn run(
     };
     let accessible = context.accessible;
     report_accessible(accessible, context, invocation);
+    if let Some(warning) = &context.term.warning {
+        Diagnostic::new(
+            Severity::Warn,
+            "TERM_PROTOCOLS_IGNORED",
+            warning,
+            invocation,
+        )
+        .with_hint("fairing preview --term-protocols=-all")
+        .emit(context);
+    }
     if accessible.on && args.snapshot.is_some() {
         return Err(AppError::invalid_argument(
             "`--snapshot` needs a frame, and accessible mode draws text",
@@ -272,13 +283,16 @@ pub fn run(
         text: accessible.on,
         reduced_motion: accessible.on || args.reduced_motion,
     };
+    // Cleared when it drops, on every path out of the run.
+    let mut progress = Progress::new(io::stderr(), context.term.progress);
     let report = if flags.dry_run {
         planned_report(&plan)
     } else if plan.text {
-        write_text(&plan, invocation, origin)?
+        write_text(&plan, invocation, origin, &mut progress)?
     } else {
-        draw(&plan, context, invocation, origin)?
+        draw(&plan, context, invocation, origin, &mut progress)?
     };
+    drop(progress);
     emit(&report, context, invocation, flags)
 }
 
@@ -348,7 +362,12 @@ fn text_report(plan: &Plan<'_>, frames: u64, first: Option<Duration>) -> Report 
 /// Accessible mode: the simulated run as lines of text on stderr, the
 /// terminal the preview runs in (FRN-SRS-070, FRN-SRS-071). stdout keeps the
 /// report alone.
-fn write_text(plan: &Plan<'_>, invocation: &str, origin: Instant) -> Result<Report, AppError> {
+fn write_text(
+    plan: &Plan<'_>,
+    invocation: &str,
+    origin: Instant,
+    progress: &mut Progress<io::Stderr>,
+) -> Result<Report, AppError> {
     let mut console = TextConsole::new(io::stderr());
     let mut cadence = Cadence::new(plan.args.fps);
     let duration = Duration::from_secs_f64(plan.args.seconds);
@@ -363,6 +382,7 @@ fn write_text(plan: &Plan<'_>, invocation: &str, origin: Instant) -> Result<Repo
         } else {
             simulated_percent(elapsed, duration)
         };
+        progress.update(percent);
         console
             .present(
                 &Scene::new(percent).with_status(plan.args.status.as_str()),
@@ -390,6 +410,7 @@ fn draw(
     context: &Context,
     invocation: &str,
     origin: Instant,
+    progress: &mut Progress<io::Stderr>,
 ) -> Result<Report, AppError> {
     let snapshot = match plan.args.snapshot.as_deref() {
         Some(path) => Some(SnapshotFile::create(path, invocation)?),
@@ -410,7 +431,7 @@ fn draw(
     let mut presenter = Presenter::new(opened.surface, compositor, config)
         .map_err(|e| AppError::from_render(&e, MEMORY_HINT, invocation))?;
 
-    let outcome = animate(&mut presenter, plan, invocation).and_then(|run_time| {
+    let outcome = animate(&mut presenter, plan, invocation, progress).and_then(|run_time| {
         let written = match snapshot {
             Some(file) => Some(file.write(&presenter, context, invocation)?),
             None => None,
@@ -498,6 +519,7 @@ fn animate(
     presenter: &mut Presenter,
     plan: &Plan<'_>,
     invocation: &str,
+    progress: &mut Progress<io::Stderr>,
 ) -> Result<Duration, AppError> {
     let args = plan.args;
     let duration = Duration::from_secs_f64(args.seconds);
@@ -511,6 +533,7 @@ fn animate(
             simulated_percent(elapsed, duration)
         };
         let time = crate::splash::run::animation_time(plan.reduced_motion, elapsed);
+        progress.update(percent);
         presenter
             .present(
                 &Scene::new(percent)

@@ -214,6 +214,13 @@ will not be green there.
   `Restart=` service or a device timeout is no failed unit): only a count above the
   baseline for `SIGNAL_SETTLE` does. A failed poll closes the connection, which ends the
   signal thread.
+- Terminal protocols are written only from `crates/fairing/src/term_protocols.rs`, and
+  today that is OSC 9;4 progress for `fairing preview` alone (FRN-SRS-109). The decision
+  (stderr a TTY, no agent harness, `TERM` not `dumb`, no multiplexer, an allow-listed
+  terminal, `--term-protocols` / `SPACECRAFT_TERM_PROTOCOLS`) is resolved once into
+  `Context::term`; the splash never writes a sequence, since it draws on DRM or the
+  Linux console. Never send OSC 9;4 on a terminal outside the allow-list: one that reads
+  OSC 9 as a notification pops one per update.
 - `fairing preview` under `AI_AGENT`, `CI`, `CLAUDECODE`, `CURSOR_AGENT` or `GEMINI_CLI`
   never opens a VT (`Context::is_agent_environment`): `--backend auto` becomes memory with a
   `[WARN]`, an explicit device backend is exit 2. The theme resolver takes `no_color` from

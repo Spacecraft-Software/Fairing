@@ -133,6 +133,15 @@ pub struct GlobalFlags {
     /// Keep accessible mode off, whatever `SPACECRAFT_A11Y` or the kernel command line says.
     #[arg(long, global = true)]
     pub no_accessible: bool,
+    /// Force terminal protocols on or off, e.g. `+progress` or `-all`; beats `SPACECRAFT_TERM_PROTOCOLS`.
+    #[arg(
+        long,
+        global = true,
+        value_name = "list",
+        allow_hyphen_values = true,
+        value_parser = clap::value_parser!(crate::term_protocols::Overrides)
+    )]
+    pub term_protocols: Option<crate::term_protocols::Overrides>,
 }
 
 /// Output backend for `preview`.
