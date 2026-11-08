@@ -1766,3 +1766,51 @@ fn a_closed_stderr_never_crashes_the_shutdown_splash() {
         .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(status.code(), Some(0), "{status}");
 }
+
+#[test]
+fn progress_sequences_need_a_terminal_whatever_the_terminal_says() {
+    // Verifies: FRN-SRS-109
+    // stderr is a pipe here, so no OSC 9;4 is written: not on a terminal that
+    // draws the bar, and not when the user forces the protocol on.
+    for extra in [&[][..], &["--term-protocols=+progress"][..]] {
+        let output = fairing()
+            .args(["preview", "--backend", "memory", "--seconds", "0.3"])
+            .args(extra)
+            .env("TERM", "xterm-256color")
+            .env("TERM_PROGRAM", "ghostty")
+            .env_remove("AI_AGENT")
+            .env_remove("AGENT")
+            .env_remove("CI")
+            .output()
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(output.status.success());
+        assert!(
+            !output.stderr.windows(4).any(|w| w == b"\x1b]9;"),
+            "OSC 9 on a pipe: {:?}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn term_protocols_refuses_an_unknown_name_and_warns_about_a_bad_variable() {
+    // Verifies: FRN-SRS-109
+    fairing()
+        .args(["preview", "--term-protocols=+cursor"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("unknown protocol `cursor`"));
+    fairing()
+        .args([
+            "preview",
+            "--backend",
+            "memory",
+            "--seconds",
+            "0.1",
+            "--json",
+        ])
+        .env("SPACECRAFT_TERM_PROTOCOLS", "progress")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("TERM_PROTOCOLS_IGNORED"));
+}

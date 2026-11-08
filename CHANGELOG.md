@@ -14,6 +14,15 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) · Dates:
 
 ### Added
 
+- Terminal progress for `fairing preview` (FRN-SRS-109, draft, optional): the simulated
+  bar is also reported as OSC 9;4 progress in the terminal's tab or taskbar, on stderr,
+  only when stderr is a terminal and no agent, CI harness, `TERM=dumb` or multiplexer is
+  present, on an allow-listed terminal (Windows Terminal, ConEmu, Ghostty, VS Code, Rio,
+  contour, foot, iTerm2 3.6 and WezTerm 20250210 or later). At most five updates a
+  second; the indicator is cleared when the run ends, fails or panics. A SIGINT or
+  SIGTERM leaves it to the terminal. The new global `--term-protocols` flag and
+  `SPACECRAFT_TERM_PROTOCOLS` take `+progress`, `-progress` or `-all`.
+
 - The shutdown splash says what follows (FRN-SRS-107, FRN-SRS-108, draft): "Restarting" on
   a reboot, kexec or soft reboot, "Powering off" on power-off, "Halting" on halt.
   `fairing splash --stage shutdown --action <action>` picks the line and reports it as

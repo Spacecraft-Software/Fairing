@@ -1072,3 +1072,15 @@ source = ["FRN-NEED-008", "decision 5"]
 priority = "expected"
 verification = "test"
 status = "draft"
+
+[[requirement]]
+id = "FRN-SRS-109"
+group = "cli"
+milestone = "M7"
+title = "Preview progress reaches the terminal's taskbar, gated"
+text = "`fairing preview` shall report its simulated bar as OSC 9;4 progress on stderr only when stderr is a terminal, no agent or CI harness is present, `TERM` is neither `dumb` nor unset, no terminal multiplexer is present and the terminal is on the allow-list of those that draw the bar; `--term-protocols` and `SPACECRAFT_TERM_PROTOCOLS` (`+progress`, `-progress`, `-all`; the flag winning) shall override the allow-list but never the other conditions. It shall write at most five updates a second, only when the percentage changes, and shall clear the indicator when the run ends, fails or panics."
+rationale = "A terminal that reads OSC 9 as a notification would pop one per update, so emission is allow-listed; the bar is decorative and the verb reports progress in its own output as well (spacecraft-tui-protocols 1.0.0, rules 1 to 5)."
+source = ["FRN-NEED-001", "Spacecraft CLI Standard v1.1.0", "spacecraft-tui-protocols 1.0.0"]
+priority = "optional"
+verification = "test"
+status = "draft"

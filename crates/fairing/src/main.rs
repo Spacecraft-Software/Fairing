@@ -23,6 +23,7 @@ mod preview;
 mod schema;
 mod selection;
 mod splash;
+mod term_protocols;
 mod theme;
 mod theme_file;
 mod time;

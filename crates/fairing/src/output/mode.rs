@@ -14,6 +14,7 @@ use std::io::IsTerminal as _;
 
 use crate::cli::{ColorChoice, Format, GlobalFlags};
 use crate::diagnostic::Severity;
+use crate::term_protocols::{Source, Term};
 
 /// How stdout is rendered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,6 +170,8 @@ pub struct Context {
     /// Accessible mode from the flag and `SPACECRAFT_A11Y`; the splash adds
     /// the kernel command line with [`Accessible::with_kernel`].
     pub accessible: Accessible,
+    /// Which terminal protocols may be written (`--term-protocols`, `SPACECRAFT_TERM_PROTOCOLS`).
+    pub term: Term,
 }
 
 impl Context {
@@ -185,13 +188,15 @@ impl Context {
         } else {
             flags.color
         };
-        let mut context = Self::compute(
-            explicit,
-            color_flag,
-            flags.quiet,
-            flags.verbose,
-            &Env::read(),
-        );
+        let env = Env::read();
+        let mut context = Self::compute(explicit, color_flag, flags.quiet, flags.verbose, &env);
+        if flags.term_protocols.is_some() {
+            context.term = Term::resolve(
+                flags.term_protocols,
+                &env.term,
+                context.is_agent_environment(),
+            );
+        }
         if flags.accessible || flags.no_accessible {
             context.accessible = Accessible {
                 on: flags.accessible,
@@ -278,7 +283,7 @@ impl Context {
         } else {
             Severity::Ok
         };
-        Self {
+        let mut context = Self {
             mode,
             color,
             interactive,
@@ -292,7 +297,10 @@ impl Context {
                 on,
                 source: AccessibleSource::Environment,
             }),
-        }
+            term: Term::default(),
+        };
+        context.term = Term::resolve(None, &env.term, context.is_agent_environment());
+        context
     }
 
     /// Whether an agent or CI harness is reading: no VT may be opened (FRN-SRS-084).
@@ -316,6 +324,8 @@ struct Env {
     journal: bool,
     /// `SPACECRAFT_A11Y`: `1` on, `0` off, anything else unset.
     a11y: Option<bool>,
+    /// The terminal-protocol inputs: the override variable, the terminal's identity, stderr.
+    term: Source,
 }
 
 impl Env {
@@ -349,6 +359,7 @@ impl Env {
                 Ok("0") => Some(false),
                 _ => None,
             },
+            term: Source::read(),
         }
     }
 }
